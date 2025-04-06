@@ -1,0 +1,154 @@
+---
+title: "LMP-SPARK"
+author: "Ryan J. McLaughlin"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setenv(PATH = paste("/home/ryan/mambaforge-pypy3/bin", Sys.getenv("PATH"), sep = ":"))
+
+```
+# SPARK Project Analysis Workflow
+This is meant to be a complete end-to-end document for running:
+
+1. Amplicon Sequence Variant (ASV) pipeline
+2. General statistics
+3. Downstream analytics
+4. Figure/Table creation
+
+## 1. Amplicon Sequence Variant (ASV) pipeline
+This section reviews the steps involved in creating ASVs from raw FASTQ data.
+
+Workflow diagram detailing the flow of data through the steps, software, and associated parameters and configs.
+
+![](./test.png)
+
+---
+
+```{bash}
+# Define the environment name
+ENV_NAME="spark_env"
+ENV_YAML="$PWD/spark_env.yaml"
+
+QI_NAME="qiime2-amplicon-2024.10"
+
+# Check if the environment exists
+if mamba env list | grep -q "^${ENV_NAME} "; then
+    echo "Environment ${ENV_NAME} already exists."
+else
+    echo "Environment ${ENV_NAME} does not exist. Creating it..."
+    echo "Running: mamba env create -y -n ${ENV_NAME} -f ${ENV_YAML}"
+    mamba env create -y -n ${ENV_NAME} -f ${ENV_YAML}
+    echo "Environment ${ENV_NAME} has been created."
+fi
+
+# Check if the environment exists
+if mamba env list | grep -q "^${QI_NAME} "; then
+    echo "Environment ${QI_NAME} already exists."
+else
+    echo "Environment ${QI_NAME} does not exist. Creating it..."
+    echo "Running: mamba env create -y -n ${QI_NAME} -c bioconda qiime2-amplicon-2024.10"
+    mamba env create -y -n ${QI_NAME} -c bioconda qiime2-amplicon-2024.10
+    echo "Environment ${QI_NAME} has been created."
+fi
+```
+
+Run the ASV pipeline:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+./run_vsearch.sh
+```
+
+Run General Statistics:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+THREADS="$(nproc --all)"
+
+seqkit stat -a -T \
+    -o vsearch_output/stats/fastq_stats.tsv \
+    -j ${THREADS} \
+    fastq_input/*
+
+seqkit stat -a -T \
+    -o vsearch_output/stats/fastp_fastqs.tsv \
+    -j ${THREADS} \
+    vsearch_output/fastp/*.fastq.gz
+
+seqkit stat -a -T \
+    -o vsearch_output/stats/merged_fastqs.tsv \
+    -j ${THREADS} \
+    vsearch_output/merged/*.fastq
+
+seqkit stat -a -T \
+    -o vsearch_output/stats/filtered_fastqs.tsv \
+    -j ${THREADS} \
+    vsearch_output/filtered/*.fasta
+
+seqkit stat -a -T \
+    -o vsearch_output/stats/concat_fastas.tsv \
+    -j ${THREADS} \
+    vsearch_output/concat/concat.fasta
+
+```
+
+Run QIIME2 Taxonomic Classifier:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate qiime2-amplicon-2024.10
+
+./qiime_nb_classifier.py \
+    -i vsearch_output/ASVs/ASVs.fasta \
+    -c ref_db/2022.10.backbone.v4.nb.sklearn-1.4.2.qza \
+    -o vsearch_output/taxonomy/ASV_GG2_tax.tsv \
+    -s vsearch_output/taxonomy/ASV_GG2_stats.tsv \
+    -v
+```
+Run Alpha and Beta Diversity:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./calc_div.py
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./plot_metadata.py
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python plot_upset.py
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./sankey_builder.py
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./run_asv_clustering.py --count_table vsearch_output/ASVs/ASV_counts.tsv --metadata ./ref_db/spark_metadata.tsv --taxonomy vsearch_output/taxonomy/ASV_GG2_tax.tsv --fasta vsearch_output/ASVs/ASVs.fasta --output_prefix vsearch_output/umap/umap
+```
+
+
