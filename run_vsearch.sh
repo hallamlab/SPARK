@@ -95,9 +95,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define directories
-INPUT_DIR="fastq_input"
-REFDB_DIR="ref_db"
-OUTPUT_DIR="vsearch_output"
+INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/fastq_input"
+REFDB_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db"
+OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"

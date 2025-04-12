@@ -71,29 +71,29 @@ conda activate spark_env
 THREADS="$(nproc --all)"
 
 seqkit stat -a -T \
-    -o vsearch_output/stats/fastq_stats.tsv \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/stats/fastq_stats.tsv \
     -j ${THREADS} \
-    fastq_input/*
+    /home/ryan/Projects/UBC/LMP/SPARK_data/fastq_input/*
 
 seqkit stat -a -T \
-    -o vsearch_output/stats/fastp_fastqs.tsv \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/stats/fastp_fastqs.tsv \
     -j ${THREADS} \
-    vsearch_output/fastp/*.fastq.gz
+    /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/fastp/*.fastq.gz
 
 seqkit stat -a -T \
-    -o vsearch_output/stats/merged_fastqs.tsv \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/stats/merged_fastqs.tsv \
     -j ${THREADS} \
-    vsearch_output/merged/*.fastq
+    /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/merged/*.fastq
 
 seqkit stat -a -T \
-    -o vsearch_output/stats/filtered_fastqs.tsv \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/stats/filtered_fastqs.tsv \
     -j ${THREADS} \
-    vsearch_output/filtered/*.fasta
+    /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/filtered/*.fasta
 
 seqkit stat -a -T \
-    -o vsearch_output/stats/concat_fastas.tsv \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/stats/concat_fastas.tsv \
     -j ${THREADS} \
-    vsearch_output/concat/concat.fasta
+    /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/concat/concat.fasta
 
 ```
 
@@ -104,10 +104,10 @@ source ${MDIR}/../etc/profile.d/conda.sh
 conda activate qiime2-amplicon-2024.10
 
 ./qiime_nb_classifier.py \
-    -i vsearch_output/ASVs/ASVs.fasta \
-    -c ref_db/2022.10.backbone.v4.nb.sklearn-1.4.2.qza \
-    -o vsearch_output/taxonomy/ASV_GG2_tax.tsv \
-    -s vsearch_output/taxonomy/ASV_GG2_stats.tsv \
+    -i /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta \
+    -c /home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/2022.10.backbone.v4.nb.sklearn-1.4.2.qza \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_tax.tsv \
+    -s /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_stats.tsv \
     -v
 ```
 Run Alpha and Beta Diversity:
@@ -117,6 +117,22 @@ source ${MDIR}/../etc/profile.d/conda.sh
 conda activate spark_env
 
 python ./calc_div.py
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+Rscript run_indicspecies.R
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python indicspecies_plot.py
 ```
 Run:
 ```{bash}
@@ -148,7 +164,37 @@ MDIR=$(dirname $(which mamba))
 source ${MDIR}/../etc/profile.d/conda.sh
 conda activate spark_env
 
-python ./run_asv_clustering.py --count_table vsearch_output/ASVs/ASV_counts.tsv --metadata ./ref_db/spark_metadata.tsv --taxonomy vsearch_output/taxonomy/ASV_GG2_tax.tsv --fasta vsearch_output/ASVs/ASVs.fasta --output_prefix vsearch_output/umap/umap
+Rscript run_speceasi.R
+
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python graph_network.py
+
+```
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./run_asv_clustering.py --count_table /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_counts.tsv --metadata /home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/spark_metadata.tsv --taxonomy /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_tax.tsv --fasta /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta --output_prefix vsearch_output/umap/umap
 ```
 
+Run:
+```{base}
+```
+Run:
+```{base}
+```
+Run:
+```{base}
+```
+Run:
+```{base}
+```
 

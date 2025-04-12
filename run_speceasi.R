@@ -10,20 +10,19 @@ library(igraph)
 library(tidyverse)
 
 # Create a directory for outputs if it doesn't exist
-if (!dir.exists("vsearch_output/spieceasi")) {
-  dir.create("vsearch_output/spieceasi")
+if (!dir.exists("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi")) {
+  dir.create("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi")
 }
 
 # Parse command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
-#count_data_path <- "vsearch_output/umap/umap_filtered_count_table.csv"
-count_data_path <- "vsearch_output/ASVs/ASV_filtered.tsv"
+count_data_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_final.tsv"
 
 # Define file paths for saving intermediate objects
-filtered_count_path <- "vsearch_output/spieceasi/count_data_filtered.RDS"
-spiec_easi_path <- "vsearch_output/spieceasi/se_gl_cnt.RDS"
-igraph_path <- "vsearch_output/spieceasi/ig_gl.RDS"
-layout_path <- "vsearch_output/spieceasi/am_coord.RDS"
+filtered_count_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/count_data_filtered.RDS"
+spiec_easi_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/se_gl_cnt.RDS"
+igraph_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/ig_gl.RDS"
+layout_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/am_coord.RDS"
 
 # Function to check if a file exists and load it, else return FALSE
 load_if_exists <- function(path) {
@@ -45,7 +44,7 @@ if (identical(count_data_filtered, FALSE)) {
                            header = TRUE, sep = "\t",
                            comment.char = ""
                            )
-  colnames(count_data) <- str_replace(colnames(count_data), "_[^_]+$", "")
+  #colnames(count_data) <- str_replace(colnames(count_data), "_[^_]+$", "")
 
   # Transpose the data; t() returns a matrix so we convert it back to a data frame
   #df_transposed <- as.data.frame(count_data, stringsAsFactors = FALSE)  
@@ -59,24 +58,20 @@ if (identical(count_data_filtered, FALSE)) {
   rel_abund_matrix <- count_data / rowSums(count_data)
   # For each ASV (column), find the maximum relative abundance across all samples
   max_ra <- apply(rel_abund_matrix, 2, max)
-  # Filter to keep ASVs that reach at least 0.05% (0.0005) relative abundance in at least one sample
-  count_data_filtered <- count_data[, max_ra >= 0.0005]
+  # Filter to keep ASVs that reach at least 0.1% (0.001) relative abundance in at least one sample
+  count_data_filtered <- count_data[, max_ra >= 0.001]
 
   # Calculate prevalence for each ASV (column)
-  #prevalence <- colSums(count_data_filtered > 0) / nrow(count_data_filtered)
+  prevalence <- colSums(count_data_filtered > 0) / nrow(count_data_filtered)
   # Filter ASVs based on the prevalence threshold
   #count_data_filtered <- count_data_filtered[, prevalence >= 0.005]
   # Optionally, remove ASVs with zero variance after filtering
   #count_data_filtered <- count_data_filtered[, apply(count_data_filtered, 2, var) > 0]
-  
-
-
-
-
-
 
   # Verify the dimensions after filtering
   print(dim(count_data_filtered))      # Check how many ASVs remain
+
+
 
   # **Save the filtered count data**
   saveRDS(count_data_filtered, filtered_count_path)
@@ -96,7 +91,7 @@ print(paste("Number of columns:", ncol(count_data_filtered)))
 
 if (identical(se.gl.cnt, FALSE)) {
   # Define SpiecEasi parameters
-  pargs <- list(rep.num = 50, seed = 10010, ncores = 16, thresh = 0.1)
+  pargs <- list(rep.num = 50, seed = 10010, ncores = 6, thresh = 0.1)
   
   # Run SpiecEasi with the filtered count data
   se.gl.cnt <- spiec.easi(count_data_filtered, 
@@ -123,7 +118,7 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   precision_matrix <- as.matrix(se.gl.cnt$est$icov[[opt_index]])
   precision_df <- as.data.frame(precision_matrix)
   precision_df <- tibble::rownames_to_column(precision_df, var = "ASV_ID")
-  write.csv(precision_df, "vsearch_output/spieceasi/precision_matrix.csv", row.names = FALSE)
+  write.csv(precision_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/precision_matrix.csv", row.names = FALSE)
 
   # Step 2: Compute the partial correlation matrix
   D_inv_sqrt <- diag(1 / sqrt(diag(precision_matrix)))
@@ -131,17 +126,17 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   diag(partial_cor_matrix) <- 0  # Remove self-loops
   partial_cor_df <- as.data.frame(partial_cor_matrix)
   partial_cor_df <- tibble::rownames_to_column(partial_cor_df, var = "ASV_ID")
-  write.csv(partial_cor_df, "vsearch_output/spieceasi/partial_correlation_matrix.csv", row.names = FALSE)
+  write.csv(partial_cor_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/partial_correlation_matrix.csv", row.names = FALSE)
 
   # Step 3: Take absolute values and symmetrize
   adj_bin <- as.matrix(se.gl.cnt$refit$stars)
   adj_df <- as.data.frame(adj_bin)
   adj_df <- tibble::rownames_to_column(adj_df, var = "ASV_ID")
-  write.csv(adj_df, "vsearch_output/spieceasi/adj_STARS_matrix.csv", row.names = FALSE)
+  write.csv(adj_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/adj_STARS_matrix.csv", row.names = FALSE)
 
   adj_weighted <- partial_cor_matrix
   adj_weighted[adj_bin == 0] <- 0  # keep magnitude/sign only where adjacency is 1
-  write.csv(adj_df, "vsearch_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
+  write.csv(adj_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
 
   threshold <- 0 #.001  # Adjust based on the distribution of edge weights
   adj_weighted[adj_weighted < threshold] <- 0
@@ -190,7 +185,7 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   print(paste("Layout coordinates saved to", layout_path))
 
   # Open a multipage PDF to save all layouts in one file
-  pdf("vsearch_output/spieceasi/multipage_layouts.pdf", width = 10, height = 10)
+  pdf("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/multipage_layouts.pdf", width = 10, height = 10)
 
   # Page 1: Default layout_nicely
   plot(ig.gl, layout = layout_nicely_coords, vertex.size = vsize, vertex.label = NA, 
@@ -210,8 +205,8 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
 
   # Close the PDF device to write the file
   dev.off()
-  write_graph(ig.gl, file = "vsearch_output/spieceasi/network.graphml", format = "graphml")
-  write_graph(ig.gl, file = "vsearch_output/spieceasi/network.gml", format = "gml")
+  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network.graphml", format = "graphml")
+  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network.gml", format = "gml")
 
 } else {
   print(paste("Loaded igraph object from", igraph_path))
@@ -231,7 +226,7 @@ edge_list$weight <- E(ig.gl)$weight
 colnames(edge_list) <- c("Taxon1", "Taxon2", "Weight")
 
 # Save the edge list as a CSV file
-edge_list_path <- "vsearch_output/spieceasi/edge_list.csv"
+edge_list_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/edge_list.csv"
 write.csv(edge_list, edge_list_path, row.names = FALSE)
 
 print(paste("Edge list saved to", edge_list_path))
@@ -260,7 +255,7 @@ if (is.null(V(ig.gl)$name)) {
 
 
 # Read in your indicator results (adjust the file path as needed)
-indicator_df <- read.delim("vsearch_output/indicspecies/Case_indicator_species_results.tsv",
+indicator_df <- read.delim("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Case_indicator_species_results.tsv",
                            row.names = 1,
                            stringsAsFactors = FALSE)
 # Ensure that the rownames (ASV IDs) in indicator_df match the vertex names in ig.gl
@@ -276,7 +271,7 @@ node_degrees <- degree(ig.gl)
 # For unconnected nodes (degree == 0), you can leave them blue (or choose a default).
 V(ig.gl)$color <-
   ifelse(indicator_info$index == 1 & !is.na(indicator_info$p.value) & indicator_info$p.value <= 0.05 & indicator_info$stat >= 0,
-    "red", "gray80"
+    "#de77ae", "gray80"
     )
 
 E(ig.gl)$color <- "gray80"
@@ -293,7 +288,7 @@ layout_fr_coords <- norm_coords(layout_fr_coords, ymin=-1, ymax=1, xmin=-1, xmax
 scaling_factor <- 2.0  # Increase this factor if you want more spacing
 layout_fr_coords <- layout_fr_coords * scaling_factor
 
-png("vsearch_output/spieceasi/network_with_indicator_Case.png", 
+png("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_with_indicator_Case.png", 
     width = 10, height = 10, units = "in", res = 600)
 
 plot(ig.gl, layout = layout_fr_coords, 
@@ -303,7 +298,7 @@ plot(ig.gl, layout = layout_fr_coords,
 legend(
   "topright",
   legend = c("Cancer", "Other"),
-  col    = c("red", "gray80"),
+  col    = c("#de77ae", "gray80"),
   pch    = 19,         # filled circles
   pt.cex = 1.5,        # slightly bigger points
   bty    = "n",        # no box around the legend
@@ -311,7 +306,7 @@ legend(
 )
 dev.off()
 # Save the plot as a PDF
-pdf("vsearch_output/spieceasi/network_with_indicator_Case.pdf", width = 10, height = 10)
+pdf("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_with_indicator_Case.pdf", width = 10, height = 10)
 
 plot(ig.gl, layout = layout_fr_coords, 
      vertex.size = vsize, vertex.label = NA,
@@ -320,7 +315,7 @@ plot(ig.gl, layout = layout_fr_coords,
 legend(
   "topright",
   legend = c("Cancer", "Other"),
-  col    = c("red", "gray80"),
+  col    = c("#de77ae", "gray80"),
   pch    = 19,         # filled circles
   pt.cex = 1.5,        # slightly bigger points
   bty    = "n",        # no box around the legend
@@ -331,7 +326,7 @@ dev.off()
 
 
 # Read in your indicator results (adjust the file path as needed)
-indicator_df <- read.delim("vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv",
+indicator_df <- read.delim("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv",
                            row.names = 1,
                            stringsAsFactors = FALSE)
 
@@ -350,11 +345,11 @@ node_degrees <- degree(ig.gl)
 # Otherwise (or if unconnected), blue.
 V(ig.gl)$color <- 
   ifelse(indicator_info$index == 1 & !is.na(indicator_info$p.value) & indicator_info$p.value <= 0.05 & indicator_info$stat >= 0,
-    "#CC79A7",
+    "#8e0152",
          ifelse(indicator_info$index == 2 & !is.na(indicator_info$p.value) & indicator_info$p.value <= 0.05 & indicator_info$stat >= 0,
-          "#E69F00",
+          "#542788",
                 ifelse(indicator_info$index == 3 & !is.na(indicator_info$p.value) & indicator_info$p.value <= 0.05 & indicator_info$stat >= 0, 
-                  "#D55E00",
+                  "#b35806",
                            "gray80"
                       )
                 )
@@ -374,7 +369,7 @@ set.seed(42)
 #layout_fr_coords <- layout_fr_coords * scaling_factor
 
 
-png("vsearch_output/spieceasi/network_with_indicator_Type.png", 
+png("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_with_indicator_Type.png", 
     width = 10, height = 10, units = "in", res = 600)
 
 plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
@@ -383,7 +378,7 @@ plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
 legend(
   "topright",
   legend = c("BAL", "Lung Brush", "Oral Rinse", "Other"),
-  col    = c("#CC79A7", "#E69F00", "#D55E00", "gray80"),
+  col    = c("#8e0152", "#542788", "#b35806", "gray80"),
   pch    = 19,         # filled circles
   pt.cex = 1.5,        # slightly bigger points
   bty    = "n",        # no box around the legend
@@ -393,7 +388,7 @@ legend(
 dev.off()
 
 # Plot the network and save it as a PDF:
-pdf("vsearch_output/spieceasi/network_with_indicator_Type.pdf", width = 10, height = 10)
+pdf("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_with_indicator_Type.pdf", width = 10, height = 10)
 
 plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
      main = "ASV Network\nBAL, Lung Brush, or Oral Rinse;\n Node size ~ Degree")
@@ -401,7 +396,7 @@ plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
 legend(
   "topright",
   legend = c("BAL", "Lung Brush", "Oral Rinse", "Other"),
-  col    = c("#CC79A7", "#E69F00", "#D55E00", "gray80"),
+  col    = c("#8e0152", "#542788", "#b35806", "gray80"),
   pch    = 19,         # filled circles
   pt.cex = 1.5,        # slightly bigger points
   bty    = "n",        # no box around the legend
@@ -439,7 +434,7 @@ set.seed(42)
 #scaling_factor <- 2.0
 #layout_fr_coords <- layout_fr_coords * scaling_factor
 
-png("vsearch_output/spieceasi/network_color_connected.png", 
+png("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_color_connected.png", 
     width = 10, height = 10, units = "in", res = 600)
 
 plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
@@ -447,7 +442,7 @@ plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
 dev.off()
 
 # Save the plot as a PDF
-pdf("vsearch_output/spieceasi/network_color_connected.pdf", width = 10, height = 10)
+pdf("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_color_connected.pdf", width = 10, height = 10)
 
 plot(ig.gl, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
      main = "ASV Network\nConnected (Blue; Else Gray);\n Node size ~ Degree")
@@ -484,7 +479,7 @@ edge_list$Weight <- E(ig.gl)$weight
 edge_list <- edge_list[, c("Taxon1", "Taxon2", "Weight")]
 
 # Save the edge list as a CSV file
-edge_list_path <- "vsearch_output/spieceasi/edge_list_with_asv_ids.csv"
+edge_list_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/edge_list_with_asv_ids.csv"
 write.csv(edge_list, edge_list_path, row.names = FALSE)
 
 print(paste("Edge list with ASV IDs saved to", edge_list_path))
@@ -494,14 +489,16 @@ node_degree      <- igraph::degree(ig.gl)
 node_betweenness <- igraph::betweenness(ig.gl)
 node_closeness   <- igraph::closeness(ig.gl)
 node_eigen       <- igraph::eigen_centrality(ig.gl)$vector
+node_ids <- paste0("n", seq_along(V(ig.gl)) - 1)
 
 node_features <- data.frame(
+  GraphML_ID  = node_ids,
   Taxon        = V(ig.gl)$name,
   Degree       = node_degree,
   Betweenness  = node_betweenness,
   Closeness    = node_closeness,
   EigenCentral = node_eigen
 )
-write.csv(node_features, "vsearch_output/spieceasi/node_features.csv", row.names = FALSE)
+write.csv(node_features, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/node_features.csv", row.names = FALSE)
 
 # **End of Script**

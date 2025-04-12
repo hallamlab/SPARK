@@ -11,8 +11,8 @@ library(readr)
 
 
 # Create a directory for outputs if it doesn't exist
-if (!dir.exists("vsearch_output/indicspecies")) {
-  dir.create("vsearch_output/indicspecies")
+if (!dir.exists("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies")) {
+  dir.create("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies")
 }
 
 ###############################################################################
@@ -20,8 +20,8 @@ if (!dir.exists("vsearch_output/indicspecies")) {
 ###############################################################################
 
 # Replace "asv_table.tsv" and "metadata.tsv" with your actual file paths
-asv_file <- "vsearch_output/ASVs/ASV_filtered.tsv"
-metadata_file <- "ref_db/spark_metadata.tsv"
+asv_file <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_final.tsv"
+metadata_file <- "/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/spark_metadata.tsv"
 
 # Read the ASV count table
 # Assuming tab-separated, headers in the first row, row names in the first column
@@ -31,7 +31,7 @@ asv_table <- read.table(asv_file,
                         sep = "\t",
                         check.names = FALSE,
                         comment.char = "")  # check.names=FALSE keeps original column names
-colnames(asv_table) <- str_replace(colnames(asv_table), "_[^_]+$", "")
+#colnames(asv_table) <- str_replace(colnames(asv_table), "_[^_]+$", "")
 
 # Read the metadata table
 # Similarly assuming tab-separated, headers in the first row, row names in the first column
@@ -96,7 +96,7 @@ head(results_df)
 # (Optional) Write results to a CSV or TSV for further review
 write.table(
   results_df,
-  file = "vsearch_output/indicspecies/Case_indicator_species_results.tsv",
+  file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Case_indicator_species_results.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -137,7 +137,7 @@ head(results_df)
 # (Optional) Write results to a CSV or TSV for further review
 write.table(
   results_df,
-  file = "vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv",
+  file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA

@@ -1471,7 +1471,7 @@ def plot_asv_bubbleplot(tax_df, count_df, meta_df, output_path):
     print(f"Saved ASV phylum barplot to {output_path}")
 
 
-def plot_cca_biplot(species_scores, env_scores, output_path='vsearch_new_output/cca/cca_biplot.png', meta='Cluster', color_map=None, dpi_setting=600):
+def plot_cca_biplot(species_scores, env_scores, output_path='/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot.png', meta='Cluster', color_map=None, dpi_setting=600):
     """
     Generates and saves a CCA biplot using Seaborn, coloring ASVs by their cluster.
     Cluster '-1' is colored grey to represent 'Other'.
@@ -1479,7 +1479,7 @@ def plot_cca_biplot(species_scores, env_scores, output_path='vsearch_new_output/
     Args:
         species_scores (pd.DataFrame): DataFrame containing 'CCA1', 'CCA2', and 'Cluster' columns for ASVs.
         env_scores (pd.DataFrame): DataFrame containing environmental variables with 'CCA1' and 'CCA2' as columns.
-        output_path (str, optional): Path to save the plot. Defaults to 'vsearch_new_output/cca/cca_biplot.png'.
+        output_path (str, optional): Path to save the plot. Defaults to '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot.png'.
         dpi_setting (int, optional): Resolution of the saved plot. Defaults to 300.
     """
     
@@ -1608,11 +1608,11 @@ def main():
     metadata_df = load_metadata_table(args.metadata)
     
     # Load the data
-    #site_scores = pd.read_csv('vsearch_new_output/cca/cca_site_scores.tsv', sep='\t', index_col=0)
-    #species_scores = pd.read_csv('vsearch_new_output/cca/cca_species_scores.tsv', sep='\t', index_col=0)
-    #env_scores = pd.read_csv('vsearch_new_output/cca/cca_env_scores.tsv', sep='\t', index_col=0)
-    #spiec_easi_df = pd.read_csv('vsearch_new_output/spieceasi/spieceasi_asv_transformed_distance.csv', sep='\t', index_col=0)
-    #asv_mag_df = pd.read_csv('vsearch_new_output/lr_mags/ASV2MAG.tsv', sep='\t', header=0)
+    #site_scores = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_site_scores.tsv', sep='\t', index_col=0)
+    #species_scores = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_species_scores.tsv', sep='\t', index_col=0)
+    #env_scores = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_env_scores.tsv', sep='\t', index_col=0)
+    #spiec_easi_df = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/spieceasi_asv_transformed_distance.csv', sep='\t', index_col=0)
+    #asv_mag_df = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/lr_mags/ASV2MAG.tsv', sep='\t', header=0)
     #asv_mag_list = list(asv_mag_df['qseqid'].unique())
     #env_scores.index = [x.split('.')[0] for x in list(env_scores.index)]
 
@@ -1725,10 +1725,10 @@ def main():
     sample_plot_path = f"{args.output_prefix}_asv"
     save_umap_plots(asv_reducer, tax_asv_umap, sample_plot_path)
     
-    #plot_cca_biplot(species_scores, env_scores, 'vsearch_new_output/cca/cca_biplot_Cluster.png', 'Cluster')
-    #plot_cca_biplot(species_scores, env_scores, 'vsearch_new_output/cca/cca_biplot_MAG_pair.png', 'MAG_pair')
-    #plot_cca_biplot(species_scores, env_scores, 'vsearch_new_output/cca/cca_biplot_Phylum.png', 'Phylum', color_map)
-    #plot_cca_biplot(species_scores, env_scores, 'vsearch_new_output/cca/cca_biplot_Genus.png', 'Genus', color_map)
+    #plot_cca_biplot(species_scores, env_scores, '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot_Cluster.png', 'Cluster')
+    #plot_cca_biplot(species_scores, env_scores, '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot_MAG_pair.png', 'MAG_pair')
+    #plot_cca_biplot(species_scores, env_scores, '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot_Phylum.png', 'Phylum', color_map)
+    #plot_cca_biplot(species_scores, env_scores, '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca/cca_biplot_Genus.png', 'Genus', color_map)
 
     print("Clustering analysis and visualization complete.")
     

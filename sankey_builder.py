@@ -5,6 +5,14 @@ import sys
 import plotly.graph_objects as go
 import re
 import pandas as pd
+import os
+import matplotlib as mpl
+
+# Global settings — at the top of script or notebook cell
+mpl.rcParams['pdf.fonttype'] = 42   # Keep text as text in PDF
+mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
+mpl.rcParams['savefig.dpi'] = 600   # Optional — affects raster fallback
+
 
 def parse_steps(unknown_args):
     steps = {}
@@ -187,31 +195,34 @@ def parse_arguments():
 
 def main():  
 
-    palette = {'Scope Flush': '#6A3D9A',
+    all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
            'Lung Brush': '#009E73',
            'BAL': '#0072B2',
-           'Oral Rinse': '#E69F00',
+           'Oral Rinse': '#6A3D9A',
+           'Failed-QC': 'lightgray'
            }
 
-    output = 'vsearch_output/metadata/data_loss_sankey.html'
+    data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
+       
+    output = os.path.join(data_dir, 'vsearch_output/metadata/data_loss_sankey.html')
 
-    metadata_table_path = 'ref_db/spark_metadata.tsv'
+    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t', index_col=0)
 
-    fastq_stats_path = 'vsearch_output/stats/fastq_stats.tsv'
+    fastq_stats_path = os.path.join(data_dir, 'vsearch_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
     fstats_df['sample'] = [x.split('/')[1].split('_L001_R')[0] for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on='sample')
 
-    filter_stats_path = 'vsearch_output/stats/filtered_fastqs.tsv'
+    filter_stats_path = os.path.join(data_dir, 'vsearch_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
     filter_stats_df['sample'] = [x.split('/')[2].split('_L001')[0] for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     filter_meta_df = filter_reads_df.merge(metadata_df, on='sample')
 
-    asv_raw_path = 'vsearch_output/ASVs/ASV_counts.tsv'
+    asv_raw_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_counts.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_df.columns = [x.rsplit('_', 1)[0] for x in asv_raw_df.columns]
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
@@ -251,7 +262,7 @@ def main():
     print(input_samples_dict)
 
 
-    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, palette, output)
+    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, all_type_palette, output)
 
 if __name__ == "__main__":
     main()

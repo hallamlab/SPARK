@@ -230,7 +230,7 @@ def save_dataframe(df, filepath):
 
 
 # Load the data
-spiec_easi_df = pd.read_csv('vsearch_new_output/spieceasi/edge_list_with_asv_ids.csv')
+spiec_easi_df = pd.read_csv('/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/spieceasi/edge_list_with_asv_ids.csv')
 spiec_easi_df.loc[spiec_easi_df['Weight'] < 0.03, 'Weight'] = 0
 spiec_easi_df['Distance'] = 1 - spiec_easi_df['Weight']
 spiec_easi_df['TransformedWeight'] = (spiec_easi_df['Weight'] - spiec_easi_df['Weight'].min()) / (spiec_easi_df['Weight'].max() - spiec_easi_df['Weight'].min())
@@ -259,7 +259,7 @@ print(distance_matrix.head())
 
 sample_reducer, sample_umap = perform_umap(distance_matrix, n_neighbors=5, min_dist=0.0, metric='precomputed', random_state=42)
 
-taxonomy_df = load_taxonomy("vsearch_new_output/taxonomy/ASV_GG2_tax.tsv")
+taxonomy_df = load_taxonomy("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/taxonomy/ASV_GG2_tax.tsv")
 
 plot_df = sample_umap.join(taxonomy_df, how='left')
 
@@ -301,7 +301,7 @@ plt.legend(title="Phylum", bbox_to_anchor=(1.05, 1), loc='upper left', ncol=1)
 plt.tight_layout()
 
 # Save the plot
-plt.savefig("vsearch_new_output/spieceasi/spieceasi_umap_phylum_plot.png", dpi=600)
+plt.savefig("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/spieceasi/spieceasi_umap_phylum_plot.png", dpi=600)
 plt.close()
 
 
@@ -336,13 +336,13 @@ plt.legend(title="Phylum", bbox_to_anchor=(1.05, 1), loc='upper left', ncol=1)
 plt.tight_layout()
 
 # Save the plot
-plt.savefig("vsearch_new_output/spieceasi/spieceasi_umap_cluster_plot.png", dpi=600)
+plt.savefig("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/spieceasi/spieceasi_umap_cluster_plot.png", dpi=600)
 plt.close()
 
 
-save_dataframe(tax_asv_umap, f"vsearch_new_output/spieceasi/spieceasi_asv_transformed_distance.csv")
+save_dataframe(tax_asv_umap, f"/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/spieceasi/spieceasi_asv_transformed_distance.csv")
 
-sample_plot_path = f"vsearch_new_output/spieceasi/spieceasi_asv"
+sample_plot_path = f"/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_new_output/spieceasi/spieceasi_asv"
 save_umap_plots(sample_reducer, tax_asv_umap, sample_plot_path)
 
 
