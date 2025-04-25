@@ -80,9 +80,6 @@ indval_results <- multipatt(
   control = how(nperm = 999)  # number of permutations
 )
 
-# Print a summary of the results
-summary(indval_results, indvalcomp = TRUE)
-
 ###############################################################################
 # 5. Interpret and export results
 ###############################################################################
@@ -91,12 +88,11 @@ summary(indval_results, indvalcomp = TRUE)
 #
 # You can also extract the raw results for further manipulation or for saving:
 results_df <- as.data.frame(indval_results$sign)
-head(results_df)
 
 # (Optional) Write results to a CSV or TSV for further review
 write.table(
   results_df,
-  file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Case_indicator_species_results.tsv",
+  file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/status_indicator_species_results.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -121,9 +117,6 @@ indval_results <- multipatt(
   control = how(nperm = 999)  # number of permutations
 )
 
-# Print a summary of the results
-summary(indval_results, indvalcomp = TRUE)
-
 ###############################################################################
 # 5. Interpret and export results
 ###############################################################################
@@ -132,7 +125,6 @@ summary(indval_results, indvalcomp = TRUE)
 #
 # You can also extract the raw results for further manipulation or for saving:
 results_df <- as.data.frame(indval_results$sign)
-head(results_df)
 
 # (Optional) Write results to a CSV or TSV for further review
 write.table(
@@ -141,4 +133,23 @@ write.table(
   sep = "\t",
   quote = FALSE,
   col.names = NA
+)
+
+
+# Combine stats into a data frame
+indval_df <- cbind(
+  ASV = rownames(indval_results$sign),
+  indval_results$sign,
+  A = indval_results$A,
+  B = indval_results$B
+) %>% 
+  as.data.frame()
+
+# Save to TSV
+write.table(
+  indval_df, 
+  file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/indicspecies/Type_Group_indicator_species_summary.tsv", 
+  sep = "\t", 
+  quote = FALSE, 
+  row.names = FALSE
 )

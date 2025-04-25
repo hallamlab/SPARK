@@ -7,11 +7,21 @@ import re
 import pandas as pd
 import os
 import matplotlib as mpl
+from matplotlib import font_manager as fm, rcParams
+import seaborn as sns
+import matplotlib.pyplot as plt
+
 
 # Global settings — at the top of script or notebook cell
 mpl.rcParams['pdf.fonttype'] = 42   # Keep text as text in PDF
 mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
+plt.rcParams.update({'font.size': 12})  # Set your desired size
 mpl.rcParams['savefig.dpi'] = 600   # Optional — affects raster fallback
+pd.set_option('display.max_columns', None)
+font_path = '/home/ryan/.fonts/MYRIADPRO-REGULAR.OTF'  # update to your path
+myriad_font = fm.FontProperties(fname=font_path)
+rcParams['font.family'] = myriad_font.get_name()
+sns.set_theme()  # re-applies style with updated rcParams
 
 
 def parse_steps(unknown_args):
@@ -175,7 +185,7 @@ def build_sankey(steps_list, counts_list, samples_dict, output_dict, colors_dict
         }
     )])
 
-    fig.update_layout(title_text="Data Loss Flow", font_size=20)
+    fig.update_layout(title_text="Data Loss Flow", font_size=12)
     fig.write_html(f"{output_base}")
     print(f"Sankey diagram saved as {output_base}")
 
@@ -212,16 +222,16 @@ def main():
 
     fastq_stats_path = os.path.join(data_dir, 'vsearch_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-    fstats_df['sample'] = [x.split('/')[1].split('_L001_R')[0] for x in fstats_df['file']]
+    fstats_df['sample'] = [x.split('/')[-1].split('_L001_R')[0] for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on='sample')
 
     filter_stats_path = os.path.join(data_dir, 'vsearch_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
-    filter_stats_df['sample'] = [x.split('/')[2].split('_L001')[0] for x in filter_stats_df['file']]
+    filter_stats_df['sample'] = [x.split('/')[-1].split('_L001')[0] for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     filter_meta_df = filter_reads_df.merge(metadata_df, on='sample')
-
+    
     asv_raw_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_counts.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_df.columns = [x.rsplit('_', 1)[0] for x in asv_raw_df.columns]
@@ -232,25 +242,53 @@ def main():
     asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='sample', how='left')
     asv_raw_cnt_df = asv_raw_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
 
+    asv_decon_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_filtered.decon.tsv')
+    asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
+    asv_decon_df.columns = [x.rsplit('_', 1)[0] for x in asv_decon_df.columns]
+    asv_decon_stack_df = asv_decon_df.stack().reset_index()
+    asv_decon_stack_df.columns = ['ASV_ID', 'sample', 'count']
+    asv_decon_stack_df = asv_decon_stack_df.loc[asv_decon_stack_df['count'] > 0]
+    asv_decon_stack_df.set_index('ASV_ID', inplace=True)
+    asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='sample', how='left')
+    asv_decon_cnt_df = asv_decon_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
+
+    asv_micro_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_filtered.micro.tsv')
+    asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
+    asv_micro_df.columns = [x.rsplit('_', 1)[0] for x in asv_micro_df.columns]
+    asv_micro_stack_df = asv_micro_df.stack().reset_index()
+    asv_micro_stack_df.columns = ['ASV_ID', 'sample', 'count']
+    asv_micro_stack_df = asv_micro_stack_df.loc[asv_micro_stack_df['count'] > 0]
+    asv_micro_stack_df.set_index('ASV_ID', inplace=True)
+    asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on='sample', how='left')
+    asv_micro_cnt_df = asv_micro_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
+
     read_grp_df = read_meta_df.groupby(['Type_Group'])['num_seqs'].sum().reset_index()
     read_grp_df['num_reads'] = read_grp_df['num_seqs'] / 2
 
     filter_grp_df = filter_meta_df.groupby(['Type_Group'])['num_seqs'].sum().reset_index()
     filter_grp_df['num_reads'] = filter_grp_df['num_seqs']
 
-    asv_grp_df = asv_raw_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
-    asv_grp_df['num_reads'] = asv_grp_df['count']
+    asv_raw_grp_df = asv_raw_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_raw_grp_df['num_reads'] = asv_raw_grp_df['count']
+
+    asv_decon_grp_df = asv_decon_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_decon_grp_df['num_reads'] = asv_decon_grp_df['count']
+
+    asv_micro_grp_df = asv_micro_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_micro_grp_df['num_reads'] = asv_micro_grp_df['count']
 
     raw_reads = int(read_grp_df['num_reads'].sum())
     filter_reads = int(filter_grp_df['num_reads'].sum())
-    asv_reads = int(asv_grp_df['num_reads'].sum())
+    asv_raw_reads = int(asv_raw_grp_df['num_reads'].sum())
+    asv_decon_reads = int(asv_decon_grp_df['num_reads'].sum())
+    asv_micro_reads = int(asv_micro_grp_df['num_reads'].sum())
     
-    steps_list = ['Raw Reads', 'Quality Control', 'Error Correction']
-    counts_list = [raw_reads, filter_reads, asv_reads]
+    steps_list = ['Quality Control', 'Error Correction', 'Decontamination', 'Off-Target Filtering', 'Finished Data']
+    counts_list = [raw_reads, filter_reads, asv_raw_reads, asv_decon_reads, asv_micro_reads]
 
     type_list = ['Skin Brush', 'Scope Flush', 'Oral Rinse', 'BAL', 'Lung Brush']
     input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['Type_Group'] == x]['num_reads']) for x in type_list}
-    output_samples_dict = {x: int(asv_grp_df.loc[asv_grp_df['Type_Group'] == x]['num_reads']) for x in type_list}
+    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['Type_Group'] == x]['num_reads']) for x in type_list}
 
     print("Parsed steps:")
     for step_name, count in zip(steps_list, counts_list):
@@ -260,7 +298,6 @@ def main():
         print(f"{sample_name}: {count}")
 
     print(input_samples_dict)
-
 
     build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, all_type_palette, output)
 

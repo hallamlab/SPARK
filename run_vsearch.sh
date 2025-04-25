@@ -220,6 +220,7 @@ denoise_asv() {
             --centroids ${DEN_DIR}/centroids.fasta \
             --sizein \
             --sizeout \
+            --relabel ASV \
             --minsize ${MINSIZE} \
             --threads ${THREADS} \
             --log ${LOG_DIR}/denoise_log.txt
@@ -232,7 +233,6 @@ chimera_check() {
     vsearch --uchime3_denovo ${DEN_DIR}/centroids.fasta \
             --nonchimeras ${NOC_DIR}/nochimeras.fasta \
             --sizein \
-            --sizeout \
             --threads ${THREADS} \
             --log ${LOG_DIR}/nochimera_log.txt
     echo "Step 7: Chimera checking completed."
@@ -254,15 +254,17 @@ swarm_clustering() {
 # Function to remove nontarget
 remove_nontarget() {
     echo "Step 9: Removing Non-target..."
-    vsearch --usearch_global ${NOC_DIR}/nochimeras.fasta \
-            --db ./ssu_pipeline_contaminants_mito.fasta \
-            --matched ${ASV_DIR}/ASVs.nontarget.fasta \
-            --notmatched ${ASV_DIR}/ASVs.fasta \
-            --id 0.99 \
-            --sizein \
-            --relabel ASV \
-            --threads ${THREADS} \
-            --log ${LOG_DIR}/nontarget_log.txt
+    cp ${NOC_DIR}/nochimeras.fasta ${ASV_DIR}/ASVs.fasta
+
+    #vsearch --usearch_global ${NOC_DIR}/nochimeras.fasta \
+    #        --db ${REFDB_DIR}/ssu_pipeline_contaminants_mito.fasta \
+    #        --matched ${ASV_DIR}/ASVs.nontarget.fasta \
+    #        --notmatched ${ASV_DIR}/ASVs.fasta \
+    #        --id 0.99 \
+    #        --sizein \
+    #        --relabel ASV \
+    #        --threads ${THREADS} \
+    #        --log ${LOG_DIR}/nontarget_log.txt
     echo "Step 9: Non-target removed."
 }
 

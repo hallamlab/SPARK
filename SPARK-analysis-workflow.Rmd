@@ -60,6 +60,7 @@ Run the ASV pipeline:
 MDIR=$(dirname $(which mamba))
 source ${MDIR}/../etc/profile.d/conda.sh
 conda activate spark_env
+
 ./run_vsearch.sh
 ```
 
@@ -103,11 +104,20 @@ MDIR=$(dirname $(which mamba))
 source ${MDIR}/../etc/profile.d/conda.sh
 conda activate qiime2-amplicon-2024.10
 
+#./qiime_nb_classifier.py \
+#    -i /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta \
+#    -a /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_counts.tsv \
+#    -c /home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/2024.09.backbone.v4.nb.qza \
+#    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_tax.v4.tsv \
+#    -s /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_stats.v4.tsv \
+#    -v
+
 ./qiime_nb_classifier.py \
-    -i /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta \
-    -c /home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/2022.10.backbone.v4.nb.sklearn-1.4.2.qza \
-    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_tax.tsv \
-    -s /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_stats.tsv \
+    -i /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_filtered.micro.fasta \
+    -a /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_filtered.micro.tsv \
+    -c /home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/2024.09.backbone.full-length.nb.qza \
+    -o /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_tax.full-length.tsv \
+    -s /home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/taxonomy/ASV_GG2_stats.full-length.tsv \
     -v
 ```
 Run Alpha and Beta Diversity:
@@ -117,6 +127,15 @@ source ${MDIR}/../etc/profile.d/conda.sh
 conda activate spark_env
 
 python ./calc_div.py
+```
+
+Run:
+```{bash}
+MDIR=$(dirname $(which mamba))
+source ${MDIR}/../etc/profile.d/conda.sh
+conda activate spark_env
+
+python ./plot_metadata.py
 ```
 Run:
 ```{bash}
@@ -133,14 +152,6 @@ source ${MDIR}/../etc/profile.d/conda.sh
 conda activate spark_env
 
 python indicspecies_plot.py
-```
-Run:
-```{bash}
-MDIR=$(dirname $(which mamba))
-source ${MDIR}/../etc/profile.d/conda.sh
-conda activate spark_env
-
-python ./plot_metadata.py
 ```
 Run:
 ```{bash}

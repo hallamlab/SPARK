@@ -41,12 +41,30 @@ def load_sequences(fasta_path):
     print(f"{len(sequences)} sequences loaded in {elapsed_time:.2f} seconds.")
     return sequences, seq_ids
 
+def load_count(count_path, s_ids, sqs):
+    """Load count matrix, filter seq_ids"""
+    print(f"Loading counts from '{count_path}'...")
+    print(f"Filtering sequences based on count matrix...")
+    start_time = time.time()
+    cnt_df = pd.read_csv(count_path, sep='\t', header=0, index_col=0)
+    filt_s_ids = set(s_ids) & set(cnt_df.index.values)
+    new_sids = []
+    new_sqs = []
+    for i, s in zip(s_ids, sqs):
+        if i in filt_s_ids:
+            new_sids.append(i)
+            new_sqs.append(s)
+    elapsed_time = time.time() - start_time
+    print(f"{len(s_ids)} sequences input, {len(filt_s_ids)} remaining {elapsed_time:.2f} seconds.")
+    return cnt_df, new_sids, new_sqs
+
 def classify_sequences(pipeline, sequences):
     """Classify sequences using the provided pipeline."""
     print("Classifying sequences...")
     start_time = time.time()
     try:
         predictions = pipeline.predict(sequences)
+        print(predictions)
         if hasattr(pipeline, 'predict_proba'):
             probabilities = pipeline.predict_proba(sequences)
         else:
@@ -102,6 +120,7 @@ def parse_arguments():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument('-i', '--input-fasta', required=True, help='Path to input FASTA file containing query sequences.')
+    parser.add_argument('-a', '--input-count', required=True, help='Path to input ASV/OTU count matrix containing query sequences.')
     parser.add_argument('-c', '--classifier', required=True, help='Path to Qiime2 classifier artifact (.qza).')
     parser.add_argument('-o', '--output-tsv', default='classifications.tsv', help='Path to output TSV file for classifications.')
     parser.add_argument('-s', '--stats-output', default='classification_stats.tsv', help='Path to output TSV file for statistics.')
@@ -122,7 +141,13 @@ def main():
     # Load the input sequences
     sequences, seq_ids = load_sequences(args.input_fasta)
 
-    # Classify the sequences
+    # Subset seqs that are found in count matrix (if different)
+    #count_df, filtered_seq_ids, filtered_seqs = load_count(args.input_count,
+    #                                                       seq_ids,
+    #                                                       sequences
+    #                                                       )
+
+    # Classify the filtered_seqs
     predictions, probabilities = classify_sequences(pipeline, sequences)
 
     # Save the classifications to a TSV file
