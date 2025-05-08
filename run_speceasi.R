@@ -9,6 +9,10 @@ library(SpiecEasi)
 library(igraph)
 library(tidyverse)
 
+
+.libPaths(new = .libPaths()[1])
+
+
 # Create a directory for outputs if it doesn't exist
 if (!dir.exists("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi")) {
   dir.create("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi")
@@ -16,7 +20,7 @@ if (!dir.exists("/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi
 
 # Parse command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
-count_data_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_final.tsv"
+count_data_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_final.micro.tsv"
 
 # Define file paths for saving intermediate objects
 filtered_count_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/count_data_filtered.RDS"
@@ -134,26 +138,73 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   adj_df <- tibble::rownames_to_column(adj_df, var = "ASV_ID")
   write.csv(adj_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/adj_STARS_matrix.csv", row.names = FALSE)
 
-  adj_weighted <- partial_cor_matrix
-  adj_weighted[adj_bin == 0] <- 0  # keep magnitude/sign only where adjacency is 1
-  write.csv(adj_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
 
-  threshold <- 0 #.001  # Adjust based on the distribution of edge weights
-  adj_weighted[adj_weighted < threshold] <- 0
+  threshold <- 0.1 #.001  # Adjust based on the distribution of edge weights
+
+  adj_weighted <- partial_cor_matrix
+  adj_weighted[ abs(adj_weighted) < threshold ] <- 0
+  adj_weighted[ adj_weighted < 0 ] <- 0
+  write.csv(adj_df, "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
 
   # Force symmetry on the weighted adjacency matrix
   adj_weighted <- (adj_weighted + t(adj_weighted)) / 2
-
   # Step 5: Create the igraph object
-  ig.gl <- graph_from_adjacency_matrix(adj_weighted, mode = "undirected", weighted = TRUE, diag = FALSE)
-
+  ig.gl <- graph_from_adjacency_matrix(
+    adj_weighted,
+    mode = "undirected",
+    weighted = TRUE,
+    diag = FALSE)
   # Extract edge weights
   edge_weights <- E(ig.gl)$weight
-
   # Display summary statistics
   print(summary(edge_weights))
 
+
+  all_weights <- partial_cor_matrix
+  all_weights[ all_weights < 0 ] <- 0
+  all_weights <- (all_weights + t(all_weights)) / 2
+
+  ig.gl.all <- graph_from_adjacency_matrix(
+    all_weights,
+    mode = "undirected",
+    weighted = TRUE,
+    diag = FALSE)
+  # Extract edge weights
+  edge_weights <- E(ig.gl.all)$weight
+  # Display summary statistics
+  print(summary(edge_weights))
+
+
+
+  # 1) Copy your partial correlation matrix
+  signed_mat <- partial_cor_matrix
+
+  # 2) Zero out only very small magnitudes (e.g. |r| < 0.1)
+  signed_mat[ abs(signed_mat) < threshold ] <- 0
+
+  # 3) Build the igraph
+  ig_signed <- graph_from_adjacency_matrix(
+    signed_mat,
+    mode     = "undirected",
+    weighted = TRUE,
+    diag     = FALSE
+  )
+
+  # 4) Check the distribution
+  summary(E(ig_signed)$weight)
+  
+  E(ig_signed)$color <- ifelse(E(ig_signed)$weight > 0, "red", "blue")
+  
   layout_nicely_coords <- layout_nicely(ig.gl)
+  layout_nicely_coords_signed <- layout_nicely(ig_signed)
+  layout_nicely_coords_signed <- layout_nicely(ig.gl.all)
+  V(ig.gl)$x <- layout_nicely_coords[,1]
+  V(ig.gl)$y <- layout_nicely_coords[,2]
+  V(ig_signed)$x <- layout_nicely_coords_signed[,1]
+  V(ig_signed)$y <- layout_nicely_coords_signed[,2]
+  V(ig.gl.all)$x <- layout_nicely_coords_signed[,1]
+  V(ig.gl.all)$y <- layout_nicely_coords_signed[,2]
+
   if (!is.matrix(layout_nicely_coords)) {
     layout_nicely_coords <- matrix(layout_nicely_coords, ncol = 2)
   }
@@ -205,8 +256,12 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
 
   # Close the PDF device to write the file
   dev.off()
-  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network.graphml", format = "graphml")
-  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network.gml", format = "gml")
+  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_pos_sub.graphml", format = "graphml")
+  write_graph(ig.gl, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_pos_sub.gml", format = "gml")
+  write_graph(ig_signed, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_signed.graphml", format = "graphml")
+  write_graph(ig_signed, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_signed.gml", format = "gml")
+  write_graph(ig.gl.all, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_pos_all.graphml", format = "graphml")
+  write_graph(ig.gl.all, file = "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/spieceasi/network_pos_all.gml", format = "gml")
 
 } else {
   print(paste("Loaded igraph object from", igraph_path))

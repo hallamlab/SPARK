@@ -4,22 +4,11 @@ import numpy as np
 from scipy.spatial.distance import pdist, squareform
 import argparse
 import os
+from skbio.diversity.alpha import shannon
 
 
-# Try to import the Shannon diversity function from scikit-bio; if not available, define our own.
-try:
-    from skbio.diversity.alpha import shannon
-    def calc_shannon(counts):
-        return shannon(counts)
-except ImportError:
-    def calc_shannon(counts):
-        counts = np.array(counts)
-        total = counts.sum()
-        if total == 0:
-            return 0
-        proportions = counts / total
-        proportions = proportions[proportions > 0]
-        return -np.sum(proportions * np.log(proportions))
+def calc_shannon(counts):
+    return shannon(counts)
 
 def main():
     data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
@@ -30,7 +19,7 @@ def main():
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
 
-    asv_table = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.tsv')
+    asv_table = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.micro.tsv')
     mito_table = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_filtered.mito.tsv')
     taxonomy_path = os.path.join(data_dir, 'vsearch_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 
@@ -40,13 +29,9 @@ def main():
     output_br_mito = os.path.join(data_dir, 'vsearch_output/diversity/bray.mito.tsv')
 
     # Load input tables
-    #mito = "d__Bacteria; p__Pseudomonadota; c__Alphaproteobacteria; o__Rickettsiales; f__Mitochondria; g__; s__"
     tax_df = pd.read_csv(taxonomy_path, sep="\t", index_col=0)
-    #tax_conf_df = tax_df.loc[((tax_df['Confidence'] >= 0.7) & (tax_df['Taxonomy'] != mito))]
     asv_df = pd.read_csv(asv_table, sep="\t", index_col=0).T
     asv_df = asv_df[~(asv_df == 0).all(axis=1)]
-    #asv_df.index = [x.rsplit('_', 1)[0] for x in asv_df.index]
-    #asv_conf_df = asv_df[[a for a in asv_df.columns if a in list(tax_df.index.values)]]
     # Compute Shannon diversity for each sample from the ASV counts
     shannon_results = {}
     for sample in asv_df.index:
@@ -88,6 +73,28 @@ def main():
     bray_df.to_csv(output_br_mito, sep="\t")
 
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
+
+    # Compute pairwise Jaccard distances between samples
+    jaccard_output = os.path.join(data_dir, 'vsearch_output/diversity/jaccard.tsv')
+
+    asv_binary = (asv_df > 0).astype(int).values  # Convert counts to presence/absence
+    distances = pdist(asv_binary, metric="jaccard")
+    jaccard_matrix = squareform(distances)
+    jaccard_df = pd.DataFrame(jaccard_matrix, index=asv_df.index, columns=asv_df.index)
+    jaccard_df.index.name = "sample"
+    jaccard_df.to_csv(jaccard_output, sep="\t")
+
+    jaccard_mito_output = os.path.join(data_dir, 'vsearch_output/diversity/jaccard.mito.tsv')
+
+    mito_binary = (mito_df > 0).astype(int).values
+    distances = pdist(mito_binary, metric="jaccard")
+    jaccard_matrix = squareform(distances)
+    jaccard_df = pd.DataFrame(jaccard_matrix, index=mito_df.index, columns=mito_df.index)
+    jaccard_df.index.name = "sample"
+    jaccard_df.to_csv(jaccard_mito_output, sep="\t")
+
+    print(f"Jaccard beta diversity saved to {jaccard_output}")
+
 
 if __name__ == "__main__":
     main()

@@ -10,6 +10,7 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import colorsys
 from matplotlib import font_manager as fm, rcParams
+from adjustText import adjust_text
 
 
 # Global settings — at the top of script or notebook cell
@@ -18,65 +19,10 @@ mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
 plt.rcParams.update({'font.size': 12})  # Set your desired size
 mpl.rcParams['savefig.dpi'] = 600   # Optional — affects raster fallback
 pd.set_option('display.max_columns', None)
-font_path = '/home/ryan/.fonts/MYRIADPRO-REGULAR.OTF'  # update to your path
-myriad_font = fm.FontProperties(fname=font_path)
-rcParams['font.family'] = myriad_font.get_name()
+# Set font globally
+plt.rcParams['font.family'] = 'Source Sans Pro'
 sns.set_theme()  # re-applies style with updated rcParams
-
-
-
-Family_palette = {'UBA1547': (0.07294117647058829, 0.2799999999999998, 0.4235294117647058),
-                  'Thalassarchaeaceae': (0.21126696832579195, 0.4409049773755658, 0.7440271493212669),
-                  'Veillonellaceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Bacteroidaceae': (0.8823529411764707, 0.43790849673202614, 0.0),
-                  'Streptococcaceae': (0.10352941176470587, 0.3764705882352941, 0.10352941176470587),
-                  'Neisseriaceae_563222': (0.262234504540071, 0.666987761547572, 0.1824240031583102),
-                  'Porphyromonadaceae': (0.5035294117647059, 0.09176470588235297, 0.0941176470588235),
-                  'Fusobacteriaceae_993521': (0.9529411764705883, 0.018151260504201617, 0.0),
-                  'Fusobacteriaceae': (0.9529411764705883, 0.018151260504201617, 0.0),
-                  'Pasteurellaceae': (0.3498327037236912, 0.20800863464651914, 0.4790501888828926),
-                  'Gemellaceae': (0.47655809431210483, 0.3177053962080699, 0.5975887214389888),
-                  'UBA5272': (0.32941176470588246, 0.2023529411764706, 0.1764705882352941),
-                  'Aerococcaceae': (0.5217292700212616, 0.32669029057406096, 0.2876824946846208),
-                  'Leptotrichiaceae': (0.675121951219512, 0.13899569583931148, 0.5113055954088948),
-                  'Actinomycetaceae': (0.902164124909223, 0.10724763979665919, 0.4496732026143783),
-                  'Micrococcaceae': (0.2988235294117647, 0.2988235294117647, 0.2988235294117647),
-                  'Megasphaeraceae': (0.468235294117647, 0.468235294117647, 0.468235294117647),
-                  'Flavobacteriaceae': (0.44235294117647067, 0.4447058823529411, 0.08000000000000002),
-                  'Atopobiaceae': (0.6437647058823528, 0.6437647058823529, 0.20329411764705874),
-                  'Peptoniphilaceae': (0.05411764705882355, 0.4470588235294116, 0.4870588235294117),
-                  'Campylobacteraceae': (0.19248206599713058, 0.6366714490674316, 0.718106169296987),
-                  'Lachnospiraceae': (0.14588235294117657, 0.5599999999999996, 0.8470588235294116),
-                  'Selenomonadaceae_42771': (0.9303619909502263, 0.9518552036199095, 0.9802262443438914),
-                  'CAG-508': (0.9999999999999999, 0.6100951916036124, 0.26588235294117657),
-                  'Tannerellaceae': (0.9999999999999999, 0.8814814814814815, 0.7647058823529415),
-                  'Weeksellaceae': (0.20705882352941174, 0.7529411764705882, 0.20705882352941174),
-                  'Burkholderiaceae_A_595425': (0.7918041847611526, 0.9353178049743387, 0.7635057244374257),
-                  'Paludibacteraceae': (0.8752290165077887, 0.315359218786329, 0.3185584747733087),
-                  'Peptostreptococcaceae_256921': (1.0, 0.9076750700280113, 0.9058823529411766),
-                  'Mycobacteriaceae': (0.6928008634646518, 0.5636049649217484, 0.8105126821370751),
-                  'Treponemataceae': (0.9187943607194943, 0.8893923189110353, 0.9411959163830821),
-                  'Anaerovoracaceae': (0.6552667578659371, 0.4070588235294119, 0.356497948016416),
-                  'Dialisteraceae': (0.8645216158752658, 0.7726718639262935, 0.754301913536499),
-                  'Enterococcaceae': (0.9365279770444763, 0.6917073170731707, 0.861721664275466),
-                  'Pseudomonadaceae': (1.0, 1.0, 1.0),
-                  'Cardiobacteriaceae': (0.5976470588235294, 0.5976470588235294, 0.5976470588235294),
-                  'Staskawiczbacteraceae': (0.936470588235294, 0.936470588235294, 0.936470588235294),
-                  'Bifidobacteriaceae': (0.8508045370614616, 0.8550672645739912, 0.19434450013189108),
-                  'Aminobacteriaceae': (0.9265882352941175, 0.9265882352941175, 0.7675294117647058),
-                  'Tenuifilaceae': (0.1741176470588235, 0.8404092071611251, 0.908235294117647),
-                  'Sphingomonadaceae': (0.8589765662362504, 0.946207556193209, 0.9621999043519848),
-                  'Erysipelotrichaceae': (0.07294117647058829, 0.2799999999999998, 0.4235294117647058),
-                  'Nanosynbacteraceae': (0.21126696832579195, 0.4409049773755658, 0.7440271493212669),
-                  'Propionibacteriaceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Ignavibacteriaceae_785640': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Coprothermobacteraceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Petrotogaceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Absconditicoccaceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Nanopelagicaceae': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'UBA660': (0.6329411764705882, 0.2967732487185746, 0.0),
-                  'Fastidiosipilaceae': (0.6329411764705882, 0.2967732487185746, 0.0)
-                  }
+sns.set_style("white")
 
 
 
@@ -155,18 +101,161 @@ data_dir = "/home/ryan/Projects/UBC/LMP/SPARK_data/"
 node_features_file = os.path.join(data_dir, "vsearch_output/spieceasi/node_features.csv")
 nfeatures_df = pd.read_csv(node_features_file, header=0, sep=',', index_col=0)
 isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv")
-isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0)
+isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
+isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
 isa_status_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_results.tsv")
-isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0)
-isa_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_summary.tsv")
-isasummary_df = pd.read_csv(isa_summary_file, header=0, sep='\t', index_col=0)
+isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
+isastatus_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
+type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_summary.tsv")
+type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
+type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
+status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary.tsv")
+status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
+status_type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
+venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
+
+status_index = {1: 'Cancer',
+                2: 'Non-Cancer',
+                3: 'Cancer+Non-Cancer'
+                }
+status_palette = {'Non-Cancer':'white',
+                  'Cancer':'#A50026',
+                  'Cancer+Non-Cancer': 'lightgray'
+                  }
+type_index = {1: 'BAL',
+              2: 'Lung Brush',
+              3: 'Oral Rinse',
+              4: 'BAL+Lung Brush',
+              5: 'BAL+Oral Rinse',
+              6: 'Lung Brush+Oral Rinse',
+              7: 'BAL+Lung Brush+Oral Rinse'
+              }
+type_palette = {'Oral Rinse': '#6A3D9A',
+                'BAL+Oral Rinse': '#F19CBB',
+                'BAL': '#0072B2',
+                'BAL+Lung Brush': '#00FFFF',
+                'Lung Brush': '#009E73',
+                'Lung Brush+Oral Rinse': '#C1EAAD',
+                'BAL+Lung Brush+Oral Rinse': 'lightgray'
+                }
+venn_type = {'Only Oral Rinse': 'Oral Rinse',
+             'Only BAL': 'BAL',
+             'Only Lung Brush': 'Lung Brush',
+             'Oral + BAL': 'BAL+Oral Rinse',
+             'Oral + Lung': 'Lung Brush+Oral Rinse',
+             'BAL + Lung': 'BAL+Lung Brush',
+             'All Three': 'BAL+Lung Brush+Oral Rinse'
+             }
+
+ts_long_df = pd.wide_to_long(
+    type_summary_df,
+    stubnames=['A','B'],
+    i=['ASV_ID', 'index'],
+    j='Group',
+    sep='.',
+    suffix='.*'
+).reset_index(
+    )[['ASV_ID', 'index', 'Group', 'A', 'B']]
+
+ts_long_df['tmp_grp'] = [type_index[x] for x in ts_long_df['index']]
+ts_long_df = ts_long_df.loc[ts_long_df['Group'] == ts_long_df['tmp_grp']]
+ts_long_df.drop(columns=['tmp_grp'], inplace=True)
+
+ss_long_df = pd.wide_to_long(
+    status_type_summary_df,
+    stubnames=['A','B'],
+    i=['ASV_ID', 'index'],
+    j='Group',
+    sep='.',
+    suffix='.*'
+).reset_index(
+    )[['ASV_ID', 'index', 'Group', 'A', 'B']]
+
+ss_long_df['tmp_grp'] = [status_index[x] for x in ss_long_df['index']]
+ss_long_df = ss_long_df.loc[ss_long_df['Group'] == ss_long_df['tmp_grp']]
+ss_long_df.drop(columns=['tmp_grp'], inplace=True)
+
+asv_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.micro.tsv')
+asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
+asv_stack_df = asv_df.stack().reset_index()
+asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
+mean_stack_df = asv_stack_df.groupby(['ASV_ID'])['count'].mean().reset_index()
+mean_stack_df.columns = ['ASV_ID', 'mean']
+mean_stack_df['mean'] = np.ceil(mean_stack_df['mean'])
+
+metadata_table_path = os.path.join(data_dir, 'vsearch_output/metadata/metadata_updated.tsv')
+metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
+metadata_df.set_index('sample', inplace=True)
+metadata_df['status'] = ['Non-Cancer' if x == 'Non-Cancer' else x for x in metadata_df['Case']]
+
+#p_thresh = 0.05
+#stat_thresh = 0.0
+
+isastatus_df = isastatus_df #.loc[isastatus_df['index'].isin(status_index.keys())]
+# Compute log-transformed p-values
+#isastatus_df['log_p'] = -np.log10(isastatus_df['p.value'])
+# Define colors based on thresholds
+#isastatus_df['significance'] = False  # Default color for non-significant
+#isastatus_df.loc[((isastatus_df['p.value'] < p_thresh) & (isastatus_df['stat'] > stat_thresh)), 'significance'] = True 
+#status_colors = []
+#for i,s in zip(isastatus_df['index'], isastatus_df['significance']):
+#    #i_v = status_index[i]
+#    if s == True: #) & (i_v != 'All')):
+#        c = status_palette[status_index[i]]
+#    #elif i_v == 'All':
+#    #    c = 'lightgray'
+#    else:
+#        c = 'lightgray'
+#    status_colors.append(c)
+#isastatus_df['color'] = status_colors
+
+isastatus_df['color'] = [status_palette[status_index[x]] if x in status_index else 'lightgray' for x in isastatus_df['index']]
+isastatus_df = isastatus_df.merge(ss_long_df, how='left', on=['ASV_ID', 'index']).set_index('ASV_ID')
+isastatus_df['AxB'] = isastatus_df['A'] * isastatus_df['B']
+isastatus_df['AxB'] = isastatus_df['AxB'].fillna(0)
+isatype_df = isatype_df #.loc[isatype_df['index'].isin(type_index.keys())]
+# Compute log-transformed p-values
+#isatype_df['log_p'] = -np.log10(isatype_df['p.value'])
+# Define colors based on thresholds
+#isatype_df['significance'] = False  # Default color for non-significant
+#isatype_df.loc[((isatype_df['p.value'] < p_thresh) & (isatype_df['stat'] > stat_thresh)), 'significance'] = True 
+#type_colors = []
+#for i,s in zip(isatype_df['index'], isatype_df['significance']):
+#    #i_v = type_index[i]
+#    if s == True: #) & (i_v != 'All')):
+#        c = type_palette[type_index[i]]
+#    #elif i_v == 'All':
+#    #    c = '#999999'
+#    else:
+#        c = 'lightgray'
+#    type_colors.append(c)
+#isatype_df['color'] = type_colors
+
+isatype_df['color'] = [type_palette[type_index[x]] if x in type_index else 'lightgray' for x in isatype_df['index']]
+isatype_df = isatype_df.merge(ts_long_df, how='left', on=['ASV_ID', 'index']).set_index('ASV_ID')
+isatype_df['AxB'] = isatype_df['A'] * isatype_df['B']
+isatype_df['AxB'] = isatype_df['AxB'].fillna(0)
+
+venn_df = venn_df.set_index('ASV_ID')
+isatype_df = isatype_df.join(venn_df, how='left')
+venn_colors = []
+for g in isatype_df['grouping']:
+    if g in venn_type:
+        g_t = venn_type[g]
+        c = type_palette[g_t]
+    else:
+        c = 'lightgray'
+    venn_colors.append(c)
+isatype_df['venn_color'] = venn_colors
+
+
+
+
 
 taxonomy_path = os.path.join(data_dir, 'vsearch_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
-#mito = "d__Bacteria; p__Pseudomonadota; c__Alphaproteobacteria; o__Rickettsiales; f__Mitochondria; g__; s__"
-#tax_df = tax_df.loc[((tax_df['Confidence'] >= 0.7) & (tax_df['Taxonomy'] != mito))]
 taxonomy_dict = {'Domain': [], 'Phylum': [], 'Class': [],
                  'Order': [], 'Family': [], 'Genus': [],
                  'Species': []
@@ -179,110 +268,65 @@ for t in tax_df['Taxon']:
 for t in taxonomy_dict:
     tax_df[t] = taxonomy_dict[t]
 
-summary_stack_df = isasummary_df.stack().reset_index()
-summary_stack_df.columns = ['ASV_ID', 'metric', 'value']
 
-stat_list = ['A.BAL', 'A.Lung Brush', 'A.Oral Rinse', 'B.BAL', 'B.Lung Brush', 'B.Oral Rinse']
-stat_dfs = []
-for s in stat_list:
-    s0 = s.split('.', 1)[0]
-    s1 = s.split('.', 1)[1]
-    sub_df = summary_stack_df.loc[summary_stack_df['metric'] == s]
-    sub_df['stat'] = [x.split('.', 1)[0] for x in sub_df['metric']]
-    sub_df['type'] = [x.split('.', 1)[1] for x in sub_df['metric']]
-    sub_df = sub_df[['ASV_ID', 'stat', 'type', 'value']]
-    sub_df.columns = ['ASV_ID', 'metric', 'type', 'value']
-    stat_dfs.append(sub_df)
-stat_df = pd.concat(stat_dfs)
-stat_piv_df = stat_df.pivot_table(index=['ASV_ID', 'type'], columns='metric', values='value').reset_index()
 
-asv_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.tsv')
-asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 
-metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
-metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df.set_index('sample', inplace=True)
-metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
 
-# Compute relative abundance
-df_rel = compute_relative_abundance(asv_df)
-df_rel.to_csv(os.path.join(data_dir, f"vsearch_output/indicspecies/rel_abundance.tsv"), sep='\t')
 
-df_group_mean = df_rel.groupby(metadata_df['Type_Group'], axis=1).mean()
-mean_stack_df = df_group_mean.stack().reset_index()
-mean_stack_df.columns = ['ASV_ID', 'type', 'mean']
-mean_stack_df = mean_stack_df.loc[~mean_stack_df['type'].isin(['Skin Brush', 'Scope Flush'])]
-stat_mean_df = mean_stack_df.merge(stat_piv_df, left_on=['ASV_ID', 'type'], right_on=['ASV_ID', 'type'])
-stat_mean_df['AxB'] = stat_mean_df['A'] * stat_mean_df['B'] 
-
-# CLR transform on group means
-df_group_clr = np.log(df_group_mean + 1e-6).sub(
-    np.log(df_group_mean + 1e-6).mean(axis=0), axis=1
-    )
-clr_stack_df = df_group_clr.stack().reset_index()
-clr_stack_df.columns = ['ASV_ID', 'type', 'clr']
-clr_stack_df = clr_stack_df.loc[~clr_stack_df['type'].isin(['Skin Brush', 'Scope Flush'])]
-
-status_index = {1: 'Cancer', 2: 'Non-Cancer'}
-status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
-p_thresh = 0.05
-stat_thresh = 0.0
-
-isastatus_df = isastatus_df.loc[isastatus_df['index'].isin(status_index.keys())]
-# Compute log-transformed p-values
-isastatus_df['log_p'] = -np.log10(isastatus_df['p.value'])
-# Define colors based on thresholds
-isastatus_df['significance'] = False  # Default color for non-significant
-isastatus_df.loc[((isastatus_df['p.value'] < p_thresh) & (isastatus_df['stat'] > stat_thresh)), 'significance'] = True 
-isastatus_df['color'] = [status_palette[status_index[i]] if s else 'lightgray'
-                       for i,s in zip(isastatus_df['index'],
-                       isastatus_df['significance'])
-                       ]
-
-type_index = {1: 'BAL', 2: 'Lung Brush', 3: 'Oral Rinse'}
-type_palette = {'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A'
-           }
-
-isatype_df = isatype_df.loc[isatype_df['index'].isin(type_index.keys())]
-# Compute log-transformed p-values
-isatype_df['log_p'] = -np.log10(isatype_df['p.value'])
-# Define colors based on thresholds
-isatype_df['significance'] = False  # Default color for non-significant
-isatype_df.loc[((isatype_df['p.value'] < p_thresh) & (isatype_df['stat'] > stat_thresh)), 'significance'] = True 
-isatype_df['color'] = [type_palette[type_index[i]] if s else 'lightgray'
-                       for i,s in zip(isatype_df['index'],
-                       isatype_df['significance'])
-                       ]
 
 isatype_df = isatype_df.merge(tax_df, left_index=True, right_on="Feature ID")
 isastatus_df = isastatus_df.merge(tax_df, left_index=True, right_on="Feature ID")
-#isastatus_df['status_color'] = [Family_palette[i] if s else 'lightgray' for i,s in zip(isastatus_df['Family'], isastatus_df['significance'])]
-#isatype_df['type_color'] = [Family_palette[i] if s else 'lightgray' for i,s in zip(isatype_df['Family'], isatype_df['significance'])]
-asv_type_sig = {a:(type_index[i] if s else None) for a,s,i in 
-                zip(isatype_df.index.values, isatype_df['significance'], isatype_df['index'])
-                }
+'''
+sub_status_df = isastatus_df[['index', 'significance']]
+sub_status_df.columns = ['status_index', 'status_sig']
+isatype_df = isatype_df.merge(sub_status_df, left_index=True, right_on="Feature ID")
+isatype_df['status_sig_color'] = [x if y else 'lightgray'
+                                  for x,y in zip(isatype_df['color'],
+                                                 isatype_df['status_sig']
+                                                 )]
+isatype_df['cancer_color'] = [x if y == 1
+                              else 'lightgray' for x,y in
+                              zip(isatype_df['status_sig_color'],
+                                  isatype_df['status_index']
+                                  )]
+isatype_df['non-cancer_color'] = [x if y == 2
+                                  else 'lightgray' for x,y in
+                              zip(isatype_df['status_sig_color'],
+                                  isatype_df['status_index']
+                                  )]
+isatype_df['all_status_color'] = [x if y == 3
+                                  else 'lightgray' for x,y in
+                              zip(isatype_df['color'],
+                                  isatype_df['status_index']
+                                  )]
+'''
+
+# List of unique Phyla in your data
+phyla = isatype_df['Phylum'].unique()
+# Generate color palette (qualitative)
+palette = sns.color_palette('tab20', len(phyla))
+# Map phylum to color
+phylum_color_dict = dict(zip(phyla, palette))
 
 nfeat_type_df = nfeatures_df.merge(isatype_df, left_on='Taxon', right_index=True)
 nfeat_status_df = nfeatures_df.merge(isastatus_df, left_on='Taxon', right_index=True)
-nfeat_groups_df = nfeatures_df.reset_index().merge(stat_mean_df[['ASV_ID', 'type', 'mean', 'AxB']],
-                                                   left_on='Taxon', right_on='ASV_ID'
-                                                   )
-nfeat_groups_df = nfeat_groups_df.merge(clr_stack_df[['ASV_ID', 'type', 'clr']],
-                                        left_on=['ASV_ID', 'type'],
-                                        right_on=['ASV_ID', 'type']
+
+nfeat_type_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi/node_features.type.tsv"),
+                     sep='\t'
+                     )
+
+nfeat_status_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi/node_features.status.tsv"),
+                     sep='\t'
+                     )
+
+nfeat_abund_df = nfeatures_df.reset_index().merge(mean_stack_df[['ASV_ID', 'mean']],
+                                        left_on='Taxon', right_on='ASV_ID',
+                                        how='left'
                                         ).set_index('GraphML_ID')
-grp_colors = []
-for a,t in zip(nfeat_groups_df['ASV_ID'], nfeat_groups_df['type']):
-    if a in asv_type_sig:
-        if t == asv_type_sig[a]:
-            grp_colors.append(type_palette[t])
-        else:
-            grp_colors.append('white')
-    else:
-        grp_colors.append('white')
-nfeat_groups_df['color'] = grp_colors
+nfeat_abund_df = nfeat_abund_df.reset_index().merge(tax_df, left_on='Taxon',
+                                                    right_on="Feature ID", how='left'
+                                                    ).set_index('GraphML_ID')
+
 
 
 keep_cols = ['Taxon', 'Degree',
@@ -291,15 +335,234 @@ keep_cols = ['Taxon', 'Degree',
              'p.value', 'log_p',
              'significance', 'color',
              'Type_Group',
-             'mean', 'clr',
+             'mean',
              'AxB', 'status_color',
-             'type_color', 'Family'
+             'type_color', 'Phylum',
+             'cancer_color',
+             'status_sig_color',
+             'non-cancer_color',
+             'all_status_color',
+             'venn_color'
              ]
 
 
-network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network.graphml")
+network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_pos_all.graphml")
 G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
 
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+# — separate edges by sign and collect absolute weights for width scaling —
+pos_edges, pos_w = [], []
+neg_edges, neg_w = [], []
+for u, v, data in G.edges(data=True):
+    w = data.get("weight", 0)
+    if w > 0:
+        pos_edges.append((u, v));    pos_w.append(w)
+    elif w < 0:
+        neg_edges.append((u, v));    neg_w.append(abs(w))
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = 'black'
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       edgelist=pos_edges,
+                       width=[w * 5 for w in pos_w],
+                       edge_color="lightgray",
+                       alpha=0.6)
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'{s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Degree",
+    frameon=False,
+    scatterpoints=1,
+    labelspacing=1.5
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are all positive correlations")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
+
+network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_pos_sub.graphml")
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+# — separate edges by sign and collect absolute weights for width scaling —
+pos_edges, pos_w = [], []
+neg_edges, neg_w = [], []
+for u, v, data in G.edges(data=True):
+    w = data.get("weight", 0)
+    if w > 0:
+        pos_edges.append((u, v));    pos_w.append(w)
+    elif w < 0:
+        neg_edges.append((u, v));    neg_w.append(abs(w))
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = 'black'
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       edgelist=pos_edges,
+                       width=[w * 5 for w in pos_w],
+                       edge_color="lightgray",
+                       alpha=0.6)
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'{s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Degree",
+    frameon=False,
+    scatterpoints=1,
+    labelspacing=1.5
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are positive correlations >= 0.1")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_abund_df.index:
+        for col in nfeat_abund_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_abund_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = 'black'
+    size = G.nodes[node].get('mean', 1)
+    alpha = 0.5
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# Build size legend
+size_legend = [1, 10, 100, 500, 1000]
+size_handles = [plt.scatter([], [], s=s, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'{s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="ASV Mean Abundance",
+    frameon=False,
+    scatterpoints=1,
+    labelspacing=1.5
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on ASV Mean Abundance")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_abundance_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_abundance_plot.pdf"), bbox_inches='tight')
+
+G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
     if node in nfeat_type_df.index:
@@ -318,9 +581,8 @@ plt.figure(figsize=(18, 18))
 # Loop through nodes to apply custom alpha
 for node in G.nodes:
     color = G.nodes[node].get('color', 'lightgray')
-    size = G.nodes[node].get('Degree', 1) * 10
+    size = G.nodes[node].get('AxB', 0) * 500
     alpha = 0.5 if color == 'lightgray' else 1.0
-
     nx.draw_networkx_nodes(
         G, pos,
         nodelist=[node],
@@ -335,35 +597,503 @@ nx.draw_networkx_edges(G, pos,
 					   connectionstyle='arc3,rad=0.2',
 					   edge_color='lightgray',
 					   alpha=1)
-#nx.draw_networkx_labels(G, pos, font_size=6)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
 
 # >>> STOP matplotlib from rescaling everything <<<
 plt.axis('equal')         # Keep proportions
 plt.xlim(auto=False)      # Freeze x-axis scaling
 plt.ylim(auto=False)      # Freeze y-axis scaling
 
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
 
 
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+gets_label = []
+for node in G.nodes:
+    color = G.nodes[node].get('color', 'lightgray')
+    size = G.nodes[node].get('AxB') * 500
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+					   connectionstyle='arc3,rad=0.2',
+					   edge_color='lightgray',
+					   alpha=1)
+
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
 
 
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+gets_label = []
+for node in G.nodes:
+    color = G.nodes[node].get('venn_color', 'lightgray')
+    size = G.nodes[node].get('AxB') * 500
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
 
 
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = G.nodes[node].get('venn_color', 'lightgray')
+    size = G.nodes[node].get('AxB') * 500
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
 
 
-'''
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_status_df.index:
+        for col in nfeat_status_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_status_df.loc[node, col]
+
+edgecolors = ['white' if c == 'lightgray' else c for c in nfeat_type_df['color']]
+
+plt.figure(figsize=(18, 18))
+gets_label = []
+for node in G.nodes:
+    color = G.nodes[node].get('color', 'lightgray')
+    size = G.nodes[node].get('AxB') * 500
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    edgecolor = 'white' if color == 'lightgray' else 'lightgray'
+    edgecolor = 'black' if color == 'white' else 'lightgray'
+    lw = 1 if color == 'white' else 0.25
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=lw,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+legend_handles = []
+for status, color in status_palette.items():
+    if status == "Non-Cancer":
+        # thicker edge on this one
+        patch = mpatches.Patch(
+            facecolor=color,
+            edgecolor="black",
+            linewidth=1,      # <-- bold
+            label=status
+        )
+    else:
+        # normal edge on the others
+        patch = mpatches.Patch(
+            facecolor=color,
+            edgecolor=color,
+            linewidth=0.25,      # <-- default
+            label=status
+        )
+    legend_handles.append(patch)
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
+
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_status_df.index:
+        for col in nfeat_status_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_status_df.loc[node, col]
+
+edgecolors = ['white' if c == 'lightgray' else c for c in nfeat_type_df['color']]
+
+plt.figure(figsize=(18, 18))
+for node in G.nodes:
+    color = G.nodes[node].get('color', 'lightgray')
+    size = G.nodes[node].get('AxB') * 500
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    edgecolor = 'white' if color == 'lightgray' else 'lightgray'
+    edgecolor = 'black' if color == 'white' else 'lightgray'
+    lw = 1 if color == 'white' else 0.25
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=lw,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+legend_handles = []
+for status, color in status_palette.items():
+    if status == "Non-Cancer":
+        # thicker edge on this one
+        patch = mpatches.Patch(
+            facecolor=color,
+            edgecolor="black",
+            linewidth=1,      # <-- bold
+            label=status
+        )
+    else:
+        # normal edge on the others
+        patch = mpatches.Patch(
+            facecolor=color,
+            edgecolor=color,
+            linewidth=0.25,      # <-- default
+            label=status
+        )
+    legend_handles.append(patch)
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
+
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_abund_df.index:
+        for col in nfeat_abund_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_abund_df.loc[node, col]
+
 # Stretch the layout (e.g., 2x wider)
 scale = 3.0
 pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
 
 plt.figure(figsize=(18, 18))
 for node in G.nodes:
-    color = G.nodes[node].get('type_color', 'lightgray')
-    size = G.nodes[node].get('Degree', 1) * 20
+    p = G.nodes[node].get('Phylum')
+    if p in phylum_color_dict:
+        color = phylum_color_dict[p]
+    else:
+        color = 'lightgray'
+    size = G.nodes[node].get('mean', 1)
     alpha = 0.5 if color == 'lightgray' else 1.0
 
     nx.draw_networkx_nodes(
@@ -380,24 +1110,23 @@ nx.draw_networkx_edges(G, pos,
                        connectionstyle='arc3,rad=0.2',
                        edge_color='lightgray',
                        alpha=1)
-#nx.draw_networkx_labels(G, pos, font_size=6)
 
 # Build color legend
-type_color = nx.get_node_attributes(G, 'type_color')
-type_family = nx.get_node_attributes(G, 'Family')  # Or whatever attribute holds family name
+type_family = nx.get_node_attributes(G, 'Phylum')
 
 # Unique colors + labels
 unique_colors = {}
-for node, color in type_color.items():
+for node, phylum in type_family.items():
+    color = phylum_color_dict[phylum]
     label = type_family[node]
     unique_colors[color] = label
 
 color_patches = [mpatches.Patch(color=c, label=l) for c, l in unique_colors.items()]
 
 # Build size legend
-size_legend = [1, 5, 10, 25, 50]  # Example degree values
-size_handles = [plt.scatter([], [], s=s * 20, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'Degree: {s}')
+size_legend = [1, 10, 100, 500, 1000]
+size_handles = [plt.scatter([], [], s=s, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'Abundance: {s}')
                 for s in size_legend]
 
 plt.legend(
@@ -415,32 +1144,34 @@ plt.axis('equal')         # Keep proportions
 plt.xlim(auto=False)      # Freeze x-axis scaling
 plt.ylim(auto=False)      # Freeze y-axis scaling
 
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Family.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Familys.pdf"), bbox_inches='tight')
-'''
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
 
 
-
-
-
+G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
-    if node in nfeat_status_df.index:
-        for col in nfeat_status_df.columns:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
             if col in keep_cols:
-                G.nodes[node][col] = nfeat_status_df.loc[node, col]
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
 
-edgecolors = ['white' if c == 'lightgray' else c for c in nfeat_type_df['color']]
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
 
 plt.figure(figsize=(18, 18))
 for node in G.nodes:
-    color = G.nodes[node].get('color', 'lightgray')
-    size = G.nodes[node].get('Degree', 1) * 10
+    p = G.nodes[node].get('Phylum')
+    if p in phylum_color_dict:
+        color = phylum_color_dict[p]
+    else:
+        color = 'lightgray'
+    size = G.nodes[node].get('AxB') * 500
     alpha = 0.5 if color == 'lightgray' else 1.0
-    edgecolor = 'white' if color == 'lightgray' else 'lightgray'
 
     nx.draw_networkx_nodes(
         G, pos,
@@ -456,18 +1187,45 @@ nx.draw_networkx_edges(G, pos,
                        connectionstyle='arc3,rad=0.2',
                        edge_color='lightgray',
                        alpha=1)
-#nx.draw_networkx_labels(G, pos, font_size=6)
+
+# Build color legend
+type_family = nx.get_node_attributes(G, 'Phylum')
+
+# Unique colors + labels
+unique_colors = {}
+for node, phylum in type_family.items():
+    color = phylum_color_dict[phylum]
+    label = type_family[node]
+    unique_colors[color] = label
+
+color_patches = [mpatches.Patch(color=c, label=l) for c, l in unique_colors.items()]
+
+# Build size legend
+size_legend = [0.1, 0.25, 0.50, 0.75, 1.0]
+size_handles = [plt.scatter([], [], s=s * 500, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'ISA: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=color_patches + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
 
 # >>> STOP matplotlib from rescaling everything <<<
 plt.axis('equal')         # Keep proportions
 plt.xlim(auto=False)      # Freeze x-axis scaling
 plt.ylim(auto=False)      # Freeze y-axis scaling
 
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for status Status")
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')
 
 
 
@@ -475,9 +1233,42 @@ plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plo
 
 
 
-for t in type_palette.keys():
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ONLY BRING THE GOOD STUFF BACK UP
+flurp
+
+
+for t in ['BAL', 'Lung Brush', 'Oral Rinse']:
     t_str = t.replace(' ', '_')
+    print(t)
     nfeat_sub_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == t]
+    G = nx.read_graphml(network_file)
     # Add metadata to graph nodes
     for node in G.nodes:
         if node in nfeat_sub_df.index:
@@ -502,22 +1293,19 @@ for t in type_palette.keys():
         else:
             node_colors[node] = 'white'
 
-
     node_sizes = {}
     for node in G.nodes:
         if node in norm_cnts:
-            relabund = G.nodes[node].get('AxB')
-            node_sizes[node] = relabund * 5e2
+            axb = G.nodes[node].get('AxB')
+            node_sizes[node] = axb * 5e2
         else:
             node_sizes[node] = 0
-
-    plt.figure(figsize=(18, 18))
+        plt.figure(figsize=(18, 18))
 
     for node in G.nodes:
-        #color = node_colors[node]
-        color = G.nodes[node].get('color', 'white')
+        color = node_colors[node]
+        #color = G.nodes[node].get('color', 'white')
         size = node_sizes[node]
-
         nx.draw_networkx_nodes(
             G, pos,
             nodelist=[node],
@@ -532,16 +1320,599 @@ for t in type_palette.keys():
                            edge_color='lightgray',
                            alpha=1)
 
+    # Build size legend
+    size_legend = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25]  # Example degree values
+    size_handles = [plt.scatter([], [], s=s * 5e2, edgecolors='black',
+                                facecolors='gray', alpha=1, label=f'AxB: {s}')
+                    for s in size_legend]
+
+    plt.legend(
+        handles=size_handles,
+        loc='upper left',
+        bbox_to_anchor=(1, 1),
+        title="Node Attributes",
+        frameon=False,
+        scatterpoints=1,     # Don't stack points
+        labelspacing=1.5     # Increase vertical space between entries
+    )
+
     # >>> STOP matplotlib from rescaling everything <<<
     plt.axis('equal')         # Keep proportions
     plt.xlim(auto=False)      # Freeze x-axis scaling
     plt.ylim(auto=False)      # Freeze y-axis scaling
 
-    plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for {t}")
+    plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for {t}\nNode size based on AxB")
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.pdf"), bbox_inches='tight')
+    try:
+        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.svg"), bbox_inches='tight')
+        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.pdf"), bbox_inches='tight')
+    except:
+        print(t, ' skipped...')
+
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+gets_label = []
+for node in G.nodes:
+    color = G.nodes[node].get('status_sig_color', 'lightgray')
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'Degree: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_status_plot.pdf"), bbox_inches='tight')
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+gets_label = []
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = G.nodes[node].get('cancer_color', 'lightgray')
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'Degree: {s}')
+                for s in size_legend]
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_cancer_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_cancer_plot.pdf"), bbox_inches='tight')
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+gets_label = []
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = G.nodes[node].get('non-cancer_color', 'lightgray')
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'Degree: {s}')
+                for s in size_legend]
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_non-cancer_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_non-cancer_plot.pdf"), bbox_inches='tight')
+
+G = nx.read_graphml(network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+plt.figure(figsize=(18, 18))
+gets_label = []
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = G.nodes[node].get('all_status_color', 'lightgray')
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5 if color == 'lightgray' else 1.0
+    if color != 'lightgray':
+        gets_label.append(node)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+nx.draw_networkx_edges(G, pos,
+                       connectionstyle='arc3,rad=0.2',
+                       edge_color='lightgray',
+                       alpha=1)
+
+# Create legend handles
+legend_handles = [
+    mpatches.Patch(color=color, label=type)
+    for type, color in type_palette.items()
+    ]
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'Degree: {s}')
+                for s in size_legend]
+# add labels
+texts = []
+for n in gets_label:
+    x, y = pos[n]
+    label = G.nodes[n].get('Taxon', "")
+    texts.append(
+        plt.text(
+            x, y, label,
+            fontsize=9,
+            weight='bold',
+            ha='center', va='center'
+        )
+    )
+adjust_text(
+    texts,
+    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
+    expand_text=(1.2, 1.2),
+    force_text=0.5,
+    force_points=0.2
+)
+plt.legend(
+    handles=legend_handles + size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_all-status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_all-status_plot.pdf"), bbox_inches='tight')
 
 
 
+
+
+
+flurp
+from matplotlib.colors import LinearSegmentedColormap
+
+# Define your custom gradient: Green -> Cyan -> Blue
+cmap = LinearSegmentedColormap.from_list(
+    'LungBrush_BAL',
+    ['#009E73', '#00FFFF', '#0072B2'],  # Green -> Cyan -> Blue
+    N=256
+)
+
+lung_brush_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == 'Lung Brush']
+bal_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == 'BAL']
+
+G = nx.read_graphml(network_file)
+
+for node in G.nodes:
+    if node in lung_brush_df.index:
+        G.nodes[node]['lung_brush_AxB'] = lung_brush_df.loc[node, 'AxB']
+    if node in bal_df.index:
+        G.nodes[node]['bal_AxB'] = bal_df.loc[node, 'AxB']
+
+node_colors = {}
+for node in G.nodes:
+    lung_val = G.nodes[node].get('lung_brush_AxB', 0)
+    bal_val = G.nodes[node].get('bal_AxB', 0)
+
+    total = lung_val + bal_val
+    if total == 0:
+        gradient_pos = 0.5  # No association: middle (cyan)
+    else:
+        gradient_pos = lung_val / total  # 1 = pure Lung Brush (green), 0 = pure BAL (blue)
+
+    color = cmap(gradient_pos)
+    node_colors[node] = color
+
+node_sizes = {}
+for node in G.nodes:
+    lung_val = G.nodes[node].get('lung_brush_AxB', 0)
+    bal_val = G.nodes[node].get('bal_AxB', 0)
+    total_strength = lung_val + bal_val
+
+    node_sizes[node] = total_strength * 5e2  # or whatever scaling looks best
+
+
+fig, ax = plt.subplots(figsize=(18, 18))
+
+for node in G.nodes:
+    color = node_colors.get(node, 'white')  # fallback if missing
+    size = node_sizes.get(node, 0)
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',   # nice outline
+        linewidths=0.25,
+        alpha=1.0,
+        ax=ax
+    )
+
+nx.draw_networkx_edges(
+    G, pos,
+    connectionstyle='arc3,rad=0.2',
+    edge_color='lightgray',
+    alpha=1.0,
+    ax=ax  # <<< ADD THIS TOO
+)
+
+size_legend = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25]  # Example degree values
+size_handles = [plt.scatter([], [], s=s * 5e2, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'AxB: {s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Attributes",
+    frameon=False,
+    scatterpoints=1,     # Don't stack points
+    labelspacing=1.5     # Increase vertical space between entries
+)
+
+import matplotlib as mpl
+
+# Create a "fake" ScalarMappable to generate colorbar
+sm = mpl.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+sm.set_array([])
+
+# Add colorbar
+cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02)
+cbar.set_label('Lung Brush ← ISA Score → BAL', fontsize=14)
+cbar.ax.tick_params(labelsize=12)
+cbar.set_ticks([0, 0.5, 1])
+cbar.set_ticklabels(['BAL', 'Mixed', 'Lung Brush'])
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on strength of association with BAL and Lung Brush")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_BAL_LUNG_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_BAL_LUNG_plot.pdf"), bbox_inches='tight')
+
+
+
+signed_network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_signed.graphml")
+G = nx.read_graphml(signed_network_file)
+# Add metadata to graph nodes
+for node in G.nodes:
+    if node in nfeat_type_df.index:
+        for col in nfeat_type_df.columns:
+            if col in keep_cols:
+                G.nodes[node][col] = nfeat_type_df.loc[node, col]
+
+# === Visualization ===
+pos = nx.spring_layout(G, seed=42)
+
+# Stretch the layout (e.g., 2x wider)
+scale = 3.0
+pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
+
+# — separate edges by sign and collect absolute weights for width scaling —
+pos_edges, pos_w = [], []
+neg_edges, neg_w = [], []
+for u, v, data in G.edges(data=True):
+    w = data.get("weight", 0)
+    if w > 0:
+        pos_edges.append((u, v));    pos_w.append(w)
+    elif w < 0:
+        neg_edges.append((u, v));    neg_w.append(abs(w))
+
+plt.figure(figsize=(18, 18))
+# Loop through nodes to apply custom alpha
+for node in G.nodes:
+    color = 'black'
+    size = (G.nodes[node].get('Degree', 1) + 1) * 80
+    alpha = 0.5
+
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=[node],
+        node_color=[color],
+        node_size=[size],
+        edgecolors='black',
+        linewidths=0.25,
+        alpha=alpha
+    )
+
+# — draw positive edges in blue, solid —
+nx.draw_networkx_edges(G, pos,
+                       edgelist=pos_edges,
+                       width=[w * 5 for w in pos_w],   # scale up for visibility
+                       edge_color="blue",
+                       alpha=0.6)
+
+# — draw negative edges in red, dashed —
+nx.draw_networkx_edges(G, pos,
+                       edgelist=neg_edges,
+                       width=[w * 5 for w in neg_w],
+                       edge_color="red",
+                       style="dashed",
+                       alpha=0.6)
+
+# Build size legend
+size_legend = [0, 1, 3, 5, 10]
+size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
+                            facecolors='gray', alpha=1, label=f'{s}')
+                for s in size_legend]
+
+plt.legend(
+    handles=size_handles,
+    loc='upper left',
+    bbox_to_anchor=(1, 1),
+    title="Node Degree",
+    frameon=False,
+    scatterpoints=1,
+    labelspacing=1.5
+)
+
+# >>> STOP matplotlib from rescaling everything <<<
+plt.axis('equal')         # Keep proportions
+plt.xlim(auto=False)      # Freeze x-axis scaling
+plt.ylim(auto=False)      # Freeze y-axis scaling
+
+plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree")
+plt.axis('off')
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_SIGNED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_SIGNED.pdf"), bbox_inches='tight')
