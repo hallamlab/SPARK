@@ -95,9 +95,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define directories
-INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/fastq_input"
+INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/new_fastq_input"
 REFDB_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db"
-OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output"
+OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/new_vsearch_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -135,13 +135,15 @@ fastp_qc() {
             -I ${INPUT_DIR}/${SAMPLE}_R2_001.fastq.gz \
             -o ${QC_DIR}/${SAMPLE}_R1.fastq.gz \
             -O ${QC_DIR}/${SAMPLE}_R2.fastq.gz \
-            -f 19 -t 80 \
-            -F 20 -T 80 \
+            --cut_front \
+            --cut_tail \
+            --detect_adapter_for_pe \
+            --correction \
             -j ${QC_DIR}/${SAMPLE}_report.json \
             -h ${QC_DIR}/${SAMPLE}_report.html \
             -w ${THREADS}
     done 2>&1 | tee -a "${LOG_DIR}/fastp_log.txt"
-    echo "Step 1: FastP QC completed."   
+    echo "Step 1: FastP QC completed."
 }
 
 # Function to merge paired-end reads
@@ -271,7 +273,8 @@ remove_nontarget() {
 # Function to assign counts and create ASV count matrix
 create_count_matrix() {
     echo "Step 10: Creating ASV count matrix..."
-    vsearch --usearch_global ${CONCAT_DIR}/concat.fasta \
+    cat ${QC_DIR}/*.fastq.gz > ${CONCAT_DIR}/fastp_qc_concat.fastq.gz
+    vsearch --usearch_global ${CONCAT_DIR}/fastp_qc_concat.fastq.gz \
             --db ${ASV_DIR}/ASVs.fasta \
             --id 0.999 \
             --otutabout ${ASV_DIR}/ASV_counts.tsv \

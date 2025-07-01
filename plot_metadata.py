@@ -362,15 +362,15 @@ scope_df = asv_meta_df.loc[(
     (asv_meta_df['ASV_ID'].isin(scope_asvs)) &
     (asv_meta_df['Type_Group'].isin(['Scope Flush']))
     )].copy()[keep_cols].groupby(['ASV_ID'])['count'].mean().reset_index().fillna(0)
-scope_df.columns = ['ASV_ID', 'scope_mean']
+scope_df.columns = ['ASV_ID', 'nctrl_mean']
 
 asv_meta_df = asv_meta_df.merge(skin_df, how='left', on=['ASV_ID'])
 asv_meta_df['offtarg_mean'] = asv_meta_df['offtarg_mean'].fillna(0)
 
 asv_meta_df = asv_meta_df.merge(scope_df, how='left', on='ASV_ID')
-asv_meta_df['scope_mean'] = asv_meta_df['scope_mean'].fillna(0)
+asv_meta_df['nctrl_mean'] = asv_meta_df['nctrl_mean'].fillna(0)
 
-asv_meta_df['count_sub_scope'] = asv_meta_df['count'] - asv_meta_df['scope_mean']
+asv_meta_df['count_sub_scope'] = asv_meta_df['count'] - asv_meta_df['nctrl_mean']
 asv_meta_df['count_sub_skin'] = asv_meta_df['count_sub_scope'] - asv_meta_df['offtarg_mean']
 asv_meta_df['corr_count'] = [int(x) if x > 0 else int(0) for x in asv_meta_df['count_sub_skin']]
 asv_meta_df = asv_meta_df.loc[~asv_meta_df['Type_Group'].isin(['Scope Flush', 'Skin Brush'])]
