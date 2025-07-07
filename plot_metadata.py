@@ -136,21 +136,33 @@ if output_dir and not os.path.exists(output_dir):
 metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
-patient_set = sorted(list(set(metadata_df['Participant_ID'])))
+
+voc_metadata_path = os.path.join(data_dir, 'ref_db/VOC_table.tsv')
+voc_metadata_df = pd.read_csv(voc_metadata_path, sep='\t')
+
+brush_meta_df = voc_metadata_df.merge(metadata_df, left_on='ASV_sample_id', right_on='Sample_renamed', how='left')
+brush_meta_df['sample'] = brush_meta_df['Sample_renamed']
+brush_meta_df = brush_meta_df.drop(columns=['Type_y'])
+brush_meta_df = brush_meta_df.rename(columns={'Type_x': 'Type'})
+
+patient_set = sorted(list(set(brush_meta_df['Participant_ID'])))
 patient_dict = {x:i for i,x in enumerate(patient_set)}
 metadata_df['patient_code'] = ['P' + str(patient_dict[p]) for p in metadata_df['Participant_ID']]
 metadata_df['patient_int'] = [patient_dict[p] for p in metadata_df['Participant_ID']]
 metadata_df['type_code'] = [t[0:2] for t in metadata_df['type_group']]
 metadata_df['lung_code'] = [l[0] if l[0] in ['R', 'L'] else 'N' for l in metadata_df['Type']]
 # Define desired order
-patient_order = sorted(list(metadata_df['patient_int'].unique()))
+patient_order = sorted(list(brush_meta_df['patient_int'].unique()))
 type_order = ['Sk', 'Sc', 'Or', 'BA', 'Lu']
 lung_order = ['R', 'L', 'N']
+
 # Convert columns to categorical with specified order
-metadata_df['type_code'] = pd.Categorical(metadata_df['type_code'], categories=type_order, ordered=True)
-metadata_df['lung_code'] = pd.Categorical(metadata_df['lung_code'], categories=lung_order, ordered=True)
+brush_meta_df['type_code'] = pd.Categorical(brush_meta_df['type_code'], categories=type_order, ordered=True)
+brush_meta_df['lung_code'] = pd.Categorical(brush_meta_df['lung_code'], categories=lung_order, ordered=True)
+
 # Sort the dataframe
-metadata_df = metadata_df.sort_values(['patient_int', 'type_code', 'lung_code'])
+brush_meta_df = brush_meta_df.sort_values(['patient_int', 'type_code', 'lung_code'])
+
 # Create unique sample code
 metadata_df['sample_code'] = [str(f"S{i+1:03d}") for i in range(len(metadata_df['sample']))]
 col = 'sample_code'
@@ -202,7 +214,7 @@ asv_raw_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.micro.ts
 asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
 asv_raw_df.columns = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_raw_df.columns]
 asv_raw_stack_df = asv_raw_df.stack().reset_index()
-asv_raw_stack_df.columns = ['ASV_ID', 'sample', 'raw_count']
+asv_raw_stack_df.columns = ['sample', 'ASV_ID', 'raw_count']
 asv_raw_stack_df = asv_raw_stack_df.loc[asv_raw_stack_df['raw_count'] > 0]
 asv_raw_stack_df.set_index('ASV_ID', inplace=True)
 asv_raw_stack_df['sample'] = asv_raw_stack_df['sample'].astype(str)
@@ -214,7 +226,6 @@ asv_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 asv_df.columns = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_df.columns]
 asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
-
 asv_stack_df = asv_df.stack().reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
 asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
@@ -729,7 +740,7 @@ asv_meta_df['count_sub_skin'] = asv_meta_df['count_sub_scope'] - asv_meta_df['of
 asv_meta_df['corr_count'] = [int(x) if x > 0 else int(0) for x in asv_meta_df['count_sub_skin']]
 asv_meta_df = asv_meta_df.loc[~asv_meta_df['type_group'].isin(['Scope Flush', 'Skin Brush'])]
 cleaned_asv_df = asv_meta_df.pivot_table(index='ASV_ID', columns='sample',
-                              values='corr_count', aggfunc='sum', fill_value=0
+                              values='count', aggfunc='sum', fill_value=0
                               )
 asv_keep_list = list(asv_meta_df.loc[asv_meta_df['Domain'] != 'Unassigned']['ASV_ID'].unique())
 final_asv_df = cleaned_asv_df[[x for x in cleaned_asv_df.columns if x in list(sub_df['sample'])]]

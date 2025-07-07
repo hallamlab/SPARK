@@ -172,17 +172,11 @@ top10 = total_abundance.sort_values(ascending=False).head(10).index.tolist()
 asv_tax_df['Phylum_plot'] = asv_tax_df["Phylum"].apply(lambda x: x if x in top10 else "Other")
 asv_phy_dict = {x:y for x,y in zip(asv_tax_df['ASV_ID'], asv_tax_df['Phylum_plot'])}
 
-all_type_palette = {'Scope Flush': '#E69F00',
-           'Skin Brush': '#CC79A7',
-           'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A',
+three_palette = {'ca-lung': '#009E73',
+           'ca-contra': '#0072B2',
+           'ctrl-brush': '#6A3D9A'
            }
-
-three_palette = {'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A'
-           }
+status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
 
 colors = ['#009E73', '#0072B2', '#6A3D9A']
 alpha = 0.6
@@ -971,12 +965,12 @@ upset = UpSet(upset_sum_df, sum_over='count', subset_size='sum',
               intersection_plot_elements=0
               )
 
-for t in all_type_palette.keys():
-    upset.style_categories([t], bar_facecolor=all_type_palette[t], bar_edgecolor="black")
+for t in three_palette.keys():
+    upset.style_categories([t], bar_facecolor=three_palette[t], bar_edgecolor="black")
 
 upset.add_stacked_bars(
     by="type", sum_over='count',
-    colors=all_type_palette,
+    colors=three_palette,
     title="Count by Type", elements=10
     )
 

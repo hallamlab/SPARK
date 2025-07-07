@@ -14,7 +14,7 @@ asv_table <- read.table(asv_file,
                         row.names = 1,
                         sep = "\t",
                         check.names = FALSE,
-                        comment.char = "")
+                        comment.char = ""))
 
 metadata <- read.table(metadata_file,
                        header = TRUE,

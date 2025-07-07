@@ -34,6 +34,7 @@ def main():
     # Load input tables
     asv_df = pd.read_csv(asv_table, sep="\t", index_col=0).T
     asv_df = asv_df[~(asv_df == 0).all(axis=1)]
+
     # Compute Shannon diversity for each sample from the ASV counts
     shannon_results = {}
     for sample in asv_df.index:
@@ -65,13 +66,6 @@ def main():
     bray_df = pd.DataFrame(bray_curtis_matrix, index=asv_df.index, columns=asv_df.index)
     bray_df.index.name = "sample"
     bray_df.to_csv(output_bray, sep="\t")
-
-    asv_array = mito_df.values
-    distances = pdist(asv_array, metric="braycurtis")
-    bray_curtis_matrix = squareform(distances)
-    bray_df = pd.DataFrame(bray_curtis_matrix, index=mito_df.index, columns=mito_df.index)
-    bray_df.index.name = "sample"
-    bray_df.to_csv(output_br_mito, sep="\t")
 
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
 

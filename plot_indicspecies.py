@@ -255,10 +255,9 @@ def plot_combined(df, output_file, type_palette, no_sig=False):
     plt.axhline(-np.log10(p_thresh), linestyle='--', color='gray', linewidth=1, label=f'p={p_thresh}')
     '''
     # Build color legend (hue)
-    color_handles = [mpatches.Patch(color=type_palette[k], label=k) for k in ['Oral Rinse', 'BAL+Oral Rinse',
-                                                                              'BAL', 'BAL+Lung Brush',
-                                                                              'Lung Brush', 'Lung Brush+Oral Rinse'
-                                                                              ]]
+    color_handles = [mpatches.Patch(color=type_palette[k], label=k) for k in ['ca-contra', 'ca-lung', 'ctrl-brush',
+                                                                              'ca-contra+ca-lung', 'ca-contra+ctrl-brush',
+                                                                              'ca-lung+ctrl-brush']]
 
     # Build marker legend (shape)
     status_dict = {'Non-Cancer': 'o', 'Cancer': 'X'}
