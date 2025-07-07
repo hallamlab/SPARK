@@ -95,9 +95,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define directories
-INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/new_fastq_input"
+INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/fastq_kits"
 REFDB_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db"
-OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/new_vsearch_output"
+OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/kits_vsearch_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -188,7 +188,8 @@ concatenate_reads() {
     echo "Step 4: Concatenating all filtered reads..."
     rm -f ${CONCAT_DIR}/concat.fasta
     for F in ${FILTERED_DIR}/*.filtered.fasta; do
-        SAMPLE=$(basename ${F} .filtered.fasta)
+        RUN=$(basename ${F} .filtered.fasta | cut -d'-' -f1)
+        SAMPLE=$(basename ${F} .filtered.fasta | rev | cut -d'_' -f5 | rev)
         
         # Extract the first sequence header and modify it
         HEADER=$(head -n 1 "${F}")
@@ -281,13 +282,13 @@ create_count_matrix() {
             --threads ${THREADS} \
             --log ${LOG_DIR}/count_log.txt
     
-    echo "Step 10: Filtering samples by ASV sum..."
-    python filter_ASV_table.py \
-            ${ASV_DIR}/ASV_counts.tsv \
-            ${REFDB_DIR}/spark_metadata.tsv \
-            ${ASV_DIR}/ASV_filtered.tsv \
-            5000 0.005
-    echo "Step 10: ASV count matrix created and filtered."
+    #echo "Step 10: Filtering samples by ASV sum..."
+    #python filter_ASV_table.py \
+    #        ${ASV_DIR}/ASV_counts.tsv \
+    #        ${REFDB_DIR}/spark_metadata.tsv \
+    #        ${ASV_DIR}/ASV_filtered.tsv \
+    #        5000 0.005
+    #echo "Step 10: ASV count matrix created and filtered."
 }
 
 

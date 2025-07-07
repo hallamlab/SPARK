@@ -27,7 +27,7 @@ def classify_with_vsearch(query_seqs, ref_seqs, ref_taxonomy):
         #perc_identity=0.99,
         #maxaccepts=10,
         #top_hits_only=True,
-        threads=2
+        threads=8
 
     )
     elapsed = time.time() - start

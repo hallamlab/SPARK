@@ -1,81 +1,66 @@
 #!/usr/bin/env python3
 import os
-import time
-import requests
 from pathlib import Path
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
-data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta.split'
-output_file = '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/mitomap/mitomaster_combined.tsv'
+data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/kits_vsearch_output/ASVs/ASVs.fasta.split'
+output_file = '/home/ryan/Projects/UBC/LMP/SPARK_data/kits_vsearch_output/mitomap/mitomaster_combined.tsv'
+checkpoint_file = output_file + '.done'
 
-# List all .fasta files
 fasta_files = sorted(Path(data_dir).glob("*.fasta"))
 
-# Collect results
-all_results = []
+# Read already completed files
+done = set()
+if Path(checkpoint_file).exists():
+    with open(checkpoint_file) as f:
+        done.update(line.strip() for line in f)
 
-for i, fasta in enumerate(fasta_files, 1):
-    print(f"Processing {fasta.name} ({i}/{len(fasta_files)})")
+# Lock for writing to files safely across threads
+lock = Lock()
 
-    with open(fasta, 'rb') as f:
-        files = {
-            "file": f,
-            "fileType": ('', 'sequences'),
-            "output": ('', 'hsd')
-        }
-        try:
+def process_fasta(fasta_path, first=False):
+    try:
+        with open(fasta_path, 'rb') as f:
+            files = {
+                "file": f,
+                "fileType": ('', 'sequences'),
+                "output": ('', 'hsd')
+            }
             response = requests.post("https://mitomap.org/mitomaster/websrvc.cgi", files=files)
             response.raise_for_status()
             output = response.text
 
-            # Keep header only once
-            if i == 1:
-                all_results.append(output)
-            else:
-                all_results.append('\n'.join(output.splitlines()[1:]))
+        # Write output and update checkpoint
+        with lock:
+            with open(output_file, 'a') as out_f:
+                if first:
+                    out_f.write(output)
+                else:
+                    out_f.write('\n' + '\n'.join(output.splitlines()[1:]))
+            with open(checkpoint_file, 'a') as chk_f:
+                chk_f.write(fasta_path.name + '\n')
 
-        except Exception as e:
-            print(f"Error processing {fasta.name}: {e}")
+        print(f"✅ Done: {fasta_path.name}")
+    except Exception as e:
+        print(f"❌ Error: {fasta_path.name}: {e}")
 
-    #time.sleep(10)
+# Filter only unprocessed files
+remaining = [f for f in fasta_files if f.name not in done]
 
-# Write combined output
-with open(output_file, 'w') as f:
-    f.write('\n'.join(all_results))
+print(f"Found {len(remaining)} unprocessed FASTA files")
 
-print(f"All results saved to {output_file}")
+if remaining:
+    first = True
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for fasta in remaining:
+            futures.append(executor.submit(process_fasta, fasta, first))
+            first = False  # Only keep header from first
+        for f in as_completed(futures):
+            f.result()  # Trigger exception if any
+else:
+    print("✅ All files already processed.")
 
-
-
-
-
-
-'''
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Load your data
-df = pd.read_csv("your_table.tsv", sep="\t", index_col=0)
-
-def confusion_counts(df, pred_col):
-    TP = ((df['Contaminant'] == 1) & (df[pred_col] == 1)).sum()
-    FP = ((df['Contaminant'] == 0) & (df[pred_col] == 1)).sum()
-    TN = ((df['Contaminant'] == 0) & (df[pred_col] == 0)).sum()
-    FN = ((df['Contaminant'] == 1) & (df[pred_col] == 0)).sum()
-    return pd.Series({'TP': TP, 'FP': FP, 'TN': TN, 'FN': FN})
-
-# Calculate confusion components for both databases
-db1_results = confusion_counts(df, 'DB1_Called_Contam')
-db2_results = confusion_counts(df, 'DB2_Called_Contam')
-
-# Combine into a single dataframe for plotting
-conf_matrix_df = pd.DataFrame({'DB1': db1_results, 'DB2': db2_results})
-
-# Plot
-conf_matrix_df.T.plot(kind='bar', stacked=False, figsize=(8, 5), colormap='Set2')
-plt.ylabel("Count")
-plt.title("Confusion Matrix Breakdown by Database")
-plt.xticks(rotation=0)
-plt.legend(title="Outcome")
-plt.tight_layout()
-plt.show()
-'''
+print(f"📝 Results saved to {output_file}")
