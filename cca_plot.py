@@ -703,6 +703,9 @@ cmap_cblind = mcolors.LinearSegmentedColormap.from_list(
     "cblind_diverging", ["#0072B2", "#F0F0F0", "#D55E00"]
 )
 
+# Subset the correlation matrix for only SIG ISAs
+
+
 output_path = os.path.join(output_dir, "cca/ISA_spearman_correlation.pdf")
 g = sns.clustermap(
     corr_matrix.astype(float),
