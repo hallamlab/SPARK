@@ -190,3 +190,5 @@ result <- data.frame(
 write.table(result,
             file = file.path(out_dir, "cca_taxa_env_strong.tsv"),
             sep  = "\t", quote = FALSE, row.names = FALSE)
+
+

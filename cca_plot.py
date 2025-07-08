@@ -495,47 +495,47 @@ status_palette = {'Non-Cancer':'white',
                   'Cancer':'#A50026',
                   'Cancer+Non-Cancer': '#d27f85cc'
                   }
-type_index = {1: 'BAL',
-              2: 'Lung Brush',
-              3: 'Oral Rinse',
-              4: 'BAL+Lung Brush',
-              5: 'BAL+Oral Rinse',
-              6: 'Lung Brush+Oral Rinse',
-              7: 'BAL+Lung Brush+Oral Rinse'
+type_index = {1: 'ca-contra',
+              2: 'ca-lung',
+              3: 'ctrl-brush',
+              4: 'ca-contra+ca-lung',
+              5: 'ca-contra+ctrl-brush',
+              6: 'ca-lung+ctrl-brush',
               }
-type_palette = {'Oral Rinse': '#6A3D9A',
-                'BAL+Oral Rinse': '#F19CBB',
-                'BAL': '#0072B2',
-                'BAL+Lung Brush': '#00FFFF',
-                'Lung Brush': '#009E73',
-                'Lung Brush+Oral Rinse': '#C1EAAD',
-                'BAL+Lung Brush+Oral Rinse': 'lightgray'
+type_palette = {'ctrl-brush': '#6A3D9A',
+                'ca-contra+ctrl-brush': '#F19CBB',
+                'ca-contra': '#0072B2',
+                'ca-contra+ca-lung': '#00FFFF',
+                'ca-lung': '#009E73',
+                'ca-lung+ctrl-brush': '#C1EAAD',
                 }
-venn_type = {'Only Oral Rinse': 'Oral Rinse',
-             'Only BAL': 'BAL',
-             'Only Lung Brush': 'Lung Brush',
-             'Oral + BAL': 'BAL+Oral Rinse',
-             'Oral + Lung': 'Lung Brush+Oral Rinse',
-             'BAL + Lung': 'BAL+Lung Brush',
-             'All Three': 'BAL+Lung Brush+Oral Rinse'
+
+venn_type = {'ca-contra + ca-lung': 'ca-contra+ca-lung',
+             'ctrl-brush + ca-contra': 'ca-contra+ctrl-brush',
+             'ctrl-brush + ca-lung': 'ca-lung+ctrl-brush',
+             'Only ca-contra': 'ca-contra',
+             'Only ca-lung': 'ca-lung',
+             'Only ctrl-brush': 'ctrl-brush'
              }
 
-status_summary_file = os.path.join(data_dir, "vsearch_output/cca/status_indicator_lineage_summary.tsv")
+status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary_Brush.tsv")
 status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
 status_type_summary_df.rename(columns={'ASV': 'lineage'}, inplace=True)
-isa_status_file = os.path.join(data_dir, "vsearch_output/cca/status_indicator_lineage_results.tsv")
+isa_status_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_results_Brush.tsv")
 isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
 isastatus_df.rename(columns={'level_0': 'lineage'}, inplace=True)
 
-'''
-isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv")
+isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_results_Brush.tsv")
 isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
 isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_summary.tsv")
+isatype_df = isatype_df.loc[isatype_df['index'].isin(type_index.keys())]
+
+type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_summary_Brush.tsv")
 type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
 type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
-'''
+type_summary_df = type_summary_df.loc[type_summary_df['index'].isin(type_index.keys())]
+
+venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table_Brush.tsv"), sep="\t", header=0)
 
 ss_long_df = pd.wide_to_long(
     status_type_summary_df,
@@ -555,7 +555,7 @@ isastatus_df['color'] = [status_palette[status_index[x]] if x in status_index el
 isastatus_df = isastatus_df.merge(ss_long_df, how='left', on=['lineage', 'index']).set_index('lineage')
 isastatus_df['AxB'] = isastatus_df['A'] * isastatus_df['B']
 isastatus_df['AxB'] = isastatus_df['AxB'].fillna(0)
-'''
+
 ts_long_df = pd.wide_to_long(
     type_summary_df,
     stubnames=['A','B'],
@@ -586,35 +586,35 @@ for g in isatype_df['grouping']:
         c = 'lightgray'
     venn_colors.append(c)
 isatype_df['venn_color'] = venn_colors
-'''
 
 # Align on common samples
 common_samples = asv_df.index.intersection(voc_df.index)
 asv_df = asv_df.loc[common_samples]
 asv_df.reset_index().to_csv(os.path.join(output_dir, "cca/Brush_ASV_Table.tsv"), sep='\t', index=False)
-flurp
+
 voc_df = voc_df.loc[common_samples]
 #voc_nonorm_df = voc_nonorm_df.loc[common_samples]
 
 # Align common ASVs
-#common_asvs = asv_df.columns.intersection(isastatus_df.index)
-#asv_df = asv_df[common_asvs]
-#isastatus_df = isastatus_df.loc[isastatus_df.index.isin(common_asvs)]
+common_asvs = asv_df.columns.intersection(isastatus_df.index)
+asv_df = asv_df[common_asvs]
+isastatus_df = isastatus_df.loc[isastatus_df.index.isin(common_asvs)]
 
 # Align common ASVs
-#common_asvs = asv_df.columns.intersection(isatype_df.index)
-#asv_df = asv_df[common_asvs]
-#isatype_df = isatype_df.loc[isatype_df.index.isin(common_asvs)]
+common_asvs = asv_df.columns.intersection(isatype_df.index)
+asv_df = asv_df[common_asvs]
+isatype_df = isatype_df.loc[isatype_df.index.isin(common_asvs)]
 
 print(f"ASV matrix shape: {asv_df.shape}")
 print(f"VOC matrix shape: {voc_df.shape}")
 print(f"ISA status matrix shape: {isastatus_df.shape}")
-#print(f"ISA type matrix shape: {isatype_df.shape}")
+print(f"ISA type matrix shape: {isatype_df.shape}")
 
 asv_stack_df = asv_df.unstack().reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
 asv_tax_df = asv_stack_df.merge(tax_df, left_on = 'ASV_ID', right_index=True, how='left')
 
+'''
 order_df = asv_tax_df.groupby(['Phylum', 'Class', 'Order', 'Family', 'Genus', 'sample']
                               )['count'].sum().reset_index()
 
@@ -625,18 +625,16 @@ order_df['lineage'] = order_df['Order'] + '_' + \
 ord_us_df = order_df.pivot(index='sample', columns='lineage', values='count')
 ord_us_df.T.reset_index().to_csv(os.path.join(output_dir, "cca/Lineage_ASV_Table.tsv"), sep='\t', index=False)
 
-
-
 asv_stack_df = order_df[['lineage', 'sample', 'count']]
 asv_stack_df.columns = ['LIN_ID', 'sample', 'count']
-
+'''
 
 asv_status_df = asv_stack_df.merge(metadata_df[['Sample_renamed', 'Case']], left_on='sample',
                                    right_on='Sample_renamed', how='left'
                                    )
-asv_grp_df = asv_status_df.groupby(['LIN_ID', 'Case'])['count'].sum().reset_index()
-asv_unstack_df = asv_grp_df.pivot(index='LIN_ID', columns='Case', values=['count']).reset_index()
-asv_unstack_df.columns = ['LIN_ID', 'Cancer', 'Control']
+asv_grp_df = asv_status_df.groupby(['ASV_ID', 'Case'])['count'].sum().reset_index()
+asv_unstack_df = asv_grp_df.pivot(index='ASV_ID', columns='Case', values=['count']).reset_index()
+asv_unstack_df.columns = ['ASV_ID', 'Cancer', 'Control']
 # Boolean presence
 print(asv_unstack_df.head())
 
@@ -652,8 +650,8 @@ print(f"Only in Cancer: {only_case1}")
 print(f"Only in Control: {only_case2}")
 print(f"Shared: {shared}")
 
-cancer_set = set(asv_grp_df.loc[(asv_grp_df['Case'] == 'Cancer') & (asv_grp_df['count'] > 0)]['LIN_ID'])
-control_set = set(asv_grp_df.loc[(asv_grp_df['Case'] == 'Control') & (asv_grp_df['count'] > 0)]['LIN_ID'])
+cancer_set = set(asv_grp_df.loc[(asv_grp_df['Case'] == 'Cancer') & (asv_grp_df['count'] > 0)]['ASV_ID'])
+control_set = set(asv_grp_df.loc[(asv_grp_df['Case'] == 'Control') & (asv_grp_df['count'] > 0)]['ASV_ID'])
 
 cancer_sub = len(set(cancer_set - control_set))
 control_sub = len(set(control_set - cancer_set))
@@ -676,14 +674,14 @@ plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.svg"), forma
 plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 # Result matrix: ASVs x Chem
-corr_matrix = pd.DataFrame(index=ord_us_df.columns, columns=voc_df.columns, dtype=float)
-for asv in ord_us_df.columns:
-    if ord_us_df[asv].nunique() <= 1:
+corr_matrix = pd.DataFrame(index=asv_df.columns, columns=voc_df.columns, dtype=float)
+for asv in asv_df.columns:
+    if asv_df[asv].nunique() <= 1:
         continue
     for voc in voc_df.columns:
         if voc_df[voc].nunique() <= 1:
             continue
-        r, _ = spearmanr(ord_us_df[asv], voc_df[voc])
+        r, _ = spearmanr(asv_df[asv], voc_df[voc])
         corr_matrix.loc[asv, voc] = r
 
 # Drop rows/cols with all NaNs
@@ -692,23 +690,13 @@ corr_matrix = corr_matrix.dropna(how="all").dropna(axis=1, how="all")
 # Fill remaining NaNs with 0 (or any neutral value)
 corr_matrix = corr_matrix.fillna(0.0)
 
-'''
-print(isastatus_df.head())
-print(isatype_df.head())
-'''
 # Each column is a category with color-mapped values
 row_colors = isastatus_df.loc[corr_matrix.index, ["Group"]].copy()
 row_colors["ISA_Cancer_Status"] = row_colors["Group"].map(status_palette)
-
-'''
 row_colors["ISA_Sample_Type"] = isatype_df.loc[corr_matrix.index, "Group"].map(type_palette)
 row_colors["Venn_Sample_MAP"] = isatype_df.loc[corr_matrix.index, "grouping"].map(venn_type)
 row_colors["Venn_Sample_Type"] = row_colors["Venn_Sample_MAP"].map(type_palette)
 row_colors.drop(columns=['Group', "Venn_Sample_MAP"], inplace=True)
-'''
-
-row_colors.drop(columns=['Group'], inplace=True)
-
 
 # Blue-gray-orange diverging (colorblind-friendly)
 cmap_cblind = mcolors.LinearSegmentedColormap.from_list(
@@ -748,7 +736,7 @@ for value in unique_values:
     if value in status_palette:
         color = status_palette[value]
         legend_handles.append(Patch(color=color, label=f'ISA Cancer Status: {value}'))  
-'''
+
 # Add ISA type legend
 unique_values = isatype_df['Group'].unique()
 for value in unique_values:
@@ -761,7 +749,7 @@ for value in unique_values:
     if value in venn_type:
         color = type_palette[venn_type[value]]
         legend_handles.append(Patch(color=color, label=f'Venn Type Status: {value}'))  
-'''
+
 # Add legend to right of the heatmap
 g.ax_heatmap.legend(
     handles=legend_handles,
@@ -776,6 +764,12 @@ plt.tight_layout()
 plt.savefig(output_path, bbox_inches="tight", dpi=600)
 plt.clf()
 plt.close()
+
+
+flurp
+
+
+
 
 
 col_order = g.data2d.columns
