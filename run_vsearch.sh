@@ -97,7 +97,7 @@ done
 # Define directories
 INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/fastq_kits"
 REFDB_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db"
-OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/kits_vsearch_output"
+OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/priority1_vsearch_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -274,10 +274,9 @@ remove_nontarget() {
 # Function to assign counts and create ASV count matrix
 create_count_matrix() {
     echo "Step 10: Creating ASV count matrix..."
-    cat ${QC_DIR}/*.fastq.gz > ${CONCAT_DIR}/fastp_qc_concat.fastq.gz
-    vsearch --usearch_global ${CONCAT_DIR}/fastp_qc_concat.fastq.gz \
+    vsearch --usearch_global ${CONCAT_DIR}/concat.fasta \
             --db ${ASV_DIR}/ASVs.fasta \
-            --id 0.999 \
+            --id 0.99 \
             --otutabout ${ASV_DIR}/ASV_counts.tsv \
             --threads ${THREADS} \
             --log ${LOG_DIR}/count_log.txt

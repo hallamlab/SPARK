@@ -326,22 +326,23 @@ def main():
 
     data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
        
-    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
+    metadata_table_path = os.path.join(data_dir, 'ref_db/priority1_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t', index_col=0)
+    metadata_df.index = metadata_df.index.astype(str)
 
-    fastq_stats_path = os.path.join(data_dir, 'vsearch_output/stats/fastq_stats.tsv')
+    fastq_stats_path = os.path.join(data_dir, 'priority1_vsearch_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-    fstats_df['sample'] = [x.split('/')[-1].split('_L001_R')[0] for x in fstats_df['file']]
+    fstats_df['sample'] = [str(x.split('-')[-1].split('_')[0]) for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on='sample')
-
-    filter_stats_path = os.path.join(data_dir, 'vsearch_output/stats/filtered_fastqs.tsv')
+    
+    filter_stats_path = os.path.join(data_dir, 'priority1_vsearch_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
-    filter_stats_df['sample'] = [x.split('/')[-1].split('_L001')[0] for x in filter_stats_df['file']]
+    filter_stats_df['sample'] = [str(x.split('-')[-1].split('_')[0]) for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
     filter_meta_df = filter_reads_df.merge(metadata_df, on='sample')
     
-    asv_raw_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_counts.tsv')
+    asv_raw_path = os.path.join(data_dir, 'priority1_vsearch_output/ASVs/ASV_counts.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_df.columns = [x.rsplit('_', 1)[0] for x in asv_raw_df.columns]
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
@@ -349,9 +350,9 @@ def main():
     asv_raw_stack_df = asv_raw_stack_df.loc[asv_raw_stack_df['count'] > 0]
     asv_raw_stack_df.set_index('ASV_ID', inplace=True)
     asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='sample', how='left')
-    asv_raw_cnt_df = asv_raw_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
+    asv_raw_cnt_df = asv_raw_meta_df.groupby(['Sample_Type', 'sample'])['count'].sum().reset_index()
 
-    asv_decon_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_filtered.decon.tsv')
+    asv_decon_path = os.path.join(data_dir, 'priority1_vsearch_output/ASVs/ASV_filtered.decon.tsv')
     asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
     asv_decon_df.columns = [x.rsplit('_', 1)[0] for x in asv_decon_df.columns]
     asv_decon_stack_df = asv_decon_df.stack().reset_index()
@@ -359,9 +360,9 @@ def main():
     asv_decon_stack_df = asv_decon_stack_df.loc[asv_decon_stack_df['count'] > 0]
     asv_decon_stack_df.set_index('ASV_ID', inplace=True)
     asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='sample', how='left')
-    asv_decon_cnt_df = asv_decon_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
+    asv_decon_cnt_df = asv_decon_meta_df.groupby(['Sample_Type', 'sample'])['count'].sum().reset_index()
 
-    asv_micro_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_filtered.micro.tsv')
+    asv_micro_path = os.path.join(data_dir, 'priority1_vsearch_output/ASVs/ASV_filtered.micro.tsv')
     asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
     asv_micro_df.columns = [x.rsplit('_', 1)[0] for x in asv_micro_df.columns]
     asv_micro_stack_df = asv_micro_df.stack().reset_index()
@@ -369,21 +370,21 @@ def main():
     asv_micro_stack_df = asv_micro_stack_df.loc[asv_micro_stack_df['count'] > 0]
     asv_micro_stack_df.set_index('ASV_ID', inplace=True)
     asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on='sample', how='left')
-    asv_micro_cnt_df = asv_micro_meta_df.groupby(['Type_Group', 'sample'])['count'].sum().reset_index()
+    asv_micro_cnt_df = asv_micro_meta_df.groupby(['Sample_Type', 'sample'])['count'].sum().reset_index()
 
-    read_grp_df = read_meta_df.groupby(['Type_Group'])['num_seqs'].sum().reset_index()
+    read_grp_df = read_meta_df.groupby(['Sample_Type'])['num_seqs'].sum().reset_index()
     read_grp_df['num_reads'] = read_grp_df['num_seqs'] / 2
 
-    filter_grp_df = filter_meta_df.groupby(['Type_Group'])['num_seqs'].sum().reset_index()
+    filter_grp_df = filter_meta_df.groupby(['Sample_Type'])['num_seqs'].sum().reset_index()
     filter_grp_df['num_reads'] = filter_grp_df['num_seqs']
 
-    asv_raw_grp_df = asv_raw_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_raw_grp_df = asv_raw_cnt_df.groupby(['Sample_Type'])['count'].sum().reset_index()
     asv_raw_grp_df['num_reads'] = asv_raw_grp_df['count']
 
-    asv_decon_grp_df = asv_decon_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_decon_grp_df = asv_decon_cnt_df.groupby(['Sample_Type'])['count'].sum().reset_index()
     asv_decon_grp_df['num_reads'] = asv_decon_grp_df['count']
 
-    asv_micro_grp_df = asv_micro_cnt_df.groupby(['Type_Group'])['count'].sum().reset_index()
+    asv_micro_grp_df = asv_micro_cnt_df.groupby(['Sample_Type'])['count'].sum().reset_index()
     asv_micro_grp_df['num_reads'] = asv_micro_grp_df['count']
 
     raw_reads = int(read_grp_df['num_reads'].sum())
@@ -396,8 +397,8 @@ def main():
     counts_list = [raw_reads, filter_reads, asv_raw_reads, asv_decon_reads, asv_micro_reads]
 
     type_list = ['Skin Brush', 'Scope Flush', 'Oral Rinse', 'BAL', 'Lung Brush']
-    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['Type_Group'] == x]['num_reads']) for x in type_list}
-    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['Type_Group'] == x]['num_reads']) for x in type_list}
+    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['Sample_Type'] == x]['num_reads']) for x in type_list}
+    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['Sample_Type'] == x]['num_reads']) for x in type_list}
 
     print("Parsed steps:")
     for step_name, count in zip(steps_list, counts_list):
@@ -407,9 +408,9 @@ def main():
         print(f"{sample_name}: {count}")
 
     print(input_samples_dict)
-    output = os.path.join(data_dir, 'vsearch_output/metadata/data_loss_sankey_label.html')
+    output = os.path.join(data_dir, 'priority1_vsearch_output/metadata/data_loss_sankey_label.html')
     build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, all_type_palette, output)
-    output = os.path.join(data_dir, 'vsearch_output/metadata/data_loss_sankey.html')
+    output = os.path.join(data_dir, 'priority1_vsearch_output/metadata/data_loss_sankey.html')
     build_sankey_nolabels(steps_list, counts_list, input_samples_dict, output_samples_dict, all_type_palette, output)
 
 if __name__ == "__main__":
