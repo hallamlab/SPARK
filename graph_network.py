@@ -96,23 +96,23 @@ def split_taxa_string(taxa_str, delimiter=';'):
     return tax_dict
 
 
-data_dir = "/home/ryan/Projects/UBC/LMP/SPARK_data/"
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
-node_features_file = os.path.join(data_dir, "vsearch_output/spieceasi/node_features.csv")
+node_features_file = os.path.join(data_dir, "final_output/spieceasi/node_features.csv")
 nfeatures_df = pd.read_csv(node_features_file, header=0, sep=',', index_col=0)
-isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv")
+isa_type_file = os.path.join(data_dir, "final_output/indicspecies/type_group_indicator_species_results.tsv")
 isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
 isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-isa_status_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_results.tsv")
+isa_status_file = os.path.join(data_dir, "final_output/indicspecies/status_indicator_species_results.tsv")
 isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
 isastatus_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/Type_Group_indicator_species_summary.tsv")
+type_summary_file = os.path.join(data_dir, "final_output/indicspecies/type_group_indicator_species_summary.tsv")
 type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
 type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary.tsv")
+status_summary_file = os.path.join(data_dir, "final_output/indicspecies/status_indicator_species_summary.tsv")
 status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
 status_type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
+venn_df = pd.read_csv(os.path.join(data_dir, "final_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
 
 status_index = {1: 'Cancer',
                 2: 'Non-Cancer',
@@ -175,17 +175,17 @@ ss_long_df['tmp_grp'] = [status_index[x] for x in ss_long_df['index']]
 ss_long_df = ss_long_df.loc[ss_long_df['Group'] == ss_long_df['tmp_grp']]
 ss_long_df.drop(columns=['tmp_grp'], inplace=True)
 
-asv_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.micro.tsv')
+asv_path = os.path.join(data_dir, 'final_output/ASVs/ASV_final.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 asv_stack_df = asv_df.stack().reset_index()
-asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
+asv_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
 mean_stack_df = asv_stack_df.groupby(['ASV_ID'])['count'].mean().reset_index()
 mean_stack_df.columns = ['ASV_ID', 'mean']
 mean_stack_df['mean'] = np.ceil(mean_stack_df['mean'])
 
-metadata_table_path = os.path.join(data_dir, 'vsearch_output/metadata/metadata_updated.tsv')
+metadata_table_path = os.path.join(data_dir, 'final_output/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df.set_index('sample', inplace=True)
+metadata_df.set_index('lmp_id', inplace=True)
 metadata_df['status'] = ['Non-Cancer' if x == 'Non-Cancer' else x for x in metadata_df['Case']]
 
 #p_thresh = 0.05
@@ -252,7 +252,7 @@ isatype_df['venn_color'] = venn_colors
 
 
 
-taxonomy_path = os.path.join(data_dir, 'vsearch_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
@@ -311,11 +311,11 @@ phylum_color_dict = dict(zip(phyla, palette))
 nfeat_type_df = nfeatures_df.merge(isatype_df, left_on='Taxon', right_index=True)
 nfeat_status_df = nfeatures_df.merge(isastatus_df, left_on='Taxon', right_index=True)
 
-nfeat_type_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi/node_features.type.tsv"),
+nfeat_type_df.to_csv(os.path.join(data_dir, "final_output/spieceasi/node_features.type.tsv"),
                      sep='\t'
                      )
 
-nfeat_status_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi/node_features.status.tsv"),
+nfeat_status_df.to_csv(os.path.join(data_dir, "final_output/spieceasi/node_features.status.tsv"),
                      sep='\t'
                      )
 
@@ -334,7 +334,7 @@ keep_cols = ['Taxon', 'Degree',
              'EigenCentral','stat',
              'p.value', 'log_p',
              'significance', 'color',
-             'Type_Group',
+             'type_group',
              'mean',
              'AxB', 'status_color',
              'type_color', 'Phylum',
@@ -346,7 +346,7 @@ keep_cols = ['Taxon', 'Degree',
              ]
 
 
-network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_pos_all.graphml")
+network_file = os.path.join(data_dir, "final_output/spieceasi/network_pos_all.graphml")
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -419,10 +419,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are all positive correlations")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
 
-network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_pos_sub.graphml")
+network_file = os.path.join(data_dir, "final_output/spieceasi/network_pos_sub.graphml")
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -495,8 +495,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are positive correlations >= 0.1")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -559,8 +559,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on ASV Mean Abundance")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_abundance_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_abundance_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_abundance_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_abundance_plot.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -628,10 +628,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
 
-
+'''
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -722,10 +722,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
-
-
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
+'''
+'''
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -816,9 +816,9 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
-
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
+'''
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -886,10 +886,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
 
-
+'''
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -989,9 +989,9 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
-
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
+'''
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -1070,8 +1070,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
 
 
 G = nx.read_graphml(network_file)
@@ -1147,8 +1147,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
 
 
 G = nx.read_graphml(network_file)
@@ -1224,8 +1224,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')
 
 
 
@@ -1345,8 +1345,8 @@ for t in ['BAL', 'Lung Brush', 'Oral Rinse']:
     plt.axis('off')
     plt.tight_layout()
     try:
-        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.svg"), bbox_inches='tight')
-        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_{t_str}_plot.pdf"), bbox_inches='tight')
+        plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_{t_str}_plot.svg"), bbox_inches='tight')
+        plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_{t_str}_plot.pdf"), bbox_inches='tight')
     except:
         print(t, ' skipped...')
 
@@ -1441,8 +1441,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_status_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_status_plot.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -1532,8 +1532,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_cancer_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_cancer_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_cancer_plot.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -1623,8 +1623,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_non-cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_non-cancer_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_non-cancer_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_non-cancer_plot.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -1714,8 +1714,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_all-status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_type_all-status_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_all-status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_type_all-status_plot.pdf"), bbox_inches='tight')
 
 
 
@@ -1827,12 +1827,12 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on strength of association with BAL and Lung Brush")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_BAL_LUNG_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_BAL_LUNG_plot.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_BAL_LUNG_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_BAL_LUNG_plot.pdf"), bbox_inches='tight')
 
 
 
-signed_network_file = os.path.join(data_dir, "vsearch_output/spieceasi/network_signed.graphml")
+signed_network_file = os.path.join(data_dir, "final_output/spieceasi/network_signed.graphml")
 G = nx.read_graphml(signed_network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -1914,5 +1914,5 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree")
 plt.axis('off')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_SIGNED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi/network_degree_plot_SIGNED.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_SIGNED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"final_output/spieceasi/network_degree_plot_SIGNED.pdf"), bbox_inches='tight')

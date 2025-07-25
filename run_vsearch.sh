@@ -95,9 +95,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define directories
-INPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/fastq_input"
-REFDB_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db"
-OUTPUT_DIR="/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output"
+INPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/fastq_combined"
+REFDB_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db"
+OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -108,7 +108,7 @@ NOC_DIR="${OUTPUT_DIR}/nochimeras"
 SWM_DIR="${OUTPUT_DIR}/swarm"
 ASV_DIR="${OUTPUT_DIR}/ASVs"
 LOG_DIR="${OUTPUT_DIR}/logs"
-THREADS="$(nproc --all)"
+THREADS="$(nproc)"
 
 
 # Define primers with degenerate bases using regex
@@ -120,9 +120,9 @@ mkdir -p ${QC_DIR} ${MERGED_DIR} ${FILTERED_DIR} ${CONCAT_DIR} ${DEREP_DIR} ${DE
 
 fastp_qc() {
     echo "Step 1: FastP QC..."
-    for R1 in ${INPUT_DIR}/*_R1_001.fastq.gz; do
-        SAMPLE=$(basename ${R1} _R1_001.fastq.gz)
-        R2="${INPUT_DIR}/${SAMPLE}_R2_001.fastq.gz"
+    for R1 in ${INPUT_DIR}/*_R1.fastq.gz; do
+        SAMPLE=$(basename ${R1} _R1.fastq.gz)
+        R2="${INPUT_DIR}/${SAMPLE}_R2.fastq.gz"
         
         # Check if R2 exists
         if [[ ! -f "${R2}" ]]; then
@@ -131,17 +131,19 @@ fastp_qc() {
         fi
 
         fastp \
-            -i ${INPUT_DIR}/${SAMPLE}_R1_001.fastq.gz \
-            -I ${INPUT_DIR}/${SAMPLE}_R2_001.fastq.gz \
+            -i ${INPUT_DIR}/${SAMPLE}_R1.fastq.gz \
+            -I ${INPUT_DIR}/${SAMPLE}_R2.fastq.gz \
             -o ${QC_DIR}/${SAMPLE}_R1.fastq.gz \
             -O ${QC_DIR}/${SAMPLE}_R2.fastq.gz \
-            -f 19 -t 80 \
-            -F 20 -T 80 \
+            --cut_front \
+            --cut_tail \
+            --detect_adapter_for_pe \
+            --correction \
             -j ${QC_DIR}/${SAMPLE}_report.json \
             -h ${QC_DIR}/${SAMPLE}_report.html \
             -w ${THREADS}
     done 2>&1 | tee -a "${LOG_DIR}/fastp_log.txt"
-    echo "Step 1: FastP QC completed."   
+    echo "Step 1: FastP QC completed."
 }
 
 # Function to merge paired-end reads
@@ -271,20 +273,23 @@ remove_nontarget() {
 # Function to assign counts and create ASV count matrix
 create_count_matrix() {
     echo "Step 10: Creating ASV count matrix..."
+    #cat ${QC_DIR}/*.fastq.gz > ${CONCAT_DIR}/fastp_qc_concat.fastq.gz
     vsearch --usearch_global ${CONCAT_DIR}/concat.fasta \
             --db ${ASV_DIR}/ASVs.fasta \
-            --id 0.999 \
+            --id 0.99 \
             --otutabout ${ASV_DIR}/ASV_counts.tsv \
             --threads ${THREADS} \
             --log ${LOG_DIR}/count_log.txt
     
-    echo "Step 10: Filtering samples by ASV sum..."
+    echo "Step 11: Filtering samples by ASV sum..."
     python filter_ASV_table.py \
             ${ASV_DIR}/ASV_counts.tsv \
-            ${REFDB_DIR}/spark_metadata.tsv \
             ${ASV_DIR}/ASV_filtered.tsv \
-            5000 0.005
-    echo "Step 10: ASV count matrix created and filtered."
+            1000 0.005 \
+            ${ASV_DIR}/ASVs.fasta \
+            ${ASV_DIR}/ASVs_filtered.fasta
+
+    echo "Step 11: ASV count matrix created and filtered."
 }
 
 

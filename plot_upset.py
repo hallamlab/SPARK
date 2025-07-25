@@ -51,17 +51,17 @@ def split_taxa_string(taxa_str, delimiter=';'):
     
     return tax_dict
 
-data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
 # Replace 'your_file.tsv' with the path to your TSV
-asv_df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
-metadata_df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/metadata/metadata_updated.tsv'), sep='\t')
+asv_df = pd.read_csv(os.path.join(data_dir, 'final_output/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
+metadata_df = pd.read_csv(os.path.join(data_dir, 'final_output/metadata/metadata_updated.tsv'), sep='\t')
 asv_stack_df = asv_df.stack(future_stack=True).reset_index()
-asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
-merge_df = asv_stack_df.merge(metadata_df, how='left', on='sample')
+asv_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
+merge_df = asv_stack_df.merge(metadata_df, how='left', on='lmp_id')
 
 filter_df = merge_df.loc[merge_df['count'] > 0]
-taxonomy_path = os.path.join(data_dir, 'vsearch_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
@@ -80,15 +80,15 @@ for t in taxonomy_dict:
     asv_tax_df[t] = taxonomy_dict[t]
 
 asv_sum_dict = asv_tax_df.groupby("ASV_ID")["count"].sum().to_dict()
-type_asv_sum_dict = asv_tax_df.groupby(["Type_Group","ASV_ID"])["count"].sum().to_dict()
+type_asv_sum_dict = asv_tax_df.groupby(["type_group","ASV_ID"])["count"].sum().to_dict()
 
 total_abundance = asv_tax_df.groupby('Phylum')['count'].sum()
 top10 = total_abundance.sort_values(ascending=False).head(10).index.tolist()
 asv_tax_df['Phylum_plot'] = asv_tax_df["Phylum"].apply(lambda x: x if x in top10 else "Other")
 asv_phy_dict = {x:y for x,y in zip(asv_tax_df['ASV_ID'], asv_tax_df['Phylum_plot'])}
 
-# Create a dictionary mapping each Type_Group to a set of ASV_IDs that are present.
-group_dict = asv_tax_df.groupby("Type_Group")["ASV_ID"].apply(set).to_dict()
+# Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
+group_dict = asv_tax_df.groupby("type_group")["ASV_ID"].apply(set).to_dict()
 
 all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
@@ -102,10 +102,10 @@ three_palette = {'Lung Brush': '#009E73',
            'Oral Rinse': '#6A3D9A'
            }
 
-# Create a dictionary mapping each Type_Group to a set of ASV_IDs that are present.
+# Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
 sub_list = ['Lung Brush', 'BAL', 'Oral Rinse']
 sub_df = asv_tax_df
-group_dict = sub_df.groupby("Type_Group")["ASV_ID"].apply(set).to_dict()
+group_dict = sub_df.groupby("type_group")["ASV_ID"].apply(set).to_dict()
 # Now create the upset data from the dictionary.
 upset_data = from_contents(group_dict)
 upset_data.columns = ['index']
@@ -124,9 +124,9 @@ fig = plt.figure(figsize=(12, 8))
 matplotlib.rcParams["font.size"] = 6
 axes = upset.plot(fig=fig)
 
-plt.title("ASV Membership by Type_Group")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot.pdf"), format="pdf", bbox_inches="tight")
+plt.title("ASV Membership by type_group")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot.pdf"), format="pdf", bbox_inches="tight")
 
 # Create and plot the UpSet plot.
 fig = plt.figure(figsize=(12, 8))
@@ -140,23 +140,23 @@ fig = plt.figure(figsize=(12, 8))
 matplotlib.rcParams["font.size"] = 6
 axes = upset.plot(fig=fig)
 
-plt.title("ASV Abundance by Type_Group")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sum.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
+plt.title("ASV Abundance by type_group")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
 
 # Venns
 # Create venn3 with custom colors
-oral_set = set(sub_df.loc[sub_df['Type_Group'] == 'Oral Rinse']['ASV_ID'])
-bal_set = set(sub_df.loc[sub_df['Type_Group'] == 'BAL']['ASV_ID'])
-lung_set = set(sub_df.loc[sub_df['Type_Group'] == 'Lung Brush']['ASV_ID'])
+oral_set = set(sub_df.loc[sub_df['type_group'] == 'Oral Rinse']['ASV_ID'])
+bal_set = set(sub_df.loc[sub_df['type_group'] == 'BAL']['ASV_ID'])
+lung_set = set(sub_df.loc[sub_df['type_group'] == 'Lung Brush']['ASV_ID'])
 plt.figure(figsize=(6,6))
 venn3([oral_set, bal_set, lung_set], ("Oral Rinse", "BAL", "Lung Brush"),
       set_colors=(three_palette['Oral Rinse'], three_palette['BAL'], three_palette['Lung Brush']),
       alpha=0.6
       )
 
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/venn_diagram.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/venn_diagram.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 
 # Get all possible combinations
@@ -191,12 +191,12 @@ for k in columns:
 venn_table = pd.DataFrame(venn_list, columns=['grouping', 'ASV_ID'])
 
 # Save as TSV
-venn_table.to_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table.tsv"), sep="\t", index=False)
+venn_table.to_csv(os.path.join(data_dir, "final_output/metadata/venn3_presence_table.tsv"), sep="\t", index=False)
 
-# Create a dictionary mapping each Type_Group to a set of ASV_IDs that are present.
+# Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
 sub_list = ['Lung Brush', 'BAL', 'Oral Rinse']
 sub_df = asv_tax_df
-group_dict = sub_df.groupby(['Type_Group'])["ASV_ID"].apply(set).to_dict()
+group_dict = sub_df.groupby(['type_group'])["ASV_ID"].apply(set).to_dict()
 # Now create the upset data from the dictionary.
 upset_data = from_contents(group_dict)
 upset_data.columns = ['index']
@@ -243,13 +243,13 @@ labels = order
 ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
 
 plt.title("ASV Membership by Type")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sum_Type_Group.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sum_Type_Group.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum_type_group.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum_type_group.pdf"), format="pdf", bbox_inches="tight")
 
-# Create a dictionary mapping each Type_Group to a set of ASV_IDs that are present.
+# Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
 sub_list = ['Lung Brush', 'BAL', 'Oral Rinse']
 sub_df = asv_tax_df
-group_dict = sub_df.groupby(['Type_Group'])["ASV_ID"].apply(set).to_dict()
+group_dict = sub_df.groupby(['type_group'])["ASV_ID"].apply(set).to_dict()
 # Now create the upset data from the dictionary.
 upset_data = from_contents(group_dict)
 upset_data.columns = ['index']
@@ -296,5 +296,5 @@ labels = order
 ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
 
 plt.title("ASV Membership by Type")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sub_sum_3_Group.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/metadata/upset_plot_sub_sum_3_Group.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sub_sum_3_Group.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sub_sum_3_Group.pdf"), format="pdf", bbox_inches="tight")

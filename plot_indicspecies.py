@@ -342,8 +342,8 @@ def split_taxa_string(taxa_str, delimiter=';'):
     return tax_dict
 
 
-data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
-taxonomy_path = os.path.join(data_dir, 'vsearch_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
+taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
@@ -359,7 +359,7 @@ for t in tax_df['Taxon']:
 for t in taxonomy_dict:
     tax_df[t] = taxonomy_dict[t]
 
-df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/indicspecies/Type_Group_indicator_species_results.tsv'), sep='\t')
+df = pd.read_csv(os.path.join(data_dir, 'final_output/indicspecies/type_group_indicator_species_results.tsv'), sep='\t')
 type_index = {1: 'BAL',
               2: 'Lung Brush',
               3: 'Oral Rinse',
@@ -380,7 +380,7 @@ type_palette = {'Oral Rinse': '#6A3D9A',
 sub_df = df.loc[df['index'].isin(type_index.keys())]
 
 type_isa_df = plot_volcano(sub_df, type_index, type_palette,
-                           output_file=os.path.join(data_dir, 'vsearch_output/indicspecies/Type_Group_ISA_plot.svg')
+                           output_file=os.path.join(data_dir, 'final_output/indicspecies/type_group_ISA_plot.svg')
                            )
 
 type_isa_df.columns = ['ASV_ID', 'BAL', 'Lung Brush', 'Oral Rinse',
@@ -390,26 +390,26 @@ type_isa_df.columns = ['ASV_ID', 'BAL', 'Lung Brush', 'Oral Rinse',
 
 sub_tax_df = sub_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_type_taxa(sub_tax_df, type_index, output_file=os.path.join(data_dir,
-               'vsearch_output/indicspecies/Type_Group_ISA_plot_Phylum.svg')
+               'final_output/indicspecies/type_group_ISA_plot_Phylum.svg')
 )
 
-df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/indicspecies/status_indicator_species_results.tsv'), sep='\t')
+df = pd.read_csv(os.path.join(data_dir, 'final_output/indicspecies/status_indicator_species_results.tsv'), sep='\t')
 
 index_dict = {1: 'Cancer', 2: 'Non-Cancer'}
 status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
 
-status_isa_df = plot_volcano(df, index_dict, status_palette, output_file=os.path.join(data_dir, 'vsearch_output/indicspecies/status_Cancer_ISA_plot.svg'))
+status_isa_df = plot_volcano(df, index_dict, status_palette, output_file=os.path.join(data_dir, 'final_output/indicspecies/status_Cancer_ISA_plot.svg'))
 status_isa_df.columns = ['ASV_ID', 'Cancer', 'Non-Cancer', 'status_index', 'status_stat', 'status_p_value', 'status_log_p', 'status_significance', 'status_color']
 type_status_df = pd.merge(type_isa_df, status_isa_df, on='ASV_ID')
-type_status_df.to_csv(os.path.join(data_dir, 'vsearch_output/indicspecies/Type_status_ISA_results.tsv'), sep='\t')
+type_status_df.to_csv(os.path.join(data_dir, 'final_output/indicspecies/Type_status_ISA_results.tsv'), sep='\t')
 
-plot_combined(type_status_df, os.path.join(data_dir, 'vsearch_output/indicspecies/Combined_ISA_plot.svg'), type_palette)
+plot_combined(type_status_df, os.path.join(data_dir, 'final_output/indicspecies/Combined_ISA_plot.svg'), type_palette)
 plot_combined(type_status_df.loc[type_status_df['type_significance'] == True],
-              os.path.join(data_dir, 'vsearch_output/indicspecies/Combined_noNoType_ISA_plot.svg'), type_palette)
+              os.path.join(data_dir, 'final_output/indicspecies/Combined_noNoType_ISA_plot.svg'), type_palette)
 
 TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
-               'vsearch_output/indicspecies/Combined_ISA_plot_Phylum.svg')
+               'final_output/indicspecies/Combined_ISA_plot_Phylum.svg')
                )
 
 

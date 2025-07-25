@@ -4,8 +4,8 @@ import time
 import requests
 from pathlib import Path
 
-data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASVs.fasta.split'
-output_file = '/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/mitomap/mitomaster_combined.tsv'
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/ASVs/chunks'
+output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/mitomap/mitomaster_combined.tsv'
 
 # List all .fasta files
 fasta_files = sorted(Path(data_dir).glob("*.fasta"))
