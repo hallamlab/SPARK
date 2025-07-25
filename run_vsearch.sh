@@ -188,7 +188,8 @@ concatenate_reads() {
     echo "Step 4: Concatenating all filtered reads..."
     rm -f ${CONCAT_DIR}/concat.fasta
     for F in ${FILTERED_DIR}/*.filtered.fasta; do
-        SAMPLE=$(basename ${F} .filtered.fasta)
+        RUN=$(basename ${F} .filtered.fasta | cut -d'-' -f1)
+        SAMPLE=$(basename ${F} .filtered.fasta | rev | cut -d'_' -f5 | rev)
         
         # Extract the first sequence header and modify it
         HEADER=$(head -n 1 "${F}")
