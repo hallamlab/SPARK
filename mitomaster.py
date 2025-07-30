@@ -5,8 +5,8 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/ASVs/chunks'
-output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/mitomap/mitomaster_combined.tsv'
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/ASVs/chunks'
+output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/mitomap/mitomaster_combined.tsv'
 
 fasta_files = sorted(Path(data_dir).glob("*.fasta"))
 
