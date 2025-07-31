@@ -14,19 +14,19 @@ def main():
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
     # Create output directory if it doesn't exist
-    output_dir = os.path.join(data_dir, "final_output/diversity")
+    output_dir = os.path.join(data_dir, "methods_output/diversity")
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
 
-    asv_table = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.micro.tsv')
-    mito_table = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.mito.tsv')
-    taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+    asv_table = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.micro.tsv')
+    mito_table = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.mito.tsv')
+    taxonomy_path = os.path.join(data_dir, 'methods_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 
-    output_shannon = os.path.join(data_dir, 'final_output/diversity/shannon.tsv')
-    output_shan_mito = os.path.join(data_dir, 'final_output/diversity/shannon.mito.tsv')
-    output_bray = os.path.join(data_dir, 'final_output/diversity/bray.tsv')
-    output_br_mito = os.path.join(data_dir, 'final_output/diversity/bray.mito.tsv')
+    output_shannon = os.path.join(data_dir, 'methods_output/diversity/shannon.tsv')
+    output_shan_mito = os.path.join(data_dir, 'methods_output/diversity/shannon.mito.tsv')
+    output_bray = os.path.join(data_dir, 'methods_output/diversity/bray.tsv')
+    output_br_mito = os.path.join(data_dir, 'methods_output/diversity/bray.mito.tsv')
 
     # Load input tables
     tax_df = pd.read_csv(taxonomy_path, sep="\t", index_col=0)
@@ -75,7 +75,7 @@ def main():
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
 
     # Compute pairwise Jaccard distances between lmp_ids
-    jaccard_output = os.path.join(data_dir, 'final_output/diversity/jaccard.tsv')
+    jaccard_output = os.path.join(data_dir, 'methods_output/diversity/jaccard.tsv')
 
     asv_binary = (asv_df > 0).astype(int).values  # Convert counts to presence/absence
     distances = pdist(asv_binary, metric="jaccard")
@@ -84,7 +84,7 @@ def main():
     jaccard_df.index.name = "lmp_id"
     jaccard_df.to_csv(jaccard_output, sep="\t")
 
-    jaccard_mito_output = os.path.join(data_dir, 'final_output/diversity/jaccard.mito.tsv')
+    jaccard_mito_output = os.path.join(data_dir, 'methods_output/diversity/jaccard.mito.tsv')
 
     mito_binary = (mito_df > 0).astype(int).values
     distances = pdist(mito_binary, metric="jaccard")

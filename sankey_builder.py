@@ -316,20 +316,12 @@ def parse_arguments():
     return args, unknown_args
 
 def main():  
-
-    all_type_palette = {'Scope Flush': '#E69F00',
-           'Skin Brush': '#CC79A7',
-           'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A',
-           'Failed-QC': 'lightgray'
-           }
     
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
        
-    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
+    metadata_table_path = os.path.join(data_dir, 'ref_db/methods_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-    metadata_df['lmp_id'] = metadata_df['lmp_id'].astype(str)
+    metadata_df['lmp_id'] = metadata_df.copy()['sample']
 
     keep_types = [
                 'Oral Rinse',
@@ -338,26 +330,33 @@ def main():
                 'Skin Brush',
                 'Scope Flush'
                 ]
-    kit_pallete = {'HostZERO-DEP': '#CC79A7',
-               'HostZERO-NODEP': '#6A3D9A',
-               'SPARK-OLD-ZYMO': '#0072B2',
-               'SPARK-NEW-ZYMO': '#009E73'
+    kit_pallete = {'HostZERO-DEP': 'black',
+               'HostZERO-NODEP': 'gray',
+               'SPARK-ZYMO': 'skyblue',
                }
+
+    type_palette = {'Scope Flush': '#E69F00',
+           'Skin Brush': '#CC79A7',
+           'Lung Brush': '#009E73',
+           'BAL': '#0072B2',
+           'Oral Rinse': '#6A3D9A',
+           'Failed-QC': 'lightgray'
+           }
 
     metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
    
-    fastq_stats_path = os.path.join(data_dir, 'final_output/stats/fastq_stats.tsv')
+    fastq_stats_path = os.path.join(data_dir, 'methods_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
     fstats_df['lmp_id'] = [str(x.split('/')[-1].rsplit('_')[0]) for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on='lmp_id')
-    filter_stats_path = os.path.join(data_dir, 'final_output/stats/filtered_fastqs.tsv')
+    filter_stats_path = os.path.join(data_dir, 'methods_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
     filter_stats_df['lmp_id'] = [str(x.split('/')[-1].split('.', 1)[0]) for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
     filter_meta_df = filter_reads_df.merge(metadata_df, on='lmp_id')
     
-    asv_raw_path = os.path.join(data_dir, 'final_output/ASVs/ASV_filtered.tsv')
+    asv_raw_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_filtered.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
     asv_raw_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
@@ -366,7 +365,7 @@ def main():
     asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='lmp_id')
     asv_raw_cnt_df = asv_raw_meta_df.groupby(['type_group', 'lmp_id'])['count'].sum().reset_index()
 
-    asv_decon_path = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.decon.tsv')
+    asv_decon_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.decon.tsv')
     asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
     asv_decon_stack_df = asv_decon_df.stack().reset_index()
     asv_decon_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
@@ -375,7 +374,7 @@ def main():
     asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='lmp_id')
     asv_decon_cnt_df = asv_decon_meta_df.groupby(['type_group', 'lmp_id'])['count'].sum().reset_index()
 
-    asv_micro_path = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.micro.tsv')
+    asv_micro_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.micro.tsv')
     asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
     asv_micro_stack_df = asv_micro_df.stack().reset_index()
     asv_micro_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
@@ -405,11 +404,16 @@ def main():
     asv_decon_reads = int(asv_decon_grp_df['num_reads'].sum())
     asv_micro_reads = int(asv_micro_grp_df['num_reads'].sum())
     
+    metadata_df = metadata_df.loc[metadata_df['lmp_id'].isin(list(asv_raw_cnt_df['lmp_id']))]
+
     steps_list = ['Quality Control', 'Error Correction', 'Decontamination', 'Off-Target Filtering', 'Finished Data']
     counts_list = [raw_reads, filter_reads, asv_raw_reads, asv_decon_reads, asv_micro_reads]
-    seqtype_list = metadata_df['type_group'].unique().tolist()
+    seqtype_list = keep_types
     input_lmp_ids_dict = {x: int(read_grp_df.loc[read_grp_df['type_group'] == x]['num_reads'].values) for x in seqtype_list}
-    output_lmp_ids_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['type_group'] == x]['num_reads'].values) for x in seqtype_list}
+    output_lmp_ids_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['type_group'] == x]['num_reads'].values)
+                           if x in list(asv_micro_grp_df['type_group'])
+                           else 0 for x in seqtype_list
+                           }
 
     print("Parsed steps:")
     for step_name, count in zip(steps_list, counts_list):
@@ -418,10 +422,10 @@ def main():
     for lmp_id_name, count in input_lmp_ids_dict.items():
         print(f"{lmp_id_name}: {count}")
 
-    output = os.path.join(data_dir, 'final_output/metadata/data_loss_sankey_label.html')
-    build_sankey(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, all_type_palette, output)
-    output = os.path.join(data_dir, 'final_output/metadata/data_loss_sankey.html')
-    build_sankey_nolabels(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, all_type_palette, output)
+    output = os.path.join(data_dir, 'methods_output/metadata/data_loss_sankey_label.html')
+    build_sankey(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
+    output = os.path.join(data_dir, 'methods_output/metadata/data_loss_sankey.html')
+    build_sankey_nolabels(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
 
 if __name__ == "__main__":
     main()

@@ -7,6 +7,7 @@ from threading import Lock
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/ASVs/chunks'
 output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/mitomap/mitomaster_combined.tsv'
+checkpoint_file = output_file + '.done'
 
 fasta_files = sorted(Path(data_dir).glob("*.fasta"))
 

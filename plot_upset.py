@@ -54,14 +54,14 @@ def split_taxa_string(taxa_str, delimiter=';'):
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
 # Replace 'your_file.tsv' with the path to your TSV
-asv_df = pd.read_csv(os.path.join(data_dir, 'final_output/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
-metadata_df = pd.read_csv(os.path.join(data_dir, 'final_output/metadata/metadata_updated.tsv'), sep='\t')
+asv_df = pd.read_csv(os.path.join(data_dir, 'methods_output/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
+metadata_df = pd.read_csv(os.path.join(data_dir, 'methods_output/metadata/metadata_updated.tsv'), sep='\t')
 asv_stack_df = asv_df.stack(future_stack=True).reset_index()
 asv_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
 merge_df = asv_stack_df.merge(metadata_df, how='left', on='lmp_id')
 
 filter_df = merge_df.loc[merge_df['count'] > 0]
-taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+taxonomy_path = os.path.join(data_dir, 'methods_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
@@ -81,6 +81,7 @@ for t in taxonomy_dict:
 
 asv_sum_dict = asv_tax_df.groupby("ASV_ID")["count"].sum().to_dict()
 type_asv_sum_dict = asv_tax_df.groupby(["type_group","ASV_ID"])["count"].sum().to_dict()
+kit_asv_sum_dict = asv_tax_df.groupby(["kit","ASV_ID"])["count"].sum().to_dict()
 
 total_abundance = asv_tax_df.groupby('Phylum')['count'].sum()
 top10 = total_abundance.sort_values(ascending=False).head(10).index.tolist()
@@ -125,8 +126,8 @@ matplotlib.rcParams["font.size"] = 6
 axes = upset.plot(fig=fig)
 
 plt.title("ASV Membership by type_group")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot.pdf"), format="pdf", bbox_inches="tight")
 
 # Create and plot the UpSet plot.
 fig = plt.figure(figsize=(12, 8))
@@ -141,8 +142,8 @@ matplotlib.rcParams["font.size"] = 6
 axes = upset.plot(fig=fig)
 
 plt.title("ASV Abundance by type_group")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sum.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
 
 # Venns
 # Create venn3 with custom colors
@@ -155,8 +156,8 @@ venn3([oral_set, bal_set, lung_set], ("Oral Rinse", "BAL", "Lung Brush"),
       alpha=0.6
       )
 
-plt.savefig(os.path.join(data_dir, "final_output/metadata/venn_diagram.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/venn_diagram.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 
 # Get all possible combinations
@@ -191,60 +192,7 @@ for k in columns:
 venn_table = pd.DataFrame(venn_list, columns=['grouping', 'ASV_ID'])
 
 # Save as TSV
-venn_table.to_csv(os.path.join(data_dir, "final_output/metadata/venn3_presence_table.tsv"), sep="\t", index=False)
-
-# Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
-sub_list = ['Lung Brush', 'BAL', 'Oral Rinse']
-sub_df = asv_tax_df
-group_dict = sub_df.groupby(['type_group'])["ASV_ID"].apply(set).to_dict()
-# Now create the upset data from the dictionary.
-upset_data = from_contents(group_dict)
-upset_data.columns = ['index']
-upset_data.reset_index(inplace=True)
-upset_sum = []
-for i,row in upset_data.iterrows():
-    for t in ["Skin Brush", "Scope Flush", 'Lung Brush', 'BAL', 'Oral Rinse']:
-        if (t, row['index']) in type_asv_sum_dict:
-            val = type_asv_sum_dict[(t, row['index'])]
-            row['count'] = val
-            row['type'] = t
-            upset_sum.append(list(row))
-
-upset_sum_df = pd.DataFrame(upset_sum, columns=list(upset_data.columns) + ['count', 'type'])
-upset_sum_df.set_index(["Oral Rinse", "BAL", "Lung Brush"], inplace=True)
-upset_sum_df = upset_sum_df.reorder_levels(["Oral Rinse", "BAL", "Lung Brush"][::-1])
-upset_sum_df['type'] = pd.Categorical(upset_sum_df['type'], ["Oral Rinse", "BAL", "Lung Brush"])
-
-# Create and plot the UpSet plot.
-upset = UpSet(upset_sum_df, sum_over='count', subset_size='sum',
-              element_size=None, show_counts=True,
-              sort_categories_by='input', min_subset_size=0,
-              intersection_plot_elements=0
-              )
-
-for t in all_type_palette.keys():
-    upset.style_categories([t], bar_facecolor=all_type_palette[t], bar_edgecolor="black")
-
-upset.add_stacked_bars(
-    by="type", sum_over='count',
-    colors=all_type_palette,
-    title="Count by Type", elements=10
-    )
-
-fig = plt.figure(figsize=(12, 8))
-matplotlib.rcParams["font.size"] = 6
-axes = upset.plot(fig=fig)
-
-ax = axes['extra0']
-order = ["Oral Rinse", "BAL", "Lung Brush"]
-handles, labels = ax.get_legend_handles_labels()
-handles = [handles[labels.index(o)] for o in order]
-labels = order
-ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
-
-plt.title("ASV Membership by Type")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum_type_group.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sum_type_group.pdf"), format="pdf", bbox_inches="tight")
+venn_table.to_csv(os.path.join(data_dir, "methods_output/metadata/venn3_presence_table.tsv"), sep="\t", index=False)
 
 # Create a dictionary mapping each type_group to a set of ASV_IDs that are present.
 sub_list = ['Lung Brush', 'BAL', 'Oral Rinse']
@@ -296,5 +244,162 @@ labels = order
 ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
 
 plt.title("ASV Membership by Type")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sub_sum_3_Group.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "final_output/metadata/upset_plot_sub_sum_3_Group.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sub_sum_Group.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sub_sum_Group.pdf"), format="pdf", bbox_inches="tight")
+
+
+
+#############################################################################################################
+
+
+
+kit_pallete = {'HostZERO-DEP': 'black',
+               'HostZERO-NODEP': 'gray',
+               'SPARK-ZYMO': 'skyblue',
+               }
+
+# Create a dictionary mapping each kit to a set of ASV_IDs that are present.
+sub_list = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
+sub_df = asv_tax_df
+group_dict = sub_df.groupby("kit")["ASV_ID"].apply(set).to_dict()
+# Now create the upset data from the dictionary.
+upset_data = from_contents(group_dict)
+upset_data.columns = ['index']
+upset_data['value'] = [asv_sum_dict[x] for x in upset_data['index']]
+upset_data['Phylum_plot'] = [asv_phy_dict[x] for x in upset_data['index']]
+upset_data = upset_data.reorder_levels(['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO'][::-1])
+
+# Create and plot the UpSet plot.
+upset = UpSet(upset_data, subset_size='count', element_size=None,
+			  sort_categories_by='input', show_counts=True
+			  )
+for t in all_type_palette.keys():
+    upset.style_categories([t], bar_facecolor=all_type_palette[t], bar_edgecolor="black")
+
+fig = plt.figure(figsize=(12, 8))
+matplotlib.rcParams["font.size"] = 6
+axes = upset.plot(fig=fig)
+
+plt.title("ASV Membership by kit")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_kit.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_kit.pdf"), format="pdf", bbox_inches="tight")
+
+# Create and plot the UpSet plot.
+fig = plt.figure(figsize=(12, 8))
+upset = UpSet(upset_data, sum_over='value', subset_size='sum', element_size=None,
+			  sort_categories_by='input', show_counts=True
+              )
+for t in all_type_palette.keys():
+    upset.style_categories([t], bar_facecolor=all_type_palette[t], bar_edgecolor="black")
+
+fig = plt.figure(figsize=(12, 8))
+matplotlib.rcParams["font.size"] = 6
+axes = upset.plot(fig=fig)
+
+plt.title("ASV Abundance by kit")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sum_kit.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sum_kit.pdf"), format="pdf", bbox_inches="tight")
+
+# Venns
+# Create venn3 with custom colors
+oral_set = set(sub_df.loc[sub_df['kit'] == 'HostZERO-DEP']['ASV_ID'])
+bal_set = set(sub_df.loc[sub_df['kit'] == 'HostZERO-NODEP']['ASV_ID'])
+lung_set = set(sub_df.loc[sub_df['kit'] == 'SPARK-ZYMO']['ASV_ID'])
+plt.figure(figsize=(6,6))
+venn3([oral_set, bal_set, lung_set], ('HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO'),
+      set_colors=(kit_pallete['HostZERO-DEP'], kit_pallete['HostZERO-NODEP'], kit_pallete['SPARK-ZYMO']),
+      alpha=0.6
+      )
+
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/venn_diagram_kit.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/venn_diagram_kit.pdf"), format="pdf", bbox_inches="tight")
+
+
+# Get all possible combinations
+only_oral = oral_set - bal_set - lung_set
+only_bal = bal_set - oral_set - lung_set
+only_lung = lung_set - oral_set - bal_set
+
+oral_bal = (oral_set & bal_set) - lung_set
+oral_lung = (oral_set & lung_set) - bal_set
+bal_lung = (bal_set & lung_set) - oral_set
+
+all_three = oral_set & bal_set & lung_set
+
+# Convert sets to sorted lists
+columns = {
+    "Only HostZERO-DEP": sorted(only_oral),
+    "Only HostZERO-NODEP": sorted(only_bal),
+    "Only SPARK-ZYMO": sorted(only_lung),
+    "HostZERO-DEP + HostZERO-NODEP": sorted(oral_bal),
+    "HostZERO-DEP + SPARK-ZYMO": sorted(oral_lung),
+    "HostZERO-NODEP + SPARK-ZYMO": sorted(bal_lung),
+    "All Three": sorted(all_three),
+}
+
+venn_list = []
+for k in columns:
+    v = columns[k]
+    for a in v:
+        venn_list.append([k, a])
+
+# Create the DataFrame
+venn_table = pd.DataFrame(venn_list, columns=['grouping', 'ASV_ID'])
+
+# Save as TSV
+venn_table.to_csv(os.path.join(data_dir, "methods_output/metadata/venn3_presence_table_kit.tsv"), sep="\t", index=False)
+
+# Create a dictionary mapping each kit to a set of ASV_IDs that are present.
+sub_list = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
+sub_df = asv_tax_df
+group_dict = sub_df.groupby(['kit'])["ASV_ID"].apply(set).to_dict()
+# Now create the upset data from the dictionary.
+upset_data = from_contents(group_dict)
+upset_data.columns = ['index']
+upset_data.reset_index(inplace=True)
+upset_sum = []
+for i,row in upset_data.iterrows():
+    for t in ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']:
+        if (t, row['index']) in kit_asv_sum_dict:
+            val = kit_asv_sum_dict[(t, row['index'])]
+            row['count'] = val
+            row['kit'] = t
+            upset_sum.append(list(row))
+
+upset_sum_df = pd.DataFrame(upset_sum, columns=list(upset_data.columns) + ['count', 'kit'])
+upset_sum_df.set_index(['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO'], inplace=True)
+upset_sum_df = upset_sum_df.reorder_levels(['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO'][::-1])
+upset_sum_df['kit'] = pd.Categorical(upset_sum_df['kit'], ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO'])
+
+# Create and plot the UpSet plot.
+upset = UpSet(upset_sum_df, sum_over='count', subset_size='sum',
+              element_size=None, show_counts=True,
+              sort_categories_by='input', min_subset_size=0,
+              intersection_plot_elements=0
+              )
+
+for t in kit_pallete.keys():
+    upset.style_categories([t], bar_facecolor=kit_pallete[t], bar_edgecolor="black")
+
+upset.add_stacked_bars(
+    by="kit", sum_over='count',
+    colors=kit_pallete,
+    title="Count by Kit", elements=10
+    )
+
+fig = plt.figure(figsize=(12, 8))
+matplotlib.rcParams["font.size"] = 6
+axes = upset.plot(fig=fig)
+
+ax = axes['extra0']
+order = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
+handles, labels = ax.get_legend_handles_labels()
+handles = [handles[labels.index(o)] for o in order]
+labels = order
+ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
+
+plt.title("ASV Membership by Kit")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sub_sum_Group_kit.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/upset_plot_sub_sum_Group_kit.pdf"), format="pdf", bbox_inches="tight")
+
+

@@ -114,13 +114,14 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 # Create output directory if it doesn't exist
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-output_dir = os.path.join(data_dir, "final_output/metadata")
+output_dir = os.path.join(data_dir, "methods_output/metadata")
 if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
-metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
+metadata_table_path = os.path.join(data_dir, 'ref_db/methods_metadata.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
+metadata_df['lmp_id'] = metadata_df.copy()['sample']
 metadata_df['lmp_id'].astype(str)
 metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
 
@@ -143,44 +144,29 @@ type_palette = {'Lung Brush': '#009E73',
                 'BAL': '#0072B2',
                 'Oral Rinse': '#6A3D9A'
                 }
-status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
+status_palette = {'Non-Cancer':'white',
+                  'Cancer':'#A50026',
+                  'methods':'lightgray'
+                  }
 
+kit_pallete = {'HostZERO-DEP': 'black',
+               'HostZERO-NODEP': 'gray',
+               'SPARK-ZYMO': 'skyblue',
+               }
 
 metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
 
-fastq_stats_path = os.path.join(data_dir, 'final_output/stats/fastq_stats.tsv')
+fastq_stats_path = os.path.join(data_dir, 'methods_output/stats/fastq_stats.tsv')
 fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
 fstats_df['lmp_id'] = [str(x.split('/')[-1].rsplit('_')[0]) for x in fstats_df['file']]
 reads_df = fstats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
 
-alpha_path = os.path.join(data_dir, 'final_output/diversity/shannon.tsv')
-alpha_df = pd.read_csv(alpha_path, header=0, sep='\t')
-
-bray_path = os.path.join(data_dir, 'final_output/diversity/bray.tsv')
-bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
-bray_reducer, bray_umap = perform_umap(data=bray_df,
-                                       n_neighbors=30,
-                                       min_dist=0.01,
-                                       random_state=42,
-                                       precomputed=True
-                                       )
-
-jacc_path = os.path.join(data_dir, 'final_output/diversity/jaccard.tsv')
-jacc_df = pd.read_csv(jacc_path, header=0, sep='\t', index_col=0)
-jacc_reducer, jacc_umap = perform_umap(data=jacc_df,
-                                       n_neighbors=30,
-                                       min_dist=0.01,
-                                       random_state=42,
-                                       precomputed=True
-                                       )
-jacc_umap.columns = ['Jacc_UMAP1', 'Jacc_UMAP2']
-
-taxonomy_path = os.path.join(data_dir, 'final_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+taxonomy_path = os.path.join(data_dir, 'methods_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.rsplit(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
 
-asv_raw_path = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.micro.tsv')
+asv_raw_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.micro.tsv')
 asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
 asv_raw_df.columns = [str(x.split('/')[-1].split('-')[-1].split('_')[0]) for x in asv_raw_df.columns]
 asv_raw_stack_df = asv_raw_df.stack().reset_index()
@@ -192,7 +178,7 @@ metadata_df['lmp_id'] = metadata_df['lmp_id'].astype(str)
 asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='lmp_id')
 asv_raw_cnt_df = asv_raw_meta_df.groupby(['lmp_id'])['raw_count'].sum().reset_index()
 
-asv_path = os.path.join(data_dir, 'final_output/ASVs/ASV_nontarget.micro.tsv')
+asv_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 asv_df.columns = [str(x.split('/')[-1].split('-')[-1].split('_')[0]) for x in asv_df.columns]
 asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
@@ -218,9 +204,6 @@ asv_meta_df = asv_tax_df.reset_index().merge(metadata_df, on='lmp_id', how='inne
 cnt_df = asv_meta_df.groupby(['lmp_id'])['count'].sum().reset_index()
 
 metastat_df = metadata_df.merge(reads_df, how='left', on='lmp_id')
-metastat_df = metastat_df.merge(alpha_df, how='left', on='lmp_id')
-metastat_df = metastat_df.merge(bray_umap.reset_index(), how='left', on='lmp_id')
-metastat_df = metastat_df.merge(jacc_umap.reset_index(), how='left', on='lmp_id')
 metastat_df = metastat_df.merge(cnt_df, how='left', on='lmp_id')
 metastat_df = metastat_df.merge(asv_raw_cnt_df, how='left', on='lmp_id')
 metastat_df['pass_filter'] = [s if s in list(asv_meta_df['lmp_id']) else 'Failed-QC'
@@ -253,8 +236,8 @@ plt.axhline(y=1000, linestyle='--', color='black', linewidth=1)
 plt.title("Sample Type")
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, "final_output/metadata/type_group_swarmplot.svg"))
-plt.savefig(os.path.join(data_dir, "final_output/metadata/type_group_swarmplot.pdf"))
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/type_group_swarmplot.svg"))
+plt.savefig(os.path.join(data_dir, "methods_output/metadata/type_group_swarmplot.pdf"))
 plt.close()
 
 sub_df = metastat_df.loc[metastat_df['pass_filter'] != 'Failed-QC']
@@ -290,23 +273,27 @@ asv_keep_list = list(asv_meta_df.loc[asv_meta_df['Domain'] != 'Unassigned']['ASV
 final_asv_df = cleaned_asv_df[[x for x in cleaned_asv_df.columns if x in list(sub_df['lmp_id'])]]
 final_asv_df = final_asv_df.loc[asv_keep_list]
 final_asv_df = final_asv_df.loc[~(final_asv_df == 0).all(axis=1)]
-asv_meta_df.to_csv(os.path.join(data_dir, 'final_output/metadata/ASV_meta.tsv'), sep='\t', index=False)
-asv_path = os.path.join(data_dir, 'final_output/ASVs/ASV_final.micro.tsv')
+asv_meta_df.to_csv(os.path.join(data_dir, 'methods_output/metadata/ASV_meta.tsv'), sep='\t', index=False)
+asv_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_final.micro.tsv')
 final_asv_df.to_csv(asv_path, sep='\t', index=True)
-metastat_df.to_csv(os.path.join(data_dir, 'final_output/metadata/master_table.tsv'), sep='\t', index=False)
-metadata_df.to_csv(os.path.join(data_dir, 'final_output/metadata/metadata_updated.tsv'), sep='\t', index=False)
+metastat_df.to_csv(os.path.join(data_dir, 'methods_output/metadata/master_table.tsv'), sep='\t', index=False)
+metadata_df.to_csv(os.path.join(data_dir, 'methods_output/metadata/metadata_updated.tsv'), sep='\t', index=False)
 print(final_asv_df.shape)
 
 # Map to colors
 m_df = metastat_df.loc[metastat_df['lmp_id'].isin(final_asv_df.columns)].set_index('lmp_id')
 filtered_asv_df = final_asv_df[m_df.index.tolist()]
-invert_bray_df = 1 - bray_df.loc[m_df.index.tolist(), m_df.index.tolist()]
+#invert_bray_df = 1 - bray_df.loc[m_df.index.tolist(), m_df.index.tolist()]
 
 col_colors_df = pd.DataFrame({
-    'sample_type': m_df['type_group'].map(all_type_palette)
+    'sample_type': m_df['type_group'].map(all_type_palette),
+    'status': m_df['status'].map(status_palette),
+    'kit': m_df['kit'].map(kit_pallete)
 }, index=m_df.index)
 row_colors_df = pd.DataFrame({
-    'status': m_df['status'].map(status_palette)
+    'sample_type': m_df['type_group'].map(all_type_palette),
+    'status': m_df['status'].map(status_palette),
+    'kit': m_df['kit'].map(kit_pallete)
 }, index=m_df.index)
 
 # Create a new colormap with white at the beginning
@@ -352,13 +339,14 @@ g = sns.clustermap(
     )
 # Create legend entries
 handles = []
-# For Type_Group
 for group in ['Oral Rinse', 'BAL', 'Lung Brush']:
     color = type_palette[group]
     handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-# For Type_Group
-for group in ['Non-Cancer', 'Cancer']:
+for group in ['Non-Cancer', 'Cancer', 'methods']:
     color = status_palette[group]
+    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
+for group in ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']:
+    color = kit_pallete[group]
     handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
 # Add legend outside the clustermap
 plt.legend(
@@ -366,7 +354,7 @@ plt.legend(
     bbox_to_anchor=(1, 1),
     bbox_transform=plt.gcf().transFigure,
     loc='upper left',
-    title="Sample Type / Cancer Status",
+    title="Sample Type / Kit",
     frameon=False
 )
 # Format colorbar
@@ -374,10 +362,11 @@ colorbar = g.ax_heatmap.collections[0].colorbar
 colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/clustermap_ASVpercent.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/clustermap_ASVpercent.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"methods_output/metadata/clustermap_ASVpercent.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"methods_output/metadata/clustermap_ASVpercent.pdf"), bbox_inches='tight')
 plt.close()
 
+'''
 g = sns.clustermap(
     invert_bray_df,
     method='ward',
@@ -421,8 +410,8 @@ colorbar = g.ax_heatmap.collections[0].colorbar
 colorbar.set_label("Bray Curtis", rotation=270, labelpad=15)
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/clustermap_braycurtis.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/clustermap_braycurtis.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/clustermap_braycurtis.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/clustermap_braycurtis.pdf"), bbox_inches='tight')
 plt.close()
-
+'''
 

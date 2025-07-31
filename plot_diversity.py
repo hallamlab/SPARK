@@ -39,24 +39,51 @@ sns.set_theme()  # re-applies style with updated rcParams
 sns.set_style("white")
 
 
-def perform_umap(data, n_neighbors=15, min_dist=0.1, metric='euclidean', random_state=42):
+def perform_umap(
+    data: pd.DataFrame,
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+    metric: str = 'euclidean',
+    random_state: int = 42,
+    precomputed: bool = False
+):
     """
-    Performs UMAP dimensionality reduction on the data.
+    Performs UMAP dimensionality reduction on the data or on a precomputed distance matrix.
 
     Args:
-        data (pd.DataFrame): Input data.
+        data (pd.DataFrame): 
+            - If precomputed=False, rows are lmp_ids × features.
+            - If precomputed=True, must be a square (lmp_ids × lmp_ids) distance matrix.
         n_neighbors (int): Number of neighbors for UMAP.
         min_dist (float): Minimum distance parameter for UMAP.
+        metric (str): Distance metric to use (ignored if precomputed=True).
         random_state (int): Random state for reproducibility.
+        precomputed (bool): If True, treat `data` as a distance matrix and set metric='precomputed'.
 
     Returns:
         umap.UMAP: Fitted UMAP reducer.
-        pd.DataFrame: DataFrame with UMAP embeddings (X and Y).
+        pd.DataFrame: DataFrame with UMAP embeddings (UMAP1, UMAP2).
     """
-    reducer = umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, metric=metric, random_state=random_state)
-    embedding = reducer.fit_transform(data)
-    umap_df = pd.DataFrame(embedding, index=data.index, columns=["UMAP1", "UMAP2"])
-    print(f"Performed UMAP dimensionality reduction. Embedding shape: {umap_df.shape}")
+    umap_metric = 'precomputed' if precomputed else metric
+
+    reducer = umap.UMAP(
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        metric=umap_metric,
+        random_state=random_state
+    )
+
+    # For precomputed, pass the matrix values directly
+    input_array = data.values if precomputed else data
+
+    embedding = reducer.fit_transform(input_array)
+    umap_df = pd.DataFrame(
+        embedding,
+        index=data.index,
+        columns=["UMAP1", "UMAP2"]
+    )
+    print(f"Performed UMAP (precomputed={precomputed}, metric='{umap_metric}'). "
+          f"Embedding shape: {umap_df.shape}")
     return reducer, umap_df
 
 
@@ -64,15 +91,18 @@ def perform_umap(data, n_neighbors=15, min_dist=0.1, metric='euclidean', random_
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 # Load ASV metadata
-metastat_df = pd.read_csv(os.path.join(data_dir, 'final_output/metadata/master_table.tsv'), sep='\t')
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'final_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
-metadata_table_path = os.path.join(data_dir, 'final_output/metadata/metadata_updated.tsv')
+metastat_df = pd.read_csv(os.path.join(data_dir, 'methods_output/metadata/master_table.tsv'), sep='\t')
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'methods_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
+metadata_table_path = os.path.join(data_dir, 'methods_output/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
-type_palette = {'Oral Rinse': '#6A3D9A',
-                'BAL': '#0072B2',
-                'Lung Brush': '#009E73'
-                }
+keep_types = ['Scope Flush',
+              'Skin Brush',
+              'Oral Rinse',
+              'BAL',
+              'Lung Brush'
+              ]
+
 all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
            'Lung Brush': '#009E73',
@@ -80,11 +110,63 @@ all_type_palette = {'Scope Flush': '#E69F00',
            'Oral Rinse': '#6A3D9A',
            'Failed-QC': 'lightgray'
            }
-status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
+
+type_palette = {'Lung Brush': '#009E73',
+                'BAL': '#0072B2',
+                'Oral Rinse': '#6A3D9A'
+                }
+status_palette = {'Non-Cancer':'white',
+                  'Cancer':'#A50026',
+                  'methods':'lightgray'
+                  }
+
+kit_pallete = {'HostZERO-DEP': 'black',
+               'HostZERO-NODEP': 'gray',
+               'SPARK-ZYMO': 'skyblue',
+               }
 
 filter_types = ['Skin Brush', 'Scope Flush']
 
 seqtype_list = list(type_palette.keys())
+
+###########################################################################################################
+alpha_path = os.path.join(data_dir, 'methods_output/diversity/shannon.tsv')
+alpha_df = pd.read_csv(alpha_path, header=0, sep='\t')
+bray_path = os.path.join(data_dir, 'methods_output/diversity/bray.tsv')
+bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
+bray_reducer, bray_umap = perform_umap(data=bray_df,
+                                       n_neighbors=30,
+                                       min_dist=0.01,
+                                       random_state=42,
+                                       precomputed=True
+                                       )
+jacc_path = os.path.join(data_dir, 'methods_output/diversity/jaccard.tsv')
+jacc_df = pd.read_csv(jacc_path, header=0, sep='\t', index_col=0)
+jacc_reducer, jacc_umap = perform_umap(data=jacc_df,
+                                       n_neighbors=30,
+                                       min_dist=0.01,
+                                       random_state=42,
+                                       precomputed=True
+                                       )
+jacc_umap.columns = ['Jacc_UMAP1', 'Jacc_UMAP2']
+
+olall_path = os.path.join(data_dir, 'methods_output/metadata/outliers_table.tsv')
+olall_df = pd.read_csv(olall_path, header=0, sep='\t')
+
+oltype_path = os.path.join(data_dir, 'methods_output/metadata/outliers_type_group.tsv')
+oltype_df = pd.read_csv(oltype_path, header=0, sep='\t')
+
+
+metastat_df = metastat_df.merge(olall_df[['sample', 'is_outlier']], how='left', left_on='lmp_id', right_on='sample')
+metastat_df.rename(columns={'is_outlier': 'overall_OL'}, inplace=True)
+metastat_df = metastat_df.merge(oltype_df[['sample', 'is_outlier']], how='left', left_on='lmp_id', right_on='sample')
+metastat_df.rename(columns={'is_outlier': 'typ_grp_OL'}, inplace=True)
+
+metastat_df = metastat_df.merge(alpha_df, how='left', on='lmp_id')
+metastat_df = metastat_df.merge(bray_umap.reset_index(), how='left', on='lmp_id')
+metastat_df = metastat_df.merge(jacc_umap.reset_index(), how='left', on='lmp_id')
+
+############################################################################################################
 
 # Define comparisons to annotate:
 sub_df = metastat_df.loc[((metastat_df['pass_filter'] != 'Failed-QC') & (~metastat_df['type_group'].isin(filter_types)))]
@@ -105,11 +187,10 @@ _, pvals_corrected, _, _ = multipletests(sample_type_ttests['pval'], method='fdr
 sample_type_ttests['pval_adj'] = pvals_corrected
 sample_type_ttests['significant'] = sample_type_ttests['pval_adj'] < 0.05  # Boolean
 print(sample_type_ttests)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'final_output/diversity/alpha_sample_ttest.tsv'), sep='\t', index=False)
-
+sample_type_ttests.to_csv(os.path.join(data_dir, 'methods_output/diversity/alpha_sample_ttest.tsv'), sep='\t', index=False)
 
 # Load Bray-Curtis matrix
-bray_path = os.path.join(data_dir, 'final_output/diversity/bray.tsv')
+bray_path = os.path.join(data_dir, 'methods_output/diversity/bray.tsv')
 bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
 m_df = metadata_df.copy().set_index('lmp_id')
 sample_ids = m_df.index
@@ -156,7 +237,7 @@ pvals = pairwise_df['p-value']
 pairwise_df['q-value'] = multipletests(pvals, method='fdr_bh')[1]
 
 print(pairwise_df)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'final_output/diversity/beta_type_group_permanova.tsv'), sep='\t', index=False)
+sample_type_ttests.to_csv(os.path.join(data_dir, 'methods_output/diversity/beta_type_group_permanova.tsv'), sep='\t', index=False)
 
 # Pivot to symmetric matrix
 heatmap_df = pairwise_df.pivot(index='Group1', columns='Group2', values='q-value')
@@ -176,8 +257,8 @@ sns.heatmap(
 )
 plt.title('Pairwise PERMANOVA (q-values)\nBlue = Not Significant, Red = Significant')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_Heatmap_permanova.svg"))
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_Heatmap_permanova.pdf"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_Heatmap_permanova.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_Heatmap_permanova.pdf"))
 plt.close()
 
 plt.figure(figsize=(10, 10))
@@ -195,8 +276,8 @@ annotator.configure(test='t-test_ind', text_format='star', loc='inside', verbose
 annotator.apply_and_annotate()
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Alpha_combined_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Alpha_combined_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Alpha_combined_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Alpha_combined_boxplot.pdf"))
 plt.close()
 
 fig, ax = plt.subplots(figsize=(12, 10))
@@ -247,8 +328,8 @@ ax.legend(
 )
 plt.title("Sample Type UMAP")
 fig.tight_layout()
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_UMAP_type_group.svg"))
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_UMAP_type_group.pdf"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_type_group.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_type_group.pdf"))
 plt.close()
 
 fig, ax = plt.subplots(figsize=(12, 10))
@@ -301,11 +382,119 @@ ax.legend(
 plt.title("Cancer Status UMAP")
 fig.tight_layout()
 
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_UMAP_status.svg"))
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Beta_UMAP_status.pdf"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_status.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_status.pdf"))
 plt.close()
 
+fig, ax = plt.subplots(figsize=(12, 10))
+sns.scatterplot(data=sub_df, x="UMAP1", y="UMAP2", hue="kit",
+                size='count', style='overall_OL', sizes=(40, 400),
+                palette=kit_pallete, alpha=0.75, edgecolor='lightgray',
+                linewidth=0.5
+                )
 
+ax = plt.gca()  # Or whatever axis you're plotting on
+# Get current legend entries
+handles, labels = ax.get_legend_handles_labels()
+# Seaborn usually orders: hue first, then size, then style
+# Find where the size section starts:
+size_start = next(i for i, l in enumerate(labels) if l.isdigit())
+# Split them:
+hue_handles = handles[:size_start]
+hue_labels = labels[:size_start]
+hue_handles = [
+               plt.Line2D([], [], marker='o', linestyle='None',
+               markersize=8,  # or whatever size you want for hue markers
+               color=h.get_color())
+               for h in hue_handles
+               ]
+# Manual size legend values + labels (replace with yours)
+size_values = [5000, 25000, 50000, 100000, 200000, 300000]
+size_labels = [f"{v:,}" for v in size_values]
+# Match seaborn scaling
+min_size, max_size = 40, 400  # from sizes=(40, 400)
+def scale_size(val):
+    return min_size + (val - min(size_values)) / (max(size_values) - min(size_values)) * (max_size - min_size)
+size_handles = [
+    plt.Line2D([], [], marker='o', linestyle='None',
+               markersize=np.sqrt(scale_size(v)),  # sqrt because scatter uses area
+               color='gray', alpha=0.75)
+    for v in size_values
+]
+style_handles = handles[size_start+5:]
+style_labels = labels[size_start+5:]
+# Rebuild the legend
+ax.legend(
+    hue_handles + size_handles + style_handles,
+    hue_labels + size_labels + style_labels,
+    loc="upper right",
+    bbox_to_anchor=(1.25, 1),
+    borderaxespad=0,
+    labelspacing=1.25,
+    frameon=False,
+    title="Kit Type"
+)
+plt.title("Kit Type UMAP")
+fig.tight_layout()
+
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_kit_olall.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_kit_olall.pdf"))
+plt.close()
+
+fig, ax = plt.subplots(figsize=(12, 10))
+sns.scatterplot(data=sub_df, x="UMAP1", y="UMAP2", hue="kit",
+                size='count', style='typ_grp_OL', sizes=(40, 400),
+                palette=kit_pallete, alpha=0.75, edgecolor='lightgray',
+                linewidth=0.5
+                )
+
+ax = plt.gca()  # Or whatever axis you're plotting on
+# Get current legend entries
+handles, labels = ax.get_legend_handles_labels()
+# Seaborn usually orders: hue first, then size, then style
+# Find where the size section starts:
+size_start = next(i for i, l in enumerate(labels) if l.isdigit())
+# Split them:
+hue_handles = handles[:size_start]
+hue_labels = labels[:size_start]
+hue_handles = [
+               plt.Line2D([], [], marker='o', linestyle='None',
+               markersize=8,  # or whatever size you want for hue markers
+               color=h.get_color())
+               for h in hue_handles
+               ]
+# Manual size legend values + labels (replace with yours)
+size_values = [5000, 25000, 50000, 100000, 200000, 300000]
+size_labels = [f"{v:,}" for v in size_values]
+# Match seaborn scaling
+min_size, max_size = 40, 400  # from sizes=(40, 400)
+def scale_size(val):
+    return min_size + (val - min(size_values)) / (max(size_values) - min(size_values)) * (max_size - min_size)
+size_handles = [
+    plt.Line2D([], [], marker='o', linestyle='None',
+               markersize=np.sqrt(scale_size(v)),  # sqrt because scatter uses area
+               color='gray', alpha=0.75)
+    for v in size_values
+]
+style_handles = handles[size_start+5:]
+style_labels = labels[size_start+5:]
+# Rebuild the legend
+ax.legend(
+    hue_handles + size_handles + style_handles,
+    hue_labels + size_labels + style_labels,
+    loc="upper right",
+    bbox_to_anchor=(1.25, 1),
+    borderaxespad=0,
+    labelspacing=1.25,
+    frameon=False,
+    title="Kit Type"
+)
+plt.title("Kit Type UMAP")
+fig.tight_layout()
+
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_kit_oltype.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Beta_UMAP_kit_oltype.pdf"))
+plt.close()
 
 
 
@@ -313,19 +502,19 @@ plt.close()
 
 flurp
 # MITO diversity
-alpha_path = os.path.join(data_dir, 'final_output/diversity/shannon.mito.tsv')
+alpha_path = os.path.join(data_dir, 'methods_output/diversity/shannon.mito.tsv')
 alpha_df = pd.read_csv(alpha_path, header=0, sep='\t')
 
-bray_path = os.path.join(data_dir, 'final_output/diversity/bray.mito.tsv')
+bray_path = os.path.join(data_dir, 'methods_output/diversity/bray.mito.tsv')
 bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
 bray_reducer, bray_umap = perform_umap(bray_df, random_state=42)
 
-jacc_path = os.path.join(data_dir, 'final_output/diversity/jaccard.mito.tsv')
+jacc_path = os.path.join(data_dir, 'methods_output/diversity/jaccard.mito.tsv')
 jacc_df = pd.read_csv(jacc_path, header=0, sep='\t', index_col=0)
 jacc_reducer, jacc_umap = perform_umap(jacc_df, random_state=42)
 jacc_umap.columns = ['Jacc_UMAP1', 'Jacc_UMAP2']
 
-mito_asv_path = os.path.join(data_dir, 'final_output/ASVs/ASV_filtered.mito.tsv')
+mito_asv_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_filtered.mito.tsv')
 mito_asv_df = pd.read_csv(mito_asv_path, header=0, sep='\t', index_col=0)
 mito_asv_df.columns = [x.rsplit('_', 1)[0] for x in mito_asv_df.columns]
 mito_asv_stack_df = mito_asv_df.stack().reset_index()
@@ -343,7 +532,7 @@ mito_meta_df['pass_filter'] = [t if s in list(asv_meta_df['lmp_id']) else 'Faile
                               ]
 asv_mito_meta_df = mito_asv_stack_df.reset_index().merge(metadata_df, how='left', on='lmp_id')
 
-mito_meta_df.to_csv(os.path.join(data_dir, 'final_output/metadata/master_table_mito.tsv'), sep='\t', index=False)
+mito_meta_df.to_csv(os.path.join(data_dir, 'methods_output/metadata/master_table_mito.tsv'), sep='\t', index=False)
 mito_meta_df = mito_meta_df.loc[((~mito_meta_df['type_group'].isin(['Skin Brush', 'Scope Flush'])) & (mito_meta_df['pass_filter'] != 'Failed-QC'))]
 mito_meta_df = mito_meta_df.loc[mito_meta_df['pass_filter'] != 'Failed-QC']
 type_order = seqtype_list
@@ -360,7 +549,7 @@ _, pvals_corrected, _, _ = multipletests(sample_type_ttests['pval'], method='fdr
 sample_type_ttests['pval_adj'] = pvals_corrected
 sample_type_ttests['significant'] = sample_type_ttests['pval_adj'] < 0.05  # Boolean
 print(sample_type_ttests)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'final_output/diversity/alpha_sample_ttest_mitochondrial.tsv'), sep='\t', index=False)
+sample_type_ttests.to_csv(os.path.join(data_dir, 'methods_output/diversity/alpha_sample_ttest_mitochondrial.tsv'), sep='\t', index=False)
 
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=mito_meta_df,
@@ -378,6 +567,6 @@ annotator.configure(test='t-test_ind', text_format='star', loc='inside', verbose
 annotator.apply_and_annotate()
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Alpha_type_mitochondrial_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"final_output/diversity/Alpha_type_mitochondrial_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Alpha_type_mitochondrial_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"methods_output/diversity/Alpha_type_mitochondrial_boxplot.pdf"))
 plt.close()
