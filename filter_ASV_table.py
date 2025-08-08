@@ -13,19 +13,25 @@ filtered_fasta = sys.argv[6]
 # Load count table
 count_df = pd.read_csv(count_table, sep='\t', header=0, index_col=0)
 
+# Filter samples by total count
+low_filter_df = count_df.loc[:, count_df.sum() >= count_threshold]
+
 # Filter ASVs by relative abundance
-abund_filter_df = count_df.loc[
-    (count_df.sum(axis=1) / count_df.values.sum()) * 100 >= asv_abund_threshold
+abund_filter_df = low_filter_df.loc[
+    (low_filter_df.sum(axis=1) / low_filter_df.values.sum()) * 100 >= asv_abund_threshold
 ]
 
-# Filter samples by total count
-low_filter_df = abund_filter_df.loc[:, abund_filter_df.sum() >= count_threshold]
+# Filter ASVs that are all 0s
+filter_0s = low_filter_df > 0
+print(f"Number of ASVs before filtering: {abund_filter_df.shape[0]}")
+abund_filter_df = abund_filter_df.loc[filter_0s.any(axis=1)]
+print(f"Number of ASVs after filtering: {abund_filter_df.shape[0]}")
 
 # Save filtered count table
-low_filter_df.to_csv(filtered_table, sep='\t', header=True, index=True)
+abund_filter_df.to_csv(filtered_table, sep='\t', header=True, index=True)
 
 # Subset FASTA
-filtered_asvs = set(low_filter_df.index)
+filtered_asvs = set(abund_filter_df.index)
 
 with open(filtered_fasta, "w") as out_fa:
     for record in SeqIO.parse(input_fasta, "fasta"):

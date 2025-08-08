@@ -26,14 +26,14 @@ sns.set_style("white")
 
 def parse_steps(unknown_args):
     steps = {}
-    lmp_ids = {}
+    samples = {}
     colors = {}
     args = unknown_args
     i = 0
     while i < len(args):
         arg = args[i]
         match_step = re.match(r"-(\d+)$", arg)
-        match_lmp_id = re.match(r"--lmp_ids", arg)
+        match_sample = re.match(r"--samples", arg)
         match_colors = re.match(r"--colors", arg)
 
         if match_step:
@@ -45,18 +45,18 @@ def parse_steps(unknown_args):
             step_value = args[i]
             steps[step_order] = step_value
             i += 1
-        elif match_lmp_id:
+        elif match_sample:
             i += 1
             while i < len(args) and not args[i].startswith("-"):
-                lmp_id_data = args[i]
-                if ':' not in lmp_id_data:
-                    print(f"Invalid lmp_id format: {lmp_id_data}")
+                sample_data = args[i]
+                if ':' not in sample_data:
+                    print(f"Invalid sample format: {sample_data}")
                     sys.exit(1)
-                lmp_id_name, count_str = lmp_id_data.split(':', 1)
+                sample_name, count_str = sample_data.split(':', 1)
                 try:
-                    lmp_ids[lmp_id_name.strip()] = int(count_str)
+                    samples[sample_name.strip()] = int(count_str)
                 except ValueError:
-                    print(f"Invalid count for lmp_id {lmp_id_name}: {count_str}")
+                    print(f"Invalid count for sample {sample_name}: {count_str}")
                     sys.exit(1)
                 i += 1
         elif match_colors:
@@ -66,12 +66,12 @@ def parse_steps(unknown_args):
                 if ':' not in color_data:
                     print(f"Invalid color format: {color_data}")
                     sys.exit(1)
-                lmp_id_name, color_code = color_data.split(':', 1)
-                colors[lmp_id_name.strip()] = color_code.strip()
+                sample_name, color_code = color_data.split(':', 1)
+                colors[sample_name.strip()] = color_code.strip()
                 i += 1
         else:
             i += 1
-    return steps, lmp_ids, colors
+    return steps, samples, colors
 
 def process_steps(steps_dict):
     steps_list = []
@@ -91,18 +91,18 @@ def process_steps(steps_dict):
         counts_list.append(count)
     return steps_list, counts_list
 
-def build_sankey(steps_list, counts_list, lmp_ids_dict, output_dict, colors_dict, output_base):
+def build_sankey(steps_list, counts_list, samples_dict, output_dict, colors_dict, output_base):
     nodes = []
     links = []
     node_indices = {}
     link_colors = []
 
-    # Add lmp_id nodes
-    for lmp_id_name, count in lmp_ids_dict.items():
-        label = f"{lmp_id_name} ({count})"
-        color = colors_dict.get(lmp_id_name, "black")
+    # Add sample nodes
+    for sample_name, count in samples_dict.items():
+        label = f"{sample_name} ({count})"
+        color = colors_dict.get(sample_name, "black")
         nodes.append({"label": label, "color": color})
-        node_indices[lmp_id_name, 'input'] = len(nodes) - 1
+        node_indices[sample_name, 'input'] = len(nodes) - 1
 
     # Add main process nodes
     for idx, (step_name, count) in enumerate(zip(steps_list, counts_list)):
@@ -110,23 +110,23 @@ def build_sankey(steps_list, counts_list, lmp_ids_dict, output_dict, colors_dict
         nodes.append({"label": label, "color": "black"})
         node_indices[step_name] = len(nodes) - 1
 
-    # Add lmp_id nodes
-    for lmp_id_name, count in output_dict.items():
-        label = f"{lmp_id_name} ({count})"
-        color = colors_dict.get(lmp_id_name, "black")
+    # Add sample nodes
+    for sample_name, count in output_dict.items():
+        label = f"{sample_name} ({count})"
+        color = colors_dict.get(sample_name, "black")
         nodes.append({"label": label, "color": color})
-        node_indices[lmp_id_name, 'output'] = len(nodes) - 1
+        node_indices[sample_name, 'output'] = len(nodes) - 1
 
-    # Create links from lmp_ids to the first step
+    # Create links from samples to the first step
     first_step_name = steps_list[0]
     first_step_idx = node_indices[first_step_name]
 
-    for lmp_id_name, count in lmp_ids_dict.items():
-        lmp_id_idx = node_indices[lmp_id_name, 'input']
-        color = colors_dict.get(lmp_id_name, "black")
+    for sample_name, count in samples_dict.items():
+        sample_idx = node_indices[sample_name, 'input']
+        color = colors_dict.get(sample_name, "black")
         link_colors.append("grey") #f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.4)")
         links.append({
-            "source": lmp_id_idx,
+            "source": sample_idx,
             "target": first_step_idx,
             "value": count
         })
@@ -155,17 +155,17 @@ def build_sankey(steps_list, counts_list, lmp_ids_dict, output_dict, colors_dict
             })
             link_colors.append("lightgrey")
 
-    # Create links from last step to lmp_ids
+    # Create links from last step to samples
     last_step_name = steps_list[-1]
     last_step_idx = node_indices[last_step_name]
 
-    for lmp_id_name, count in output_dict.items():
-        lmp_id_idx = node_indices[lmp_id_name, 'output']
-        color = colors_dict.get(lmp_id_name, "black")
+    for sample_name, count in output_dict.items():
+        sample_idx = node_indices[sample_name, 'output']
+        color = colors_dict.get(sample_name, "black")
         link_colors.append("grey") #f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.4)")
         links.append({
             "source": last_step_idx,
-            "target": lmp_id_idx,
+            "target": sample_idx,
             "value": count
         })
 
@@ -191,7 +191,7 @@ def build_sankey(steps_list, counts_list, lmp_ids_dict, output_dict, colors_dict
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Generate a Sankey diagram with lmp_ids and custom colors.",
+        description="Generate a Sankey diagram with samples and custom colors.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False
     )
@@ -203,18 +203,18 @@ def parse_arguments():
     args, unknown_args = parser.parse_known_args()
     return args, unknown_args
 
-def build_sankey_nolabels(steps_list, counts_list, lmp_ids_dict, output_dict, colors_dict, output_base):
+def build_sankey_nolabels(steps_list, counts_list, samples_dict, output_dict, colors_dict, output_base):
     nodes = []
     links = []
     node_indices = {}
     link_colors = []
 
-    # Add lmp_id nodes
-    for lmp_id_name, count in lmp_ids_dict.items():
-        label = '' #f"{lmp_id_name} ({count})"
-        color = colors_dict.get(lmp_id_name, "black")
+    # Add sample nodes
+    for sample_name, count in samples_dict.items():
+        label = '' #f"{sample_name} ({count})"
+        color = colors_dict.get(sample_name, "black")
         nodes.append({"label": label, "color": color})
-        node_indices[lmp_id_name, 'input'] = len(nodes) - 1
+        node_indices[sample_name, 'input'] = len(nodes) - 1
 
     # Add main process nodes
     for idx, (step_name, count) in enumerate(zip(steps_list, counts_list)):
@@ -222,23 +222,23 @@ def build_sankey_nolabels(steps_list, counts_list, lmp_ids_dict, output_dict, co
         nodes.append({"label": label, "color": "black"})
         node_indices[step_name] = len(nodes) - 1
 
-    # Add lmp_id nodes
-    for lmp_id_name, count in output_dict.items():
-        label = '' #f"{lmp_id_name} ({count})"
-        color = colors_dict.get(lmp_id_name, "black")
+    # Add sample nodes
+    for sample_name, count in output_dict.items():
+        label = '' #f"{sample_name} ({count})"
+        color = colors_dict.get(sample_name, "black")
         nodes.append({"label": label, "color": color})
-        node_indices[lmp_id_name, 'output'] = len(nodes) - 1
+        node_indices[sample_name, 'output'] = len(nodes) - 1
 
-    # Create links from lmp_ids to the first step
+    # Create links from samples to the first step
     first_step_name = steps_list[0]
     first_step_idx = node_indices[first_step_name]
 
-    for lmp_id_name, count in lmp_ids_dict.items():
-        lmp_id_idx = node_indices[lmp_id_name, 'input']
-        color = colors_dict.get(lmp_id_name, "black")
+    for sample_name, count in samples_dict.items():
+        sample_idx = node_indices[sample_name, 'input']
+        color = colors_dict.get(sample_name, "black")
         link_colors.append("grey") #f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.4)")
         links.append({
-            "source": lmp_id_idx,
+            "source": sample_idx,
             "target": first_step_idx,
             "value": count
         })
@@ -267,17 +267,17 @@ def build_sankey_nolabels(steps_list, counts_list, lmp_ids_dict, output_dict, co
             })
             link_colors.append("lightgrey")
 
-    # Create links from last step to lmp_ids
+    # Create links from last step to samples
     last_step_name = steps_list[-1]
     last_step_idx = node_indices[last_step_name]
 
-    for lmp_id_name, count in output_dict.items():
-        lmp_id_idx = node_indices[lmp_id_name, 'output']
-        color = colors_dict.get(lmp_id_name, "black")
+    for sample_name, count in output_dict.items():
+        sample_idx = node_indices[sample_name, 'output']
+        color = colors_dict.get(sample_name, "black")
         link_colors.append("grey") #f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.4)")
         links.append({
             "source": last_step_idx,
-            "target": lmp_id_idx,
+            "target": sample_idx,
             "value": count
         })
 
@@ -303,7 +303,7 @@ def build_sankey_nolabels(steps_list, counts_list, lmp_ids_dict, output_dict, co
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Generate a Sankey diagram with lmp_ids and custom colors.",
+        description="Generate a Sankey diagram with samples and custom colors.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False
     )
@@ -319,9 +319,9 @@ def main():
     
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
        
-    metadata_table_path = os.path.join(data_dir, 'ref_db/methods_metadata.tsv')
+    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-    metadata_df['lmp_id'] = metadata_df.copy()['sample']
+    #metadata_df['sample'] = metadata_df.copy()['sample']
 
     keep_types = [
                 'Oral Rinse',
@@ -345,47 +345,53 @@ def main():
 
     metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
    
-    fastq_stats_path = os.path.join(data_dir, 'methods_output/stats/fastq_stats.tsv')
+    fastq_stats_path = os.path.join(data_dir, 'spark_old_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-    fstats_df['lmp_id'] = [str(x.split('/')[-1].rsplit('_')[0]) for x in fstats_df['file']]
-    raw_reads_df = fstats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
-    read_meta_df = raw_reads_df.merge(metadata_df, on='lmp_id')
-    filter_stats_path = os.path.join(data_dir, 'methods_output/stats/filtered_fastqs.tsv')
+    #fstats_df['sample'] = [str(x.split('/')[-1].split('_')[0]) for x in fstats_df['file']]
+    fstats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
+    raw_reads_df = fstats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
+    read_meta_df = raw_reads_df.merge(metadata_df, on='sample')
+
+    filter_stats_path = os.path.join(data_dir, 'spark_old_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
-    filter_stats_df['lmp_id'] = [str(x.split('/')[-1].split('.', 1)[0]) for x in filter_stats_df['file']]
-    filter_reads_df = filter_stats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
-    filter_meta_df = filter_reads_df.merge(metadata_df, on='lmp_id')
-    
-    asv_raw_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_filtered.tsv')
+    #filter_stats_df['sample'] = [str(x.split('/')[-1].split('.')[0]) for x in filter_stats_df['file']]
+    filter_stats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in filter_stats_df['file']]
+    filter_reads_df = filter_stats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
+    filter_meta_df = filter_reads_df.merge(metadata_df, on='sample')
+
+    asv_raw_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_counts.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
-    asv_raw_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
+    asv_raw_stack_df.columns = ['ASV_ID', 'sample', 'count']
+    asv_raw_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_raw_stack_df['sample']]
     asv_raw_stack_df = asv_raw_stack_df.loc[asv_raw_stack_df['count'] > 0]
     asv_raw_stack_df.set_index('ASV_ID', inplace=True)
-    asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='lmp_id')
-    asv_raw_cnt_df = asv_raw_meta_df.groupby(['type_group', 'lmp_id'])['count'].sum().reset_index()
+    asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='sample')
+    asv_raw_cnt_df = asv_raw_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
 
-    asv_decon_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.decon.tsv')
+    asv_decon_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.decon.tsv')
     asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
     asv_decon_stack_df = asv_decon_df.stack().reset_index()
-    asv_decon_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
+    asv_decon_stack_df.columns = ['ASV_ID', 'sample', 'count']
+    asv_decon_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_decon_stack_df['sample']]
     asv_decon_stack_df = asv_decon_stack_df.loc[asv_decon_stack_df['count'] > 0]
     asv_decon_stack_df.set_index('ASV_ID', inplace=True)
-    asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='lmp_id')
-    asv_decon_cnt_df = asv_decon_meta_df.groupby(['type_group', 'lmp_id'])['count'].sum().reset_index()
+    asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='sample')
+    asv_decon_cnt_df = asv_decon_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
 
-    asv_micro_path = os.path.join(data_dir, 'methods_output/ASVs/ASV_target.micro.tsv')
+    asv_micro_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.micro.tsv')
     asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
     asv_micro_stack_df = asv_micro_df.stack().reset_index()
-    asv_micro_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
+    asv_micro_stack_df.columns = ['ASV_ID', 'sample', 'count']
+    asv_micro_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_micro_stack_df['sample']]
     asv_micro_stack_df = asv_micro_stack_df.loc[asv_micro_stack_df['count'] > 0]
     asv_micro_stack_df.set_index('ASV_ID', inplace=True)
-    asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on='lmp_id')
-    asv_micro_cnt_df = asv_micro_meta_df.groupby(['type_group', 'lmp_id'])['count'].sum().reset_index()
+    asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on='sample')
+    asv_micro_cnt_df = asv_micro_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
 
     read_grp_df = read_meta_df.groupby(['type_group'])['num_seqs'].sum().reset_index()
     read_grp_df['num_reads'] = read_grp_df['num_seqs'] / 2
-
+    
     filter_grp_df = filter_meta_df.groupby(['type_group'])['num_seqs'].sum().reset_index()
     filter_grp_df['num_reads'] = filter_grp_df['num_seqs']
 
@@ -404,13 +410,14 @@ def main():
     asv_decon_reads = int(asv_decon_grp_df['num_reads'].sum())
     asv_micro_reads = int(asv_micro_grp_df['num_reads'].sum())
     
-    metadata_df = metadata_df.loc[metadata_df['lmp_id'].isin(list(asv_raw_cnt_df['lmp_id']))]
+    metadata_df = metadata_df.loc[metadata_df['sample'].isin(list(asv_raw_cnt_df['sample']))]
 
     steps_list = ['Quality Control', 'Error Correction', 'Decontamination', 'Off-Target Filtering', 'Finished Data']
     counts_list = [raw_reads, filter_reads, asv_raw_reads, asv_decon_reads, asv_micro_reads]
     seqtype_list = keep_types
-    input_lmp_ids_dict = {x: int(read_grp_df.loc[read_grp_df['type_group'] == x]['num_reads'].values) for x in seqtype_list}
-    output_lmp_ids_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['type_group'] == x]['num_reads'].values)
+
+    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['type_group'] == x]['num_reads'].values) for x in seqtype_list}
+    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['type_group'] == x]['num_reads'].values)
                            if x in list(asv_micro_grp_df['type_group'])
                            else 0 for x in seqtype_list
                            }
@@ -418,14 +425,14 @@ def main():
     print("Parsed steps:")
     for step_name, count in zip(steps_list, counts_list):
         print(f"{step_name}: {count}")
-    print("Parsed lmp_ids:")
-    for lmp_id_name, count in input_lmp_ids_dict.items():
-        print(f"{lmp_id_name}: {count}")
+    print("Parsed samples:")
+    for sample_name, count in input_samples_dict.items():
+        print(f"{sample_name}: {count}")
 
-    output = os.path.join(data_dir, 'methods_output/metadata/data_loss_sankey_label.html')
-    build_sankey(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
-    output = os.path.join(data_dir, 'methods_output/metadata/data_loss_sankey.html')
-    build_sankey_nolabels(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
+    output = os.path.join(data_dir, 'spark_old_output/metadata/data_loss_sankey_label.html')
+    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, type_palette, output)
+    output = os.path.join(data_dir, 'spark_old_output/metadata/data_loss_sankey.html')
+    build_sankey_nolabels(steps_list, counts_list, input_samples_dict, output_samples_dict, type_palette, output)
 
 if __name__ == "__main__":
     main()

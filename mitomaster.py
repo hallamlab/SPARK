@@ -5,20 +5,6 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/ASVs/chunks'
-output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/methods_output/mitomap/mitomaster_combined.tsv'
-checkpoint_file = output_file + '.done'
-
-fasta_files = sorted(Path(data_dir).glob("*.fasta"))
-
-# Read already completed files
-done = set()
-if Path(checkpoint_file).exists():
-    with open(checkpoint_file) as f:
-        done.update(line.strip() for line in f)
-
-# Lock for writing to files safely across threads
-lock = Lock()
 
 def process_fasta(fasta_path, first=False):
     try:
@@ -46,9 +32,23 @@ def process_fasta(fasta_path, first=False):
     except Exception as e:
         print(f"❌ Error: {fasta_path.name}: {e}")
 
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/SPARK_OG_output/ASVs/chunks'
+output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/SPARK_OG_output/mito/mitomap/mitomaster_combined.tsv'
+checkpoint_file = output_file + '.done'
+
+fasta_files = sorted(Path(data_dir).glob("*.fasta"))
+
+# Read already completed files
+done = set()
+if Path(checkpoint_file).exists():
+    with open(checkpoint_file) as f:
+        done.update(line.strip() for line in f)
+
+# Lock for writing to files safely across threads
+lock = Lock()
+
 # Filter only unprocessed files
 remaining = [f for f in fasta_files if f.name not in done]
-
 print(f"Found {len(remaining)} unprocessed FASTA files")
 
 if remaining:
