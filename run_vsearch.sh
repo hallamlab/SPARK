@@ -20,8 +20,8 @@ usage() {
     echo "  --skip-denoise        Skip Step 6: ASV denoising with UNOISE"
     echo "  --skip-chimera        Skip Step 7: ASV chimera check with uchime3_denovo"
     echo "  --skip-swarm          Skip Step 8: Swarm clustering to remove artifacts"
-    echo "  --skip-nontarget      Skip Step 9: Removing non-targets"
-    echo "  --skip-count          Skip Step 10: Assigning counts and creating ASV count matrix"
+    echo "  --skip-count          Skip Step 9: Assigning counts and creating ASV count matrix"
+    echo "  --skip-tabfilt        Skip Step 10: Filtering count matrix on sample ASV abundance"
     echo "  -h, --help            Display this help message and exit"
     echo ""
     echo "Example:"
@@ -38,8 +38,8 @@ SKIP_DEREP=0
 SKIP_DENOISE=0
 SKIP_CHIMERA=0
 SKIP_SWARM=0
-SKIP_NONTARGET=0
 SKIP_COUNT=0
+SKIP_TABFILT=0
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -76,12 +76,12 @@ while [[ $# -gt 0 ]]; do
             SKIP_SWARM=1
             shift
             ;;
-        --skip-nontarget)
-            SKIP_NONTARGET=1
-            shift
-            ;;
         --skip-count)
             SKIP_COUNT=1
+            shift
+            ;;
+        --skip-tabfilt)
+            SKIP_TABFILT=1
             shift
             ;;
         -h|--help)
@@ -97,7 +97,7 @@ done
 # Define directories
 INPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/fastq_combined"
 REFDB_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db"
-OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output"
+OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/combined_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -135,10 +135,8 @@ fastp_qc() {
             -I ${INPUT_DIR}/${SAMPLE}_R2.fastq.gz \
             -o ${QC_DIR}/${SAMPLE}_R1.fastq.gz \
             -O ${QC_DIR}/${SAMPLE}_R2.fastq.gz \
-            --cut_front \
-            --cut_tail \
-            --detect_adapter_for_pe \
-            --correction \
+            -f 19 -t 80 \
+            -F 20 -T 80 \
             -j ${QC_DIR}/${SAMPLE}_report.json \
             -h ${QC_DIR}/${SAMPLE}_report.html \
             -w ${THREADS}
@@ -177,7 +175,7 @@ filter_reads() {
         SAMPLE=$(basename ${M} .merged.fastq)
         vsearch --fastx_filter ${M} \
             --fastq_maxee 1.0 \
-            --fastq_minlen 200 \
+            --fastq_minlen 230 \
             --fastaout ${FILTERED_DIR}/${SAMPLE}.filtered.fasta
     done 2>&1 | tee -a "${LOG_DIR}/filtering_log.txt"
     echo "Step 3: Filtering completed."
@@ -186,18 +184,11 @@ filter_reads() {
 # Function to concatenate all filtered reads
 concatenate_reads() {
     echo "Step 4: Concatenating all filtered reads..."
-    rm -f ${CONCAT_DIR}/concat.fasta
+    rm -f "${CONCAT_DIR}/concat.fasta"
     for F in ${FILTERED_DIR}/*.filtered.fasta; do
-        RUN=$(basename ${F} .filtered.fasta | cut -d'-' -f1)
-        SAMPLE=$(basename ${F} .filtered.fasta | rev | cut -d'_' -f5 | rev)
-        
-        # Extract the first sequence header and modify it
-        HEADER=$(head -n 1 "${F}")
-        SUBSTRING=$(echo ${HEADER} | cut -d'>' -f2 | cut -d':' -f1)
-        NEW_HEADER=">${SAMPLE}"
-        
-        # Replace the old header with the new header and append to concat.fasta
-        sed "s/${SUBSTRING}/${SAMPLE}/g" ${F} >> ${CONCAT_DIR}/concat.fasta
+        SAMPLE=$(basename "${F}" .filtered.fasta | cut -d'_' -f1)
+        echo "Processing ${SAMPLE} from ${F}"
+        sed "s/^>[^:]*:/>${SAMPLE}:/" "${F}" >> "${CONCAT_DIR}/concat.fasta"
     done 2>&1 | tee -a "${LOG_DIR}/concat_log.txt"
     echo "Step 4: Concatenating completed."
 }
@@ -254,45 +245,30 @@ swarm_clustering() {
     echo "Step 8: Swarm clustering completed."
 }
 
-# Function to remove nontarget
-remove_nontarget() {
-    echo "Step 9: Removing Non-target..."
-    cp ${NOC_DIR}/nochimeras.fasta ${ASV_DIR}/ASVs.fasta
-
-    #vsearch --usearch_global ${NOC_DIR}/nochimeras.fasta \
-    #        --db ${REFDB_DIR}/ssu_pipeline_contaminants_mito.fasta \
-    #        --matched ${ASV_DIR}/ASVs.nontarget.fasta \
-    #        --notmatched ${ASV_DIR}/ASVs.fasta \
-    #        --id 0.99 \
-    #        --sizein \
-    #        --relabel ASV \
-    #        --threads ${THREADS} \
-    #        --log ${LOG_DIR}/nontarget_log.txt
-    echo "Step 9: Non-target removed."
-}
-
 # Function to assign counts and create ASV count matrix
 create_count_matrix() {
-    echo "Step 10: Creating ASV count matrix..."
-    #cat ${QC_DIR}/*.fastq.gz > ${CONCAT_DIR}/fastp_qc_concat.fastq.gz
+    echo "Step 9: Creating ASV count matrix..."
+    cp ${NOC_DIR}/nochimeras.fasta ${ASV_DIR}/ASVs.fasta
     vsearch --usearch_global ${CONCAT_DIR}/concat.fasta \
             --db ${ASV_DIR}/ASVs.fasta \
-            --id 0.99 \
+            --id 0.999 \
             --otutabout ${ASV_DIR}/ASV_counts.tsv \
             --threads ${THREADS} \
             --log ${LOG_DIR}/count_log.txt
-    
-    echo "Step 11: Filtering samples by ASV sum..."
+}
+
+# Function to remove nontarget
+filter_table() {
+    echo "Step 10: Filtering samples by ASV sum..."
     python filter_ASV_table.py \
             ${ASV_DIR}/ASV_counts.tsv \
             ${ASV_DIR}/ASV_filtered.tsv \
-            1000 0.005 \
+            5000 0 \
             ${ASV_DIR}/ASVs.fasta \
             ${ASV_DIR}/ASVs_filtered.fasta
 
-    echo "Step 11: ASV count matrix created and filtered."
+    echo "Step 10: ASV count matrix filtered."
 }
-
 
 # Execute steps based on skip flags
 if [[ ${SKIP_QC} -eq 0 ]]; then
@@ -343,16 +319,16 @@ else
     echo "Skipping Step 8: Swarm clustering as per user request."
 fi
 
-if [[ ${SKIP_NONTARGET} -eq 0 ]]; then
-    remove_nontarget
-else
-    echo "Skipping Step 9: Removing non-targets as per user request."
-fi
-
 if [[ ${SKIP_COUNT} -eq 0 ]]; then
     create_count_matrix
 else
-    echo "Skipping Step 10: Creating ASV count matrix as per user request."
+    echo "Skipping Step 9: Creating ASV count matrix as per user request."
+fi
+
+if [[ ${SKIP_TABFILT} -eq 0 ]]; then
+    filter_table
+else
+    echo "Skip Step 10: Filtering count matrix on sample ASV abundance."
 fi
 
 echo "Amplicon processing with VSEARCH completed successfully."
