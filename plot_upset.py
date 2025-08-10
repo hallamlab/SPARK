@@ -819,12 +819,6 @@ plt.savefig(os.path.join(data_dir, "spark_old_output/metadata/Three_vs_controls_
             format="pdf", bbox_inches="tight")
 
 
-flurp
-
-
-
-
-
 
 
 
