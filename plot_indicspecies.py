@@ -24,15 +24,20 @@ sns.set_theme()  # re-applies style with updated rcParams
 sns.set_style("white")
 
 
-def plot_volcano(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0, output_file='volcano_plot.svg'):
+def plot_volcano(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0,
+                 output_file='volcano_plot.svg', no_sig=False
+                 ):
     # Load data
     
     # Compute log-transformed p-values
     df['log_p'] = -np.log10(df['p.value']).round(1)
     
     # Define colors based on thresholds
-    df['significance'] = False  # Default color for non-significant
-    df.loc[((df['p.value'] < p_thresh) & (df['stat'] > stat_thresh)), 'significance'] = True 
+    if no_sig:
+        df['significance'] = True
+    else:
+        df['significance'] = False  # Default color for non-significant
+        df.loc[((df['p.value'] < p_thresh) & (df['stat'] > stat_thresh)), 'significance'] = True 
     
     df['color'] = [cmap[ind[i]] if s else 'lightgrey' for i,s in zip(df['index'], df['significance'])]
     cmap['not_indicator'] = 'lightgrey'
@@ -208,15 +213,16 @@ def plot_type_taxa(df, ind, p_thresh=0.05, stat_thresh=0.0, output_file='volcano
     plt.close()
 
 
-def plot_combined(df, output_file, type_palette):
+def plot_combined(df, output_file, type_palette, no_sig=False):
     
     p_thresh=0.05
-    
-    df['type_color'] = [x if y == True else 'lightgrey' for x,y in zip(df['type_color'], df['status_significance'])]
-    df['type_color'] = ['lightgrey' if ((y == True) & (x == 'lightgrey')) else x
-                        for x,y in zip(df['type_color'], df['status_significance']
+    if no_sig:
+        df['status_significance'] = True
+    else:
+        df['type_color'] = [x if y == True else 'lightgrey' for x,y in zip(df['type_color'], df['status_significance'])]
+        df['type_color'] = ['lightgrey' if ((y == True) & (x == 'lightgrey')) else x
+                            for x,y in zip(df['type_color'], df['status_significance']
                             )]
-
     
     fig, ax = plt.subplots(figsize=(8, 6))
     # Plot non-red points first
@@ -474,7 +480,8 @@ type_isa_df = plot_volcano(sub_df, type_index, type_palette,
                            output_file=os.path.join(data_dir, 'spark_old_output/indicspecies/type_group_ISA_plot.svg')
                            )
 type_venn_df = plot_volcano(venn_sub_df, type_index, type_palette,
-                           output_file=os.path.join(data_dir, 'spark_old_output/indicspecies/type_group_Venn_plot.svg')
+                           output_file=os.path.join(data_dir, 'spark_old_output/indicspecies/type_group_Venn_plot.svg'),
+                           no_sig=True
                            )
 
 type_isa_df.columns = ['ASV_ID', 'BAL', 'Lung Brush', 'Oral Rinse',
@@ -512,9 +519,13 @@ plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
 
 type_status_df = pd.merge(type_venn_df, status_isa_df, on='ASV_ID')
 type_status_df.to_csv(os.path.join(data_dir, 'spark_old_output/indicspecies/Type_status_Venn_results.tsv'), sep='\t')
-plot_combined(type_status_df, os.path.join(data_dir, 'spark_old_output/indicspecies/Combined_Venn_plot.svg'), type_palette)
+plot_combined(type_status_df, os.path.join(data_dir, 'spark_old_output/indicspecies/Combined_Venn_plot.svg'),
+              type_palette, no_sig=True
+              )
 plot_combined(type_status_df.loc[type_status_df['type_significance'] == True],
-              os.path.join(data_dir, 'spark_old_output/indicspecies/Combined_noNoType_Venn_plot.svg'), type_palette)
+              os.path.join(data_dir, 'spark_old_output/indicspecies/Combined_noNoType_Venn_plot.svg'),
+              type_palette, no_sig=True
+              )
 TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
                'spark_old_output/indicspecies/Combined_Venn_plot_Phylum.svg')
