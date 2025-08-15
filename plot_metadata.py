@@ -14,7 +14,7 @@ import matplotlib as mpl
 import seaborn as sns
 from scipy.stats import ttest_ind
 from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
-from itertools import combinations
+from itertools import combinations, combinations_with_replacement
 from statsmodels.stats.multitest import multipletests
 from statannotations.Annotator import Annotator
 import math
@@ -22,6 +22,8 @@ from itertools import cycle
 import colorsys
 import matplotlib.colors as mcolors
 import re
+import warnings
+from matplotlib.colors import to_rgba
 
 
 # Global settings — at the top of script or notebook cell
@@ -412,6 +414,211 @@ g.ax_heatmap.tick_params(axis='x', which='both', length=5)
 plt.savefig(os.path.join(data_dir, f"spark_old_output/metadata/clustermap_ASVpercent.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_old_output/metadata/clustermap_ASVpercent.pdf"), bbox_inches='tight')
 plt.close()
+
+# Violins
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+from itertools import combinations, combinations_with_replacement
+from matplotlib.colors import to_rgba
+
+def plot_grouppair_violins_sns(
+    shared_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_id_col: str = "sample_id",
+    group_col: str = "sample_type",
+    include_within: bool = True,
+    group_order: list | None = None,
+    group_colors: dict | None = None,   # {"GroupA":"#1b9e77", "GroupB":"#d95f02", ...}
+    title: str = "Group pair % shared",
+    ylabel: str = "% shared",
+    inner: str = "quartile",            # seaborn violin inner: "box", "quartile", "point", None
+    cut: float = 0,                      # 0 = trim to data range
+    bw: str | float = "scott",
+    scale: str = "width",
+    ax=None,
+):
+    """
+    Seaborn violins of %shared for non-redundant group pairs.
+    - shared_df: square DataFrame (samples x samples) of float percent values.
+    - meta_df:   DataFrame with sample->group mapping.
+    - group_colors: dict group -> color. Missing groups auto-colored; invalid colors warn.
+    - Only samples present in BOTH the square matrix (index & columns) and metadata are used.
+      Duplicate samples in metadata are dropped (first occurrence kept).
+    Returns (ax, tidy_df).
+    """
+
+    # -------- align & sanitize --------
+    # (1) ensure square overlap between index and columns
+    matrix_samples = [s for s in shared_df.index if s in shared_df.columns]
+    if not matrix_samples:
+        raise ValueError("Matrix has no overlapping index/column sample names.")
+
+    # (2) clean metadata & drop duplicate sample rows
+    meta = meta_df.copy()
+    meta[sample_id_col] = meta[sample_id_col].astype(str).str.strip()
+    meta[group_col] = meta[group_col].astype(str).str.strip()
+    meta = meta.drop_duplicates(subset=[sample_id_col], keep="first")
+
+    # (3) intersect with metadata samples
+    meta = meta[meta[sample_id_col].isin(matrix_samples)]
+    if meta.empty:
+        raise ValueError("No overlapping samples between matrix and metadata.")
+
+    # (4) final ordered sample list: preserve matrix row order, ensure in meta
+    samples = [s for s in matrix_samples if s in set(meta[sample_id_col])]
+    shared = shared_df.loc[samples, samples]
+
+    # (5) reorder meta to match 'samples'
+    meta = meta.set_index(sample_id_col).loc[samples].reset_index()
+
+    # -------- groups & ordering --------
+    # appearance order from filtered metadata
+    seen = set(); groups_in_use = []
+    for g in meta[group_col]:
+        if g not in seen:
+            seen.add(g); groups_in_use.append(g)
+
+    if group_order:
+        specified = [str(g).strip() for g in group_order if str(g).strip()]
+        unknown = [g for g in specified if g not in groups_in_use]
+        if unknown:
+            warnings.warn(f"Unknown groups in group_order {unknown}; ignored.")
+        groups = [g for g in specified if g in groups_in_use] + [g for g in groups_in_use if g not in specified]
+    else:
+        groups = groups_in_use
+
+    # map group -> samples (order respects 'samples')
+    group_to_samples = {
+        g: [s for s in samples if meta.loc[meta[sample_id_col]==s, group_col].iloc[0] == g]
+        for g in groups
+    }
+
+    # -------- color resolution (by group) --------
+    def _rgba_or_none(c, g):
+        try:
+            return to_rgba(c)
+        except ValueError:
+            warnings.warn(f"Ignoring invalid color '{c}' for group '{g}'.")
+            return None
+
+    resolved_group_colors = {}
+    user_map = group_colors or {}
+
+    # warn if user passes colors for groups not present
+    extras = [g for g in user_map if g not in groups]
+    if extras:
+        warnings.warn(f"group_colors provided for unknown groups {extras}; ignored.")
+
+    # take valid user colors
+    for g in groups:
+        c = user_map.get(g, None)
+        if c is not None:
+            rgba = _rgba_or_none(c, g)
+            if rgba is not None:
+                resolved_group_colors[g] = rgba
+
+    # auto-assign for missing groups
+    cmap = plt.get_cmap("tab20")
+    auto_i = 0
+    for g in groups:
+        if g not in resolved_group_colors:
+            resolved_group_colors[g] = cmap(auto_i % cmap.N)
+            auto_i += 1
+            warnings.warn(f"No color for group '{g}'; using auto color from 'tab20'.")
+
+    def _blend(a, b):
+        a = np.array(a); b = np.array(b)
+        mix = (a + b) / 2.0
+        mix[3] = max(a[3], b[3])
+        return tuple(mix)
+
+    # -------- collect values per group-pair --------
+    gpairs = combinations_with_replacement(groups, 2) if include_within else combinations(groups, 2)
+
+    rows = []        # build tidy df rows
+    pair_labels = [] # to preserve order for plotting
+    pair_colors = {} # palette for seaborn keyed by pair label
+
+    for g1, g2 in gpairs:
+        s1 = group_to_samples.get(g1, [])
+        s2 = group_to_samples.get(g2, [])
+        if not s1 or not s2:
+            continue
+
+        if g1 == g2:
+            if len(s1) < 2:
+                continue
+            sub = shared.loc[s1, s1].to_numpy()
+            iu = np.triu_indices(len(s1), k=1)
+            vals = sub[iu]
+            col = resolved_group_colors[g1]
+        else:
+            vals = shared.loc[s1, s2].to_numpy().ravel()
+            col = _blend(resolved_group_colors[g1], resolved_group_colors[g2])
+
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+
+        label = f"{g1} × {g2}"
+        pair_labels.append(label)
+        pair_colors[label] = col
+        rows.append(pd.DataFrame({"pair": label, "value": vals}))
+
+    if not rows:
+        raise ValueError("No pairwise values to plot (after alignment/dedup).")
+
+    tidy = pd.concat(rows, ignore_index=True)
+
+    # -------- plot with seaborn --------
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(6, 1.3*len(pair_labels)), 4.5), dpi=150)
+
+    sns.violinplot(
+        data=tidy,
+        x="pair",
+        y="value",
+        order=pair_labels,              # keep deterministic pair order
+        palette=pair_colors,            # per-pair colors (within=group color, between=blend)
+        cut=cut,
+        bw=bw,
+        scale=scale,
+        inner=inner,
+        ax=ax,
+    )
+
+    ax.set_xlabel("")                  # x labels already categorical
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.tick_params(axis="x", rotation=45)
+    ax.grid(axis="y", alpha=0.2, linestyle="--", linewidth=0.5)
+
+    return ax, tidy
+
+fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
+ax, tidy = plot_grouppair_violins_sns(
+    shared_percent, metadata_df,
+    sample_id_col="sample",
+    group_col="type_group",
+    include_within=True,
+    group_order=["Oral Rinse","BAL","Lung Brush"],
+    group_colors=type_palette,   # used for within; between are blended
+    title="ASVs Shared by Sample Type",
+    ylabel="ASVs Shared (%)",
+    inner="quartile",            # or "box", "point", None
+    cut=0,
+    ax=ax,
+)
+
+plt.tight_layout()
+plt.savefig(os.path.join(data_dir, f"spark_old_output/metadata/violin_ASVpercent.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/metadata/violin_ASVpercent.pdf"), bbox_inches='tight')
+plt.close()
+
+flurp
 
 
 
