@@ -354,8 +354,8 @@ def plot_cca_biplot(species_scores, env_scores, sub_species_scores, sub_env_scor
 
 
 # Load the data
-data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
-output_dir = os.path.join(data_dir, "vsearch_output")
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
+output_dir = os.path.join(data_dir, "final_output")
 
 site_scores = pd.read_csv(os.path.join(output_dir, 'cca/cca_site_scores.tsv'),
                           sep='\t', index_col=0)
@@ -381,6 +381,7 @@ envfit_env.index = [x.replace('.', '_').replace('__', '_').replace('__', '_')
 
 tax_df = pd.read_csv(os.path.join(output_dir, 'taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv'),
                             sep='\t', index_col=0)
+tax_df.index = [x.split(';')[0] for x in tax_df.index]
 taxonomy_dict = {'Domain': [], 'Phylum': [], 'Class': [],
                  'Order': [], 'Family': [], 'Genus': [],
                  'Species': []
@@ -397,11 +398,12 @@ species_scores = species_scores.join(tax_df)
 
 metadata_path = os.path.join(data_dir, "ref_db/spark_metadata.tsv")
 metadata_df = pd.read_csv(metadata_path, sep="\t", header=0)
-asv_filter_df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/metadata/ASV_meta.tsv'), sep="\t", header=0)
+asv_filter_df = pd.read_csv(os.path.join(data_dir, 'final_output/metadata/ASV_meta.tsv'), sep="\t", header=0)
 
 # Not subset the matrices based on the r^2 and p-value thresholds
 envfit_taxa = envfit_taxa.loc[(round(envfit_taxa['r2'], 2) >= 0.05) & (round(envfit_taxa['p_value'], 2) <= 0.05)]
 envfit_env = envfit_env.loc[(round(envfit_env['r2'], 2) >= 0.05) & (round(envfit_env['p_value'], 2) <= 0.05)]
+
 taxa_env_str = taxa_env_str.loc[round(taxa_env_str['cos_theta'], 2).abs() >= 0.70]
 sub_species_scores = species_scores.loc[species_scores.index.isin(envfit_taxa.index)]
 sub_env_scores = env_scores.loc[env_scores.index.isin(envfit_env.index)]
@@ -422,21 +424,18 @@ sub_species_scores.to_csv(os.path.join(output_dir, 'cca/cca_species_scores_filte
 sub_env_scores.to_csv(os.path.join(output_dir, 'cca/cca_env_scores_filtered.tsv'),
                       sep='\t')
 
-
-
-
 # run more basic correlation analysis and HCA
 
 # Load your tables
-asv_path = os.path.join(output_dir, "ASVs/ASV_filtered.decon.tsv")
+asv_path = os.path.join(output_dir, "ASVs/ASV_final.micro.tsv")
 asv_df = pd.read_csv(asv_path, sep="\t", index_col=0)
-voc_path = "/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/VOC_table.tsv"
-voc_df = pd.read_csv(voc_path, sep="\t", index_col=2)
+voc_path = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db/VOC_table.tsv"
+voc_df = pd.read_csv(voc_path, sep="\t", index_col=0)
 #voc_nonorm_path = "/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/VOC_nonorm_table.tsv"
 #voc_nonorm_df = pd.read_csv(voc_nonorm_path, sep="\t", index_col=2)
 
-network_path = os.path.join(output_dir, "spieceasi/spieceasi_asv_transformed_distance.tsv")
-network_df = pd.read_csv(network_path, sep="\t", index_col=0)
+#network_path = os.path.join(output_dir, "spieceasi/spieceasi_asv_transformed_distance.tsv")
+#network_df = pd.read_csv(network_path, sep="\t", index_col=0)
 
 asv_df.columns = [x.rsplit('_', 2)[0] for x in asv_df.columns]
 #asv_df = asv_df[asv_df.index.isin(network_df.index)]
@@ -590,24 +589,24 @@ venn_type = {'ca-contra + ca-lung': 'ca-contra+ca-lung',
              'Only ctrl-brush': 'ctrl-brush'
              }
 
-status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary_Brush.tsv")
+status_summary_file = os.path.join(data_dir, "final_output/indicspecies/status_indicator_species_summary.tsv")
 status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
 status_type_summary_df.rename(columns={'ASV': 'lineage'}, inplace=True)
-isa_status_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_results_Brush.tsv")
+isa_status_file = os.path.join(data_dir, "final_output/indicspecies/status_indicator_species_results.tsv")
 isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
 isastatus_df.rename(columns={'level_0': 'lineage'}, inplace=True)
 
-isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_results_Brush.tsv")
+isa_type_file = os.path.join(data_dir, "final_output/indicspecies/subclass2_indicator_species_results_Brush.tsv")
 isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
 isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
 isatype_df = isatype_df.loc[isatype_df['index'].isin(type_index.keys())]
 
-type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_summary_Brush.tsv")
+type_summary_file = os.path.join(data_dir, "final_output/indicspecies/subclass2_indicator_species_summary_Brush.tsv")
 type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
 type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
 type_summary_df = type_summary_df.loc[type_summary_df['index'].isin(type_index.keys())]
 
-venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table_Brush.tsv"), sep="\t", header=0)
+venn_df = pd.read_csv(os.path.join(data_dir, "final_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
 
 ss_long_df = pd.wide_to_long(
     status_type_summary_df,
@@ -664,7 +663,7 @@ isatype_df['venn_color'] = venn_colors
 # Align on common samples
 common_samples = asv_df.index.intersection(voc_df.index)
 asv_df = asv_df.loc[common_samples]
-asv_df.reset_index().to_csv(os.path.join(output_dir, "cca/Brush_ASV_Table.tsv"), sep='\t', index=False)
+asv_df.reset_index().to_csv(os.path.join(output_dir, "cca/ASV_Table.tsv"), sep='\t', index=False)
 
 voc_df = voc_df.loc[common_samples]
 #voc_nonorm_df = voc_nonorm_df.loc[common_samples]
@@ -703,8 +702,8 @@ asv_stack_df = order_df[['lineage', 'sample', 'count']]
 asv_stack_df.columns = ['LIN_ID', 'sample', 'count']
 '''
 
-asv_status_df = asv_stack_df.merge(metadata_df[['Sample_renamed', 'Case']], left_on='sample',
-                                   right_on='Sample_renamed', how='left'
+asv_status_df = asv_stack_df.merge(metadata_df[['lmp_id', 'Case']], left_on='sample',
+                                   right_on='lmp_id', how='left'
                                    )
 asv_grp_df = asv_status_df.groupby(['ASV_ID', 'Case'])['count'].sum().reset_index()
 asv_unstack_df = asv_grp_df.pivot(index='ASV_ID', columns='Case', values=['count']).reset_index()
@@ -744,18 +743,14 @@ v2 = venn2(
 # Get the circle objects
 circles = venn2_circles(subsets=subsets ,linewidth=1, color='grey')
 
-plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
-
-
-
-
-
+plt.savefig(os.path.join(data_dir, "final_output/cca/venn_diagram.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/cca/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 
 asv_subclass_df = asv_status_df.merge(voc_tmp_df[['subclass2']],
-                                      left_on='sample', right_index=True, how='left'
+                                      left_on='lmp_id', right_index=True, how='left'
                                       )
+
 sub_df = asv_subclass_df.loc[asv_subclass_df['count'] > 0].copy()
 # Venns
 # Create venn3 with custom colors
@@ -768,8 +763,8 @@ venn3([oral_set, bal_set, lung_set], ('ctrl-brush', 'ca-contra', 'ca-lung'),
       alpha=0.6
       )
 
-plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram_Brush.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram_Brush.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/cca/venn_diagram.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "final_output/cca/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 # Get all possible combinations
 only_oral = oral_set - bal_set - lung_set
@@ -803,7 +798,7 @@ for k in columns:
 venn_table = pd.DataFrame(venn_list, columns=['grouping', 'ASV_ID'])
 
 # Save as TSV
-venn_table.to_csv(os.path.join(data_dir, "vsearch_output/cca/venn3_presence_table_Brush.tsv"), sep="\t", index=False)
+venn_table.to_csv(os.path.join(data_dir, "final_output/cca/venn3_presence_table.tsv"), sep="\t", index=False)
 
 venn_df = venn_table.set_index('ASV_ID')
 isatype_df = isatype_df.join(venn_df, how='left')
@@ -911,10 +906,6 @@ plt.close()
 
 
 
-
-
-
-
 # Subset the correlation matrix for only SIG ISAs
 sub_row_colors = row_colors.loc[row_colors['Venn_Sample_Type'].notna()]
 sub_row_colors = sub_row_colors.loc[sub_row_colors['ISA_Cancer_Status'] != 'white']
@@ -1012,7 +1003,7 @@ g = sns.clustermap(
     center=0,
     metric="correlation",
     method="average",
-    figsize=(22, 6),
+    figsize=(22, 24),
     dendrogram_ratio=(0.1, 0.2),  # (rows, columns)
     cbar_pos=None,  # remove default colorbar
     colors_ratio=(0.01, 0.01),
@@ -1128,7 +1119,7 @@ distances = pdist(voc_array, metric="braycurtis")
 bray_curtis_matrix = squareform(distances)
 bray_df = pd.DataFrame(bray_curtis_matrix, index=voc_df.index, columns=voc_df.index)
 bray_df.index.name = "sample"
-output_bray = os.path.join(data_dir, 'vsearch_output/cca/voc_bray.tsv')
+output_bray = os.path.join(data_dir, 'final_output/cca/voc_bray.tsv')
 bray_df.to_csv(output_bray, sep="\t")
 print(f"Bray-Curtis beta diversity saved to {output_bray}")
 
@@ -1145,15 +1136,15 @@ sns.scatterplot(data=bray_umap, x="UMAP1", y="UMAP2", s=50,
                 )
 
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC.pdf"))
 plt.close()
 
-sample_plot_path = os.path.join(data_dir, f"vsearch_output/cca/VOC_UMAP_")
+sample_plot_path = os.path.join(data_dir, f"final_output/cca/VOC_UMAP_")
 save_umap_plots(bray_reducer, sample_plot_path)
 
 # Merge metadata with UMAP results
-bray_umap = bray_umap.merge(metadata_df, left_index=True, right_on='Sample_renamed', how='left')
+bray_umap = bray_umap.merge(metadata_df, left_index=True, right_on='lmp_id', how='left')
 # Beta diversity
 plt.figure(figsize=(12, 10))
 sns.scatterplot(data=bray_umap, x="UMAP1", y="UMAP2", s=50,
@@ -1162,8 +1153,8 @@ sns.scatterplot(data=bray_umap, x="UMAP1", y="UMAP2", s=50,
                 )
 
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_case.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_case.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_case.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_case.pdf"))
 plt.close()
 
 # Beta diversity
@@ -1174,8 +1165,8 @@ sns.scatterplot(data=bray_umap, x="UMAP1", y="UMAP2", s=50,
                 )
 
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_set.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_set.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_set.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_set.pdf"))
 plt.close()
 
 # Beta diversity
@@ -1186,14 +1177,14 @@ sns.scatterplot(data=bray_umap, x="UMAP1", y="UMAP2", s=50,
                 )
 
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_lung.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/Beta_VOC_lung.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_lung.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/Beta_VOC_lung.pdf"))
 plt.close()
 
 voc_metrics = compute_metrics(voc_df)
 
 voc_metrics = voc_metrics.join(voc_tmp_df)
-voc_metrics = voc_metrics.merge(metadata_df, left_index=True, right_on='Sample_renamed', how='left')
+voc_metrics = voc_metrics.merge(metadata_df, left_index=True, right_on='lmp_id', how='left')
 
 print(voc_metrics.head())
 print(voc_metrics.shape)
@@ -1201,80 +1192,80 @@ print(voc_metrics.shape)
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="gini", hue="Case", kind="box",
+            x="subclass2", y="gini", hue="Case", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/gini_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/gini_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/gini_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/gini_boxplot.pdf"))
 plt.close()
 
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="variance", hue="Case", kind="box",
+            x="subclass2", y="variance", hue="Case", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/variance_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/variance_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/variance_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/variance_boxplot.pdf"))
 plt.close()
 
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="hill_number_q2", hue="Case", kind="box",
+            x="subclass2", y="hill_number_q2", hue="Case", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/hill_number_q2_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/hill_number_q2_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/hill_number_q2_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/hill_number_q2_boxplot.pdf"))
 plt.close()
 
 
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="gini", hue="subclass2", kind="box",
+            x="subclass2", y="gini", hue="subclass2", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_gini_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_gini_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_gini_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_gini_boxplot.pdf"))
 plt.close()
 
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="variance", hue="subclass2", kind="box",
+            x="subclass2", y="variance", hue="subclass2", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_variance_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_variance_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_variance_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_variance_boxplot.pdf"))
 plt.close()
 
 # Plot
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=voc_metrics,
-            x="Type_Group", y="hill_number_q2", hue="subclass2", kind="box",
+            x="subclass2", y="hill_number_q2", hue="subclass2", kind="box",
 	        boxprops=dict(alpha=.5)
             )
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_hill_number_q2_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"vsearch_output/cca/subclass2_hill_number_q2_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_hill_number_q2_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"final_output/cca/subclass2_hill_number_q2_boxplot.pdf"))
 plt.close()
 
 
 
 
 
-metadata_df.set_index('Sample_renamed', inplace=True)
+metadata_df.set_index('lmp_id', inplace=True)
 result_df = indicator_analysis(voc_df, metadata_df, "Case")
-result_df.to_csv(os.path.join(data_dir, f"vsearch_output/cca/VOC.Case.Kruskal–Wallis.tsv"), sep="\t", index=False)
+result_df.to_csv(os.path.join(data_dir, f"final_output/cca/VOC.Case.Kruskal–Wallis.tsv"), sep="\t", index=False)

@@ -6,16 +6,16 @@ library(dendextend)
 library(caret)
 
 # Define output directory
-out_dir <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/cca"
+out_dir <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/cca"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
-count_data_path <- "/home/ryan/Projects/UBC/LMP/SPARK_data/vsearch_output/ASVs/ASV_filtered.micro.tsv"
+count_data_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/ASVs/ASV_final.micro.tsv"
 asv_counts <- t(read.delim(count_data_path, row.names = 1, check.names = FALSE))
-vocdata     <- "/home/ryan/Projects/UBC/LMP/SPARK_data/ref_db/VOC_table.tsv"
-voc_data    <- read.delim(vocdata, row.names = 3, check.names = FALSE)
+vocdata     <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db/VOC_table.tsv"
+voc_data    <- read.delim(vocdata, row.names = 1, check.names = FALSE)
 
 # Clean rownames
 rownames(asv_counts) <- sapply(rownames(asv_counts), function(id){
@@ -62,7 +62,6 @@ env_data_clean <- env_data_numeric[complete.cases(env_data_numeric), ]
 common <- intersect(rownames(asv_counts), rownames(env_data_clean))
 asv_counts_clean <- asv_counts[common, ]
 env_data_clean   <- env_data_clean[common, ]
-
 # ---------------------------------------------------------------------------
 # Remove highly correlated variables
 # ---------------------------------------------------------------------------
