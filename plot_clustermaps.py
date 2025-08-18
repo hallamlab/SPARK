@@ -37,13 +37,11 @@ sns.set_style("white")
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
-all_type_palette = {'Scope Flush': '#E69F00',
-           'Skin Brush': '#CC79A7',
-           'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A',
-           'Failed-QC': 'lightgray'
+three_palette = {'ca-lung': '#009E73',
+           'ca-contra': '#0072B2',
+           'ctrl-brush': '#6A3D9A'
            }
+<<<<<<< HEAD
 
 three_palette = {'Lung Brush': '#009E73',
            'BAL': '#0072B2',
@@ -69,12 +67,24 @@ asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/metadata/ASV_
 
 # clustermaps
 isa_path = os.path.join(data_dir, 'spark_old_output/indicspecies/Type_status_ISA_results.tsv')
+=======
+status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026'}
+ordered_type = ['ctrl-brush', 'ca-contra', 'ca-lung']
+
+metadata_table_path = os.path.join(data_dir, 'vsearch_output/metadata/metadata_updated_Brush.tsv')
+metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'vsearch_output/metadata/ASV_meta_Brush.tsv'), sep='\t', header=0)
+
+# clustermaps
+isa_path = os.path.join(data_dir, 'vsearch_output/indicspecies/Type_status_ISA_results_Brush.tsv')
+>>>>>>> a600334 (updated to brush)
 isa_df = pd.read_csv(isa_path, sep='\t')
 sig_isa_df = isa_df.loc[((isa_df['type_significance'] == True) | (isa_df['status_significance'] == True)) &
                         ((isa_df['type_stat'] >= 0.6) | (isa_df['status_stat'] >= 0.6))
                         ]
 sig_isa_asvs = list(sig_isa_df['ASV_ID'])
 
+<<<<<<< HEAD
 asv_meta_df = asv_meta_df.loc[~asv_meta_df['type_group'].isin(['Skin Brush', 'Scope Flush'])]
 
 rank_type_dict = {}
@@ -90,6 +100,19 @@ for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']
     for group in asv_meta_df['type_group'].unique():
         df_group = asv_rank_df[asv_rank_df['type_group'] == group]
         total_rank = df_group.groupby(rank)['corr_count'].sum()
+=======
+rank_type_dict = {}
+rank_dict = {}
+
+for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']:
+    asv_rank_df = asv_meta_df.groupby(['subclass2', rank, 'sample', 'Sample'])['count'].sum().reset_index()
+    rank_type_dict[rank] = {}
+    rank_dict[rank] = []
+    for group in asv_meta_df['subclass2'].unique():
+        df_group = asv_rank_df[asv_rank_df['subclass2'] == group]
+        total_rank = df_group.groupby(rank)['count'].sum()
+        N = 25
+>>>>>>> a600334 (updated to brush)
         topN = total_rank.sort_values(ascending=False).head(N).index.tolist()
         sig = asv_meta_df[asv_meta_df['ASV_ID'].isin(sig_isa_asvs)][rank].unique().tolist()
         All_r = list(set(topN + sig))
@@ -101,6 +124,7 @@ for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']
     plot_col = f"{rank}_plot"
     asv_meta_df[plot_col] = asv_meta_df[rank].apply(lambda x: x if x in rank_list else "Other")
 
+<<<<<<< HEAD
 for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
           'Genus_plot', 'Species_plot', 'ASV_ID_plot'
           ]:
@@ -115,12 +139,25 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
         'type_group': col_meta['type_group'].map(all_type_palette),
         'status': col_meta['status'].map(status_palette),
         #'kit': col_meta['kit'].map(kit_pallete)
+=======
+for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot', 'Genus_plot', 'Species_plot', 'ASV_ID_plot']:
+    bubble_df = asv_meta_df.groupby(['sample_code', t, 'subclass2', 'status'])['count'].sum().reset_index()
+    pivot_df = bubble_df.pivot(index='sample_code', columns=t, values='count').fillna(0)
+
+    # Map sample_code to sample_type
+    col_meta = bubble_df.drop_duplicates('sample_code')[['sample_code', 'subclass2', 'status']].set_index('sample_code')
+
+    # Map to colors
+    col_colors_df = pd.DataFrame({
+        'subclass2': col_meta['subclass2'].map(three_palette),
+        'status': col_meta['status'].map(status_palette)
+>>>>>>> a600334 (updated to brush)
         })
 
-    pivot_df = asv_meta_df.groupby(['sample_code', t])['corr_count'
+    pivot_df = asv_meta_df.groupby(['sample_code', t])['count'
                                     ].sum().reset_index().pivot(index=t,
                                                                 columns='sample_code',
-                                                                values='corr_count'
+                                                                values='count'
                                                                 ).fillna(0)
 
     # Log transform (add 1 to avoid log(0))
@@ -161,7 +198,7 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
         yticklabels=True,
         dendrogram_ratio=(.05, .2),
         colors_ratio=0.02,
-        figsize=(32, height),
+        figsize=(24, height),
         cbar_pos=(1.02, 0.2, 0.03, 0.4),
         alpha=0.75,
         col_cluster=False
@@ -170,8 +207,13 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     # Create legend entries
     handles = []
 
+<<<<<<< HEAD
     # For type_group
     for group in type_order:
+=======
+    # For subclass2
+    for group in ordered_type:
+>>>>>>> a600334 (updated to brush)
         color = three_palette[group]
         handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
 
@@ -205,8 +247,13 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
+<<<<<<< HEAD
     plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
     plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
+=======
+    plt.savefig(os.path.join(data_dir, f"vsearch_output/diversity/clustermap_{t}_code_Brush.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"vsearch_output/diversity/clustermap_{t}_code_Brush.pdf"), bbox_inches='tight')
+>>>>>>> a600334 (updated to brush)
     plt.close()
 
     g = sns.clustermap(
@@ -222,7 +269,7 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
         yticklabels=True,
         dendrogram_ratio=(.05, .2),
         colors_ratio=0.02,
-        figsize=(32, height),
+        figsize=(24, height),
         cbar_pos=(1.02, 0.2, 0.03, 0.4),
         alpha=0.75
         )
@@ -230,8 +277,13 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     # Create legend entries
     handles = []
 
+<<<<<<< HEAD
     # For type_group
     for group in type_order:
+=======
+    # For subclass2
+    for group in ordered_type:
+>>>>>>> a600334 (updated to brush)
         color = three_palette[group]
         handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
 
@@ -263,6 +315,7 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
 
 
+<<<<<<< HEAD
     plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
     plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
     plt.close()
@@ -440,3 +493,10 @@ plt.close()
 
 pivot_df.to_csv(os.path.join(data_dir, f"spark_old_output/mito/diversity/clustermap_ASV_mito.tsv"), sep='\t')
 
+=======
+    plt.savefig(os.path.join(data_dir, f"vsearch_output/diversity/clustermap_{t}_clustered_Brush.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"vsearch_output/diversity/clustermap_{t}_clustered_Brush.pdf"), bbox_inches='tight')
+    plt.close()
+
+    pivot_df.to_csv(os.path.join(data_dir, f"vsearch_output/diversity/clustermap_{t}_Brush.tsv"), sep='\t')
+>>>>>>> a600334 (updated to brush)

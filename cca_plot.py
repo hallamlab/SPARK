@@ -19,6 +19,8 @@ import scanpy as sc
 from scipy.stats import kruskal
 from sklearn.preprocessing import LabelEncoder
 from matplotlib_venn import venn2, venn2_circles
+from matplotlib_venn import venn3
+
 
 # Global settings — at the top of script or notebook cell
 mpl.rcParams['pdf.fonttype'] = 42   # Keep text as text in PDF
@@ -467,9 +469,79 @@ cols_trim = ["VOC_1", "Undecane_144", "1-Propanol_23", "VOC_595",
             "Methyl propionate_41", "Ethanol_12", "1-Heptene_61", "2-Pentanone_52",
             "Acetic acid_27", "Acetic acid, butyl ester_84"
             ]
+convert_vocs = {"VOC_1": "Unidentified_1", 
+                "Carbamic_acid_monoammonium_salt_2": "Unidentified_2", 
+                "VOC_3": "Unidentified_3", 
+                "_2_Aziridinylethyl_amine_4": "Unidentified_4", 
+                "Ethanol_12": "Ethanol", 
+                "Acetone_14": "Acetone", 
+                "2_Propanol_15": "2-propanol", 
+                "Acetic_acid_methyl_ester_19": "Methyl acetate", 
+                "Methanesulfonic_anhydride_22": "Methane sulfonic anhydride", 
+                "1_Propanol_23": "1-Propanol", 
+                "Acetic_acid_27": "Acetic acid", 
+                "Butanal_30": "Butanal", 
+                "2_Butanone_31": "2-Butanone", 
+                "1_3_5_Trifluorobenzene_37": "1,3,5-Trifluorobenzene", 
+                "Methyl_propionate_41": "Methyl proprionate", 
+                "Benzene_50": "Benzene", 
+                "2_Pentanone_52": "2-Pentanone", 
+                "1_Butanol_53": "1-Butanol", 
+                "Heptane_56": "Heptane", 
+                "1_Heptene_61": "1-Heptene", 
+                "Octane_81": "Octane", 
+                "Acetic_acid_butyl_ester_84": "Butyl acetate", 
+                "Heptane_2_4_dimethyl_86": "2,4-Dimethylheptane", 
+                "Octane_4_methyl_93": "4-Methyloctane", 
+                "Heptane_2_2_4_6_6_pentamethyl_118": "2,2,4,6,6-Pentamethylheptane", 
+                "Decane_123": "Decane", 
+                "Decane_2_methyl_137": "2-Methyldecane", 
+                "1_Octanol_140": "1-Octanol", 
+                "Undecane_144": "Undecane", 
+                "VOC_149": "Unidentified_5", 
+                "Dodecane_152": "Dodecane", 
+                "Dodecane_2_7_1VOC_trimethyl_165": "2,7,10-Trimethyldodecane", 
+                "Nonadecane_207": "Nonadecane", 
+                "1_Octene_224": "1-Octene", 
+                "1_2_Ethanediol_monoacetate_228": "2-Hydroxyethyl acetate", 
+                "Undecane_2_methyl_241": "2-Methylundecane", 
+                "Octanoic_acid_242": "Octanoic acid", 
+                "Decane_1_1'_oxybis_243": "Decyl ether", 
+                "2_Butenedioic_acid_Z_monododecyl_ester_248": "Dodecyl maleate", 
+                "Dodecane_2_6_11_trimethyl_250": "2,6,11-Trimethyldodecane", 
+                "Isopropyl_myristate_284": "Isopropyl myristate", 
+                "Hexane_2_methyl_310": "2-Methylhexane", 
+                "Hexane_2_5_dimethyl_319": "2,5-Dimethylhexane", 
+                "3_Heptanone_347": "3-Heptanone", 
+                "Butanoic_acid_4_hydroxy_355": "4-Hydroxybutanoic acid", 
+                "Dimethyl_sulfone_358": "Dimethyl sulfone", 
+                "Nonane_2_methyl_363": "2-Methylnonane", 
+                "Nonane_3_methyl_365": "3-Methylnonane", 
+                "Decane_2_6_7_trimethyl_372": "2,6,7-Trimethyldecane", 
+                "Decane_4_methyl_376": "4-Methyldecane", 
+                "1_Octanol_377": "Unidentified_6", 
+                "Decane_378": "3-Methyldecane", 
+                "Levomenthol_384": "Levomenthol", 
+                "Butanal_3_methyl_417": "3-Methylbutanal", 
+                "Heptane_3_ethyl_2_methyl_434": "3-Ethyl-2-methylheptane", 
+                "Heptane_2_2_4_6_6_pentamethyl_439": "2,2,3,5-Tetramethylheptane", 
+                "2_3H_Furanone_dihydro_5_methyl_441": "1-Heptanol", 
+                "Oxetane_2_ethyl_3_methyl_451": "Unidentified_7", 
+                "VOC_595": "Unidentified_8", 
+                "VOC_599": "Unidentified_9", 
+                "Benzene_1_ethyl_3_methyl_606": "1-Ethyl-3-methylbenzene", 
+                "VOC_679": "Unidentified_10", 
+                "Acetoin_774": "3-Hydroxybutanone", 
+                "VOC_900": "Unidentified_11", 
+                "1_2_Benzenedicarboxylic_acid_bis_2_methylpropyl_ester_968": "Unidentified_12"
+                }
+
+
 voc_tmp_df = voc_df.copy()
 voc_df = voc_df[cols_trim]
 voc_df = sanitize_columns(voc_df, chars_to_replace=["-", ".", " ", ",", "(", ")"])
+voc_df.rename(columns=convert_vocs, inplace=True)
+
 '''
 voc_batch = voc_nonorm_df['sample_family']
 voc_nonorm_df = voc_nonorm_df[[x for x in voc_nonorm_df.columns if x in cols_trim]]
@@ -575,6 +647,7 @@ isatype_df = isatype_df.merge(ts_long_df, how='left', on=['ASV_ID', 'index']).se
 isatype_df['AxB'] = isatype_df['A'] * isatype_df['B']
 isatype_df['AxB'] = isatype_df['AxB'].fillna(0)
 
+'''
 venn_df = venn_df.set_index('ASV_ID')
 isatype_df = isatype_df.join(venn_df, how='left')
 venn_colors = []
@@ -586,6 +659,7 @@ for g in isatype_df['grouping']:
         c = 'lightgray'
     venn_colors.append(c)
 isatype_df['venn_color'] = venn_colors
+'''
 
 # Align on common samples
 common_samples = asv_df.index.intersection(voc_df.index)
@@ -673,6 +747,76 @@ circles = venn2_circles(subsets=subsets ,linewidth=1, color='grey')
 plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.svg"), format="svg", bbox_inches="tight")
 plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
+
+
+
+
+
+
+asv_subclass_df = asv_status_df.merge(voc_tmp_df[['subclass2']],
+                                      left_on='sample', right_index=True, how='left'
+                                      )
+sub_df = asv_subclass_df.loc[asv_subclass_df['count'] > 0].copy()
+# Venns
+# Create venn3 with custom colors
+oral_set = set(sub_df.loc[sub_df['subclass2'] == 'ctrl-brush']['ASV_ID'])
+bal_set = set(sub_df.loc[sub_df['subclass2'] == 'ca-contra']['ASV_ID'])
+lung_set = set(sub_df.loc[sub_df['subclass2'] == 'ca-lung']['ASV_ID'])
+plt.figure(figsize=(6,6))
+venn3([oral_set, bal_set, lung_set], ('ctrl-brush', 'ca-contra', 'ca-lung'),
+      set_colors=(type_palette['ctrl-brush'], type_palette['ca-contra'], type_palette['ca-lung']),
+      alpha=0.6
+      )
+
+plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram_Brush.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "vsearch_output/cca/venn_diagram_Brush.pdf"), format="pdf", bbox_inches="tight")
+
+# Get all possible combinations
+only_oral = oral_set - bal_set - lung_set
+only_bal = bal_set - oral_set - lung_set
+only_lung = lung_set - oral_set - bal_set
+
+oral_bal = (oral_set & bal_set) - lung_set
+oral_lung = (oral_set & lung_set) - bal_set
+bal_lung = (bal_set & lung_set) - oral_set
+
+all_three = oral_set & bal_set & lung_set
+
+# Convert sets to sorted lists
+columns = {
+    "Only ctrl-brush": sorted(only_oral),
+    "Only ca-contra": sorted(only_bal),
+    "Only ca-lung": sorted(only_lung),
+    "ctrl-brush + ca-contra": sorted(oral_bal),
+    "ctrl-brush + ca-lung": sorted(oral_lung),
+    "ca-contra + ca-lung": sorted(bal_lung),
+    "All Three": sorted(all_three),
+}
+
+venn_list = []
+for k in columns:
+    v = columns[k]
+    for a in v:
+        venn_list.append([k, a])
+
+# Create the DataFrame
+venn_table = pd.DataFrame(venn_list, columns=['grouping', 'ASV_ID'])
+
+# Save as TSV
+venn_table.to_csv(os.path.join(data_dir, "vsearch_output/cca/venn3_presence_table_Brush.tsv"), sep="\t", index=False)
+
+venn_df = venn_table.set_index('ASV_ID')
+isatype_df = isatype_df.join(venn_df, how='left')
+venn_colors = []
+for g in isatype_df['grouping']:
+    if g in venn_type:
+        g_t = venn_type[g]
+        c = type_palette[g_t]
+    else:
+        c = 'lightgray'
+    venn_colors.append(c)
+isatype_df['venn_color'] = venn_colors
+
 # Result matrix: ASVs x Chem
 corr_matrix = pd.DataFrame(index=asv_df.columns, columns=voc_df.columns, dtype=float)
 for asv in asv_df.columns:
@@ -703,9 +847,6 @@ cmap_cblind = mcolors.LinearSegmentedColormap.from_list(
     "cblind_diverging", ["#0072B2", "#F0F0F0", "#D55E00"]
 )
 
-# Subset the correlation matrix for only SIG ISAs
-
-
 output_path = os.path.join(output_dir, "cca/ISA_spearman_correlation.pdf")
 g = sns.clustermap(
     corr_matrix.astype(float),
@@ -713,7 +854,7 @@ g = sns.clustermap(
     center=0,
     metric="correlation",
     method="average",
-    figsize=(30, 22),
+    figsize=(32, 72),
     dendrogram_ratio=(0.1, 0.02),  # (rows, columns)
     cbar_pos=None,  # remove default colorbar
     colors_ratio=(0.01, 0.01),
@@ -769,10 +910,160 @@ plt.clf()
 plt.close()
 
 
-flurp
 
 
 
+
+
+# Subset the correlation matrix for only SIG ISAs
+sub_row_colors = row_colors.loc[row_colors['Venn_Sample_Type'].notna()]
+sub_row_colors = sub_row_colors.loc[sub_row_colors['ISA_Cancer_Status'] != 'white']
+sub_row_colors = sub_row_colors.loc[sub_row_colors['ISA_Sample_Type'] != '#6A3D9A']
+output_path = os.path.join(output_dir, "cca/ISA_spearman_correlation_subset.pdf")
+sub_corr_matrix = corr_matrix.loc[sub_row_colors.index, :]
+
+g = sns.clustermap(
+    sub_corr_matrix.astype(float),
+    cmap=cmap_cblind,
+    center=0,
+    metric="correlation",
+    method="average",
+    figsize=(32, 20),
+    dendrogram_ratio=(0.1, 0.02),  # (rows, columns)
+    cbar_pos=None,  # remove default colorbar
+    colors_ratio=(0.01, 0.01),
+    row_colors=sub_row_colors,
+    
+    )
+
+# Create separate colorbar on the right
+norm = mpl.colors.Normalize(vmin=-1, vmax=1)
+sm = plt.cm.ScalarMappable(cmap=cmap_cblind, norm=norm)
+sm.set_array([])
+
+# Add colorbar manually
+cbar_ax = g.fig.add_axes([0.8, 0.4, 0.05, 0.3])  # [x, y, width, height]
+g.fig.colorbar(sm, cax=cbar_ax, label="Spearman correlation")
+
+# Build legend handles
+legend_handles = []
+
+# Add ISA status legend
+unique_values = isastatus_df['Group'].unique()
+for value in unique_values:
+    if value in status_palette:
+        color = status_palette[value]
+        legend_handles.append(Patch(color=color, label=f'ISA Cancer Status: {value}'))  
+
+# Add ISA type legend
+unique_values = isatype_df['Group'].unique()
+for value in unique_values:
+    if value in type_palette:
+        color = type_palette[value]
+        legend_handles.append(Patch(color=color, label=f'ISA Type Status: {value}'))  
+# Add Venn type legend
+unique_values = isatype_df['grouping'].unique()
+for value in unique_values:
+    if value in venn_type:
+        color = type_palette[venn_type[value]]
+        legend_handles.append(Patch(color=color, label=f'Venn Type Status: {value}'))  
+
+# Add legend to right of the heatmap
+g.ax_heatmap.legend(
+    handles=legend_handles,
+    loc='center',
+    bbox_to_anchor=(1.6, 0.8),
+    frameon=False,
+    #prop={'size': 24},
+)
+
+
+plt.tight_layout()
+plt.savefig(output_path, bbox_inches="tight", dpi=600)
+plt.clf()
+plt.close()
+
+
+
+
+
+# Subset the correlation matrix for only SIG ISAs
+keep_status_ASVs = list(isastatus_df.loc[isastatus_df['p.value'] <= 0.05].index)
+#keep_type_ASVs = list(isatype_df.loc[isatype_df['p.value'] <= 0.05].index)
+keep_ASVs =  keep_status_ASVs #list(set(keep_status_ASVs) & set(keep_type_ASVs))
+sub_row_colors = row_colors.loc[row_colors.index.isin(keep_ASVs)]
+sub_row_colors = sub_row_colors.merge(
+    asv_tax_df[['ASV_ID', 'Phylum', 'Genus']].drop_duplicates(),
+    left_index=True, right_on='ASV_ID',
+    how='left').set_index(['Phylum', 'Genus']
+                          ).drop(columns=['ASV_ID']).drop(columns=['Venn_Sample_Type'])
+
+output_path = os.path.join(output_dir, "cca/ISA_spearman_correlation_ISAsig.pdf")
+sub_corr_matrix = corr_matrix.loc[row_colors.index.isin(keep_ASVs)]
+sub_corr_species = sub_corr_matrix.merge(
+    asv_tax_df[['ASV_ID', 'Phylum', 'Genus']].drop_duplicates(),
+    left_index=True, right_on='ASV_ID',
+    how='left').set_index(['Phylum', 'Genus']
+                          ).drop(columns=['ASV_ID'])
+
+g = sns.clustermap(
+    sub_corr_species.astype(float),
+    cmap=cmap_cblind,
+    center=0,
+    metric="correlation",
+    method="average",
+    figsize=(22, 6),
+    dendrogram_ratio=(0.1, 0.2),  # (rows, columns)
+    cbar_pos=None,  # remove default colorbar
+    colors_ratio=(0.01, 0.01),
+    row_colors=sub_row_colors,
+    
+    )
+
+# Rotate y-axis tick labels (row labels) to horizontal
+g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), rotation=0)
+
+# Create separate colorbar on the right
+norm = mpl.colors.Normalize(vmin=-1, vmax=1)
+sm = plt.cm.ScalarMappable(cmap=cmap_cblind, norm=norm)
+sm.set_array([])
+
+# Build legend handles
+legend_handles = []
+
+# Add ISA status legend
+unique_values = isastatus_df['Group'].unique()
+for value in unique_values:
+    if value in status_palette:
+        color = status_palette[value]
+        legend_handles.append(Patch(color=color, label=f'ISA Cancer Status: {value}'))  
+
+# Add ISA type legend
+unique_values = isatype_df['Group'].unique()
+for value in unique_values:
+    if value in type_palette:
+        color = type_palette[value]
+        legend_handles.append(Patch(color=color, label=f'ISA Type Status: {value}'))  
+
+# Add colorbar manually above the legend
+cbar_ax = g.fig.add_axes([1.02, 0.5, 0.015, 0.4])  # [x, y, width, height]
+g.fig.colorbar(sm, cax=cbar_ax, label="Spearman correlation")
+
+# Add stacked legend below the colorbar
+legend_ax = g.fig.add_axes([1.02, 0.2, 0.015, 0.2])
+legend_ax.axis('off')  # Hide the axis
+
+# Add legend to this custom axis
+legend = legend_ax.legend(
+    handles=legend_handles,
+    loc='upper left',
+    frameon=False,
+)
+
+plt.tight_layout()
+plt.savefig(output_path, bbox_inches="tight", dpi=600)
+plt.clf()
+plt.close()
 
 
 col_order = g.data2d.columns
@@ -828,8 +1119,6 @@ plt.tight_layout()
 plt.savefig(output_path, bbox_inches="tight", dpi=600)
 plt.clf()
 plt.close()
-
-flurp
 
 # Compute pairwise Bray-Curtis distances between samples
 # Here, each row in asv_df is assumed to be a sample

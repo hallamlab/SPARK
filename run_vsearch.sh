@@ -208,8 +208,8 @@ dereplicate_sequences() {
 denoise_asv() {
     echo "Step 6: Performing ASV denoising with UNOISE..."
     COUNT=$(awk '/^>/ {count++} END {print count}' "${CONCAT_DIR}/concat.fasta")
-    #MINSIZE=$(echo "($COUNT * 0.00005)/1" | bc) # https://www.nature.com/articles/nmeth.2276
-    MINSIZE=3
+    MINSIZE=$(echo "($COUNT * 0.00005)/1" | bc) # https://www.nature.com/articles/nmeth.2276
+    #MINSIZE=3
     vsearch --cluster_unoise ${DEREP_DIR}/derep.fasta \
             --centroids ${DEN_DIR}/centroids.fasta \
             --sizein \
@@ -247,14 +247,20 @@ swarm_clustering() {
 
 # Function to assign counts and create ASV count matrix
 create_count_matrix() {
+<<<<<<< HEAD
     echo "Step 9: Creating ASV count matrix..."
     cp ${NOC_DIR}/nochimeras.fasta ${ASV_DIR}/ASVs.fasta
+=======
+    echo "Step 10: Creating ASV count matrix..."
+    #cat ${QC_DIR}/*.fastq.gz > ${CONCAT_DIR}/fastp_qc_concat.fastq.gz
+>>>>>>> a600334 (updated to brush)
     vsearch --usearch_global ${CONCAT_DIR}/concat.fasta \
             --db ${ASV_DIR}/ASVs.fasta \
             --id 0.999 \
             --otutabout ${ASV_DIR}/ASV_counts.tsv \
             --threads ${THREADS} \
             --log ${LOG_DIR}/count_log.txt
+<<<<<<< HEAD
 }
 
 # Function to remove nontarget
@@ -266,6 +272,17 @@ filter_table() {
             5000 0 \
             ${ASV_DIR}/ASVs.fasta \
             ${ASV_DIR}/ASVs_filtered.fasta
+=======
+    
+    #echo "Step 10: Filtering samples by ASV sum..."
+    #python filter_ASV_table.py \
+    #        ${ASV_DIR}/ASV_counts.tsv \
+    #        ${REFDB_DIR}/spark_metadata.tsv \
+    #        ${ASV_DIR}/ASV_filtered.tsv \
+    #        5000 0.005
+    #echo "Step 10: ASV count matrix created and filtered."
+}
+>>>>>>> a600334 (updated to brush)
 
     echo "Step 10: ASV count matrix filtered."
 }
