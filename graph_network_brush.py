@@ -425,7 +425,7 @@ plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
 
-network_file = os.path.join(data_dir, "spark_old_output/brush/spieceasi/network_pos_all.graphml")
+network_file = os.path.join(data_dir, "spark_old_output/brush/spieceasi/network_pos_sub.graphml")
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
