@@ -6,16 +6,16 @@ library(dendextend)
 library(caret)
 
 # Define output directory
-out_dir <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/cca"
+out_dir <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/brush/cca"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
-count_data_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/final_output/ASVs/ASV_final.micro.tsv"
+count_data_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/brush/ASVs/ASV_final.micro.tsv"
 asv_counts <- t(read.delim(count_data_path, row.names = 1, check.names = FALSE))
 vocdata     <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db/VOC_table.tsv"
-voc_data    <- read.delim(vocdata, row.names = 1, check.names = FALSE)
+voc_data    <- read.delim(vocdata, row.names = 4, check.names = FALSE)
 
 # Clean rownames
 rownames(asv_counts) <- sapply(rownames(asv_counts), function(id){

@@ -24,173 +24,19 @@ sns.set_theme()  # re-applies style with updated rcParams
 sns.set_style("white")
 
 
-def plot_volcano(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0,
-                 output_file='volcano_plot.svg', no_sig=False
-                 ):
-    # Load data
-    
+def sig_table(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0, non_sig=False):
     # Compute log-transformed p-values
     df['log_p'] = -np.log10(df['p.value']).round(1)
-    
-    # Define colors based on thresholds
-    if no_sig:
+    if non_sig:
         df['significance'] = True
     else:
         df['significance'] = False  # Default color for non-significant
         df.loc[((df['p.value'] < p_thresh) & (df['stat'] > stat_thresh)), 'significance'] = True 
-    
     df['color'] = [cmap[ind[i]] if s else 'lightgray' for i,s in zip(df['index'], df['significance'])]
     df['label'] = [ind[i] if s else 'not_indicator' for i,s in zip(df['index'], df['significance'])]
     cmap['not_indicator'] = 'lightgray'
 
-    # Create plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    # Then plot red points on top
-    sig = df #[df['significance'] == True]
-    palette = dict(zip(sig['color'], sig['color']))
-
-    ax= sns.stripplot(data=sig, x='stat', y='log_p', hue='color', orient="h",
-                  dodge=True, ax=ax, alpha=0.75, legend=False, palette=palette,
-                  jitter=True, size=5, linewidth=0.25, edgecolor='gray'
-                  )
-
-    # Create legend handles with light grey borders
-    legend_handles = [
-        mpatches.Rectangle((0, 0), 1, 1, facecolor=color, edgecolor='lightgray', linewidth=0.5, label=type)
-        for type, color in cmap.items()
-    ]
-
-    # Add legend outside plot
-    plt.legend(
-        handles=legend_handles,
-        title='ISA type',
-        bbox_to_anchor=(1.05, 1),
-        loc='upper left',
-        borderaxespad=0.
-    )
-
-    # Labels and title
-    plt.xlabel('Effect Size (stat)')
-    plt.ylabel('-log10(p-value)')
-    plt.title(f"Indicator Species Analysis (pval <= {p_thresh})")
-    
-    # Round limits for nice ticks
-    xmin = 0
-    xmax = np.ceil(df['stat'].max() * 10) / 10  # e.g., 0.87 → 0.9
-    # Generate ticks every 0.1
-    xticks = np.arange(xmin, xmax + 0.01, 0.1)  # add 0.01 to ensure inclusion
-    # Set ticks and limits
-    ax.set_xticks(xticks)
-    ax.set_xlim(xmin, xmax)
-    ax.tick_params(axis='x', labelsize=10, bottom=True)
-    ax.invert_yaxis()
-    # Get current ticks and keep every other one
-    current_ticks = plt.yticks()[0]
-    plt.yticks(current_ticks[::2])
-    ax.spines['left'].set_visible(True)
-    ax.tick_params(axis='y', which='both', length=4, width=1, color='black', left=True, right=False)
-
-    # Optional: fix layout
-    fig.subplots_adjust(bottom=0.15)
-
-    # Save and show
-    plt.savefig(output_file, bbox_inches='tight')
-    plt.savefig(output_file.replace('.svg', '.pdf'), bbox_inches='tight')
-    plt.close()
-
     return df
-
-
-def plot_type_taxa(df, ind, p_thresh=0.05, stat_thresh=0.0, output_file='volcano_plot.svg'):
-
-    # List of unique Phyla in your data
-    phyla = df['Phylum'].unique()
-
-    # Generate color palette (qualitative)
-    palette = sns.color_palette('tab20', len(phyla))  # or 'Set3', 'Paired', etc.
-
-    # Map phylum to color
-    phylum_color_dict = dict(zip(phyla, palette))
-    phylum_color_dict['not_indicator'] = "lightgray"
-
-    # Define colors based on thresholds
-    df['type_significance'] = False  # Default color for non-significant
-    df.loc[((df['type_p_value'] < p_thresh) & (df['type_stat'] > stat_thresh)), 'type_significance'] = True 
-    sig_phyla = df.loc[df['type_significance'], 'Phylum'].unique()
-    df['type_color'] = [i if s else 'not_indicator' for i,s in zip(df['Phylum'], df['type_significance'])]
-
-    # Create plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    # Plot non-red points first
-        # Then plot red points on top
-    sig = df #[df['significance'] == True]
-
-    ax= sns.stripplot(data=sig, x='type_stat', y='type_log_p', hue='type_color', orient="h",
-                  dodge=True, ax=ax, alpha=0.75, legend=False, palette=phylum_color_dict,
-                  jitter=True, size=5, linewidth=0.25, edgecolor='gray'
-                  )
-
-    '''
-    non_sig = df[df['type_significance'] == False]
-    plt.scatter(non_sig['type_stat'], non_sig['type_log_p'], c=non_sig['type_color'], alpha=1,
-                edgecolors='gray', linewidths=0.25,
-                s=10
-                )
-    
-    # Then plot red points on top
-    sig = df[df['type_significance'] == True]
-    plt.scatter(sig['type_stat'], sig['type_log_p'], c=sig['type_color'], alpha=1, edgecolors='gray', linewidths=0.25,
-                s=75
-                )
-    
-    # Add reference lines
-    plt.axhline(-np.log10(p_thresh), linestyle='--', color='gray', linewidth=1, label=f'p={p_thresh}')
-    '''
-    # Create legend handles
-    legend_handles = [
-        mpatches.Patch(color=color, label=phylum)
-        for phylum, color in phylum_color_dict.items()
-        if phylum in sig_phyla
-    ]
-    
-
-    # Add legend outside plot
-    plt.legend(
-        handles=legend_handles,
-        title='Phylum',
-        bbox_to_anchor=(1.05, 1),  # Right side
-        loc='upper left',
-        borderaxespad=0.
-    )
-
-    # Labels and title
-    plt.xlabel('Effect Size (stat)')
-    plt.ylabel('-log10(p-value)')
-    plt.title(f"Indicator Species Analysis (pval <= {p_thresh})")
-
-    # Round limits for nice ticks
-    xmin = 0
-    xmax = np.ceil(df['type_stat'].max() * 10) / 10  # e.g., 0.87 → 0.9
-    # Generate ticks every 0.1
-    xticks = np.arange(xmin, xmax + 0.01, 0.1)  # add 0.01 to ensure inclusion
-    # Set ticks and limits
-    ax.set_xticks(xticks)
-    ax.set_xlim(xmin, xmax)
-    ax.tick_params(axis='x', labelsize=10, bottom=True)
-    ax.invert_yaxis()
-    # Get current ticks and keep every other one
-    current_ticks = plt.yticks()[0]
-    plt.yticks(current_ticks[::2])
-    ax.spines['left'].set_visible(True)
-    ax.tick_params(axis='y', which='both', length=4, width=1, color='black', left=True, right=False)
-
-    # Optional: fix layout
-    fig.subplots_adjust(bottom=0.15)
-
-    # Save and show
-    plt.savefig(output_file, bbox_inches='tight')
-    plt.savefig(output_file.replace('.svg', '.pdf'), bbox_inches='tight')
-    plt.close()
 
 def plot_p_vs_stat_no_overlap(
     df,
@@ -215,16 +61,18 @@ def plot_p_vs_stat_no_overlap(
     show_legend=True,
     legend_color_title="Type",
     legend_marker_title="Status",
+    # ---------- NEW (only what’s needed to lock plot size & add outer pad) ----------
+    plot_size_in=(8.0, 6.0),      # fixed size of the *data rectangle* (inside spines)
+    axes_pad_in=(0.8, 0.6, 0.3, 0.2),  # (left, bottom, right, top) space for tick/axis labels, in inches
+    figure_edge_pad_in=0.25,      # uniform pad around the whole figure (plot + legends), in inches
+    legend_pad_in=0.45,           # gap between plot pane and legend pane (inches)
+    legend_vgap_in=0.25,          # vertical gap between color & marker legends (inches)
+    legend_fontsize=10,
 ):
     """
     Scatter of x_col vs y_col with guaranteed non-overlap via axis-wise repulsive jitter.
-    - If hue_col values are *color strings*, but you also provide `type_palette={name->color}`,
-      the plot will use the NAMES (keys) for hue so the legend shows names, not colors.
-    - Legends:
-        * Color legend lists ALL entries in `type_palette` (even if not present in data).
-        * Marker legend lists ALL entries in `marker_dict` (even if not present in data).
-
-    Returns: jittered DataFrame with columns '_x_' and '_y_'.
+    The *data area* (inside the spines) is locked to `plot_size_in` no matter how big legends are.
+    An outer pad is applied so nothing is clipped in the saved image.
     """
 
     # ---------- prep ----------
@@ -295,33 +143,27 @@ def plot_p_vs_stat_no_overlap(
     plot_palette = None
 
     if hue_col is not None:
-        # Build a plotting hue column that prefers *names* when a mapping is given
         dd["__hue_raw__"] = dd[hue_col].astype(str)
 
         if type_palette:
-            # reverse map {color -> name}
             rev = {v: k for k, v in type_palette.items()}
             def to_name(v):
-                # if the cell already holds a name key, keep it; else try color->name
                 if v in type_palette:
                     return v
                 if mcolors.is_color_like(v) and v in rev:
                     return rev[v]
-                return v  # fallback: leave as-is (but legend will still show palette keys)
+                return v  # fallback: leave as-is
             dd["__hue__"] = dd["__hue_raw__"].map(to_name)
             hue_used = "__hue__"
-            # palette for plotting only needs present labels that are in the provided palette
             present = [h for h in dd["__hue__"].dropna().unique().tolist() if h in type_palette]
             plot_palette = {k: type_palette[k] for k in present}
         else:
-            # No palette provided: if values are actual colors, use identity palette
             levels = dd["__hue_raw__"].dropna().unique().tolist()
             hue_used = "__hue_raw__"
             if all(mcolors.is_color_like(v) for v in levels):
-                plot_palette = {v: v for v in levels}  # identity
+                plot_palette = {v: v for v in levels}
             else:
-                plot_palette = None  # seaborn default palette
-    # else: no hue
+                plot_palette = None  # seaborn default
 
     # ---------- resolve style (marker) semantics ----------
     style_used = None
@@ -335,13 +177,109 @@ def plot_p_vs_stat_no_overlap(
             default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
             markers_for_plot = {c: default_markers[i % len(default_markers)] for i, c in enumerate(cats)}
 
+    # ---------- legends (handles for measurement) ----------
+    color_handles = []
+    if show_legend:
+        if type_palette:
+            for name, color in type_palette.items():
+                color_handles.append(
+                    mlines.Line2D([], [], marker="o", linestyle="None",
+                                  markerfacecolor=color, markeredgecolor="black",
+                                  markeredgewidth=0.5, markersize=8, label=str(name))
+                )
+        elif hue_used is not None:
+            present_levels = dd[hue_used].dropna().unique().tolist()
+            if plot_palette:
+                for lab in present_levels:
+                    col = plot_palette.get(lab, "lightgray")
+                    color_handles.append(
+                        mlines.Line2D([], [], marker="o", linestyle="None",
+                                      markerfacecolor=col, markeredgecolor="black",
+                                      markeredgewidth=0.5, markersize=8, label=str(lab))
+                    )
+            else:
+                for lab in present_levels:
+                    color_handles.append(
+                        mlines.Line2D([], [], marker="o", linestyle="None",
+                                      markerfacecolor="lightgray", markeredgecolor="black",
+                                      markeredgewidth=0.5, markersize=8, label=str(lab))
+                    )
+
+    marker_handles = []
+    if show_legend and style_used is not None:
+        if marker_dict:
+            for name, mk in marker_dict.items():
+                marker_handles.append(
+                    mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
+                                  markeredgewidth=0.5, markersize=8, label=str(name))
+                )
+        elif isinstance(markers_for_plot, dict):
+            for name, mk in markers_for_plot.items():
+                marker_handles.append(
+                    mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
+                                  markeredgewidth=0.5, markersize=8, label=str(name))
+                )
+
+    # ---------- measure legend sizes (inches) ----------
+    def _legend_size_in(handles, title, fontsize):
+        if not handles:
+            return (0.0, 0.0)
+        ftmp, axtmp = plt.subplots(figsize=(2, 2), dpi=100)
+        leg = axtmp.legend(handles=handles, title=title, frameon=True, loc="upper left",
+                           fontsize=fontsize, title_fontsize=fontsize)
+        ftmp.canvas.draw()
+        bbox = leg.get_window_extent(ftmp.canvas.get_renderer())
+        w_in = bbox.width / ftmp.dpi
+        h_in = bbox.height / ftmp.dpi
+        plt.close(ftmp)
+        return (w_in, h_in)
+
+    color_w, color_h = _legend_size_in(color_handles, legend_color_title, legend_fontsize)
+    marker_w, marker_h = _legend_size_in(marker_handles, legend_marker_title, legend_fontsize)
+
+    legend_w_in = 0.0
+    legend_h_in = 0.0
+    if show_legend:
+        legend_w_in = max(color_w, marker_w)
+        legend_h_in = (color_h if color_h else 0.0) + (marker_h if marker_h else 0.0)
+        if color_h and marker_h:
+            legend_h_in += legend_vgap_in
+
+    # ---------- figure layout with fixed data area & outer pad ----------
+    plot_w_in, plot_h_in = plot_size_in                  # size of data rectangle
+    padL, padB, padR, padT = axes_pad_in                 # label/tick space around data rectangle
+    pane_w_in = plot_w_in + padL + padR                  # total plot pane width
+    pane_h_in = plot_h_in + padT + padB                  # total plot pane height
+
+    fig_w_in = (figure_edge_pad_in + pane_w_in +               # left edge + plot pane
+                ((legend_pad_in + legend_w_in) if (show_legend and legend_w_in > 0) else 0.0) +
+                figure_edge_pad_in)                            # right edge
+    fig_h_in = figure_edge_pad_in + max(pane_h_in, legend_h_in if show_legend else pane_h_in) + figure_edge_pad_in
+
+    fig = plt.figure(figsize=(fig_w_in, fig_h_in), dpi=100)
+
+    # Main axes placed so the *data rectangle* is exactly plot_size_in
+    ax_left = (figure_edge_pad_in + padL) / fig_w_in
+    ax_bottom = (figure_edge_pad_in + padB) / fig_h_in
+    ax_w = plot_w_in / fig_w_in
+    ax_h = plot_h_in / fig_h_in
+    ax = fig.add_axes([ax_left, ax_bottom, ax_w, ax_h])
+
+    # Legend pane to the right (off axes)
+    leg_ax = None
+    if show_legend and legend_w_in > 0:
+        leg_left = (figure_edge_pad_in + pane_w_in + legend_pad_in) / fig_w_in
+        leg_w = legend_w_in / fig_w_in
+        leg_ax = fig.add_axes([leg_left, figure_edge_pad_in / fig_h_in, leg_w,
+                               1.0 - 2 * figure_edge_pad_in / fig_h_in])
+        leg_ax.axis("off")
+
     # ---------- plot ----------
-    fig, ax = plt.subplots(figsize=(8, 6))
     plot_kwargs = dict(
         data=dd, x="_x_", y="_y_",
         s=point_size, alpha=alpha,
         linewidth=0.5, edgecolor="black",
-        ax=ax, legend=False  # we'll build explicit legends
+        ax=ax, legend=False
     )
     if hue_used is not None:
         plot_kwargs["hue"] = hue_used
@@ -353,6 +291,7 @@ def plot_p_vs_stat_no_overlap(
 
     sns.scatterplot(**plot_kwargs)
 
+    # labels, ticks, limits (ticks/labels now have room due to axes_pad_in)
     ax.set_xlabel(x_col if x_col in df.columns else x_src)
     ax.set_ylabel(y_col if y_col in df.columns else y_src)
     ax.set_xlim(0.1, xmax + 0.1)
@@ -362,169 +301,27 @@ def plot_p_vs_stat_no_overlap(
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(axis="both", which="both", length=4, width=1)
 
-    # ---------- legends (never clip) ----------
-    extra_artists = []
-
-    if show_legend:
-        # Color legend: show ALL keys from type_palette if provided,
-        # otherwise show present hue levels (with colors if available).
-        color_handles = []
-        if type_palette:
-            for name, color in type_palette.items():
-                color_handles.append(
-                    mlines.Line2D([], [], marker="o", linestyle="None",
-                                  markerfacecolor=color, markeredgecolor="black",
-                                  markersize=8, label=str(name), markeredgewidth=0.5)
-                )
-        elif hue_used is not None:
-            present_levels = dd[hue_used].dropna().unique().tolist()
-            if plot_palette:
-                for lab in present_levels:
-                    col = plot_palette.get(lab, "lightgray")
-                    color_handles.append(
-                        mlines.Line2D([], [], marker="o", linestyle="None",
-                                      markerfacecolor=col, markeredgecolor="black",
-                                      markersize=8, label=str(lab), markeredgewidth=0.5)
-                    )
-            else:
-                for lab in present_levels:
-                    color_handles.append(
-                        mlines.Line2D([], [], marker="o", linestyle="None",
-                                      markerfacecolor="lightgray", markeredgecolor="black",
-                                      markersize=8, label=str(lab), markeredgewidth=0.5)
-                    )
-
+    # ---------- place legends inside legend pane ----------
+    if show_legend and leg_ax is not None:
+        y_cursor = 1.0
         if color_handles:
-            leg1 = ax.legend(handles=color_handles, title=legend_color_title,
-                             loc="upper left", bbox_to_anchor=(1.01, 1.0),
-                             borderaxespad=0.0, frameon=True)
-            ax.add_artist(leg1)
-            extra_artists.append(leg1)
-
-        # Marker legend: ALL keys from marker_dict if provided,
-        # else only present styles.
-        marker_handles = []
-        if style_used is not None:
-            if marker_dict:
-                for name, mk in marker_dict.items():
-                    marker_handles.append(
-                        mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
-                                      markersize=8, label=str(name), markeredgewidth=0.5)
-                    )
-            elif isinstance(markers_for_plot, dict):
-                for name, mk in markers_for_plot.items():
-                    marker_handles.append(
-                        mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
-                                      markersize=8, label=str(name), markeredgewidth=0.5)
-                    )
+            leg1 = leg_ax.legend(handles=color_handles, title=legend_color_title,
+                                 loc="upper left", bbox_to_anchor=(0.0, y_cursor),
+                                 frameon=True, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+            leg_ax.add_artist(leg1)
+            y_cursor -= ((color_h if color_h else 0.0) + legend_vgap_in) / fig_h_in
         if marker_handles:
-            leg2 = ax.legend(handles=marker_handles, title=legend_marker_title,
-                             loc="upper left", bbox_to_anchor=(1.01, 0.55),
-                             borderaxespad=0.0, frameon=True)
-            extra_artists.append(leg2)
+            leg_ax.legend(handles=marker_handles, title=legend_marker_title,
+                          loc="upper left", bbox_to_anchor=(0.0, y_cursor),
+                          frameon=True, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
 
-    # ---------- save (expand bbox to include legends) ----------
-    plt.tight_layout()
-    if extra_artists:
-        plt.savefig(output_file, bbox_inches="tight", bbox_extra_artists=extra_artists)
-        if output_file.endswith(".svg"):
-            plt.savefig(output_file.replace(".svg", ".pdf"),
-                        bbox_inches="tight", bbox_extra_artists=extra_artists)
-    else:
-        plt.savefig(output_file, bbox_inches="tight")
-        if output_file.endswith(".svg"):
-            plt.savefig(output_file.replace(".svg", ".pdf"), bbox_inches="tight")
-    plt.close()
+    # ---------- save (no tight bbox so the data area stays fixed) ----------
+    fig.savefig(output_file)
+    if output_file.endswith(".svg"):
+        fig.savefig(output_file.replace(".svg", ".pdf"))
+    plt.close(fig)
 
     return dd
-
-def plot_comb_taxa(df, ind, p_thresh=0.05, stat_thresh=0.0, output_file='volcano_plot.svg'):
-
-    # List of unique Phyla in your data
-    phyla = df['Phylum'].unique()
-    # Generate color palette (qualitative)
-    palette = sns.color_palette('tab20', len(phyla))  # or 'Set3', 'Paired', etc.
-    # Map phylum to color
-    phylum_color_dict = dict(zip(phyla, palette))
-    # Define colors based on thresholds
-    df['status_significance'] = False  # Default color for non-significant
-    df.loc[((df['status_p_value'] < p_thresh) & (df['status_stat'] > stat_thresh)), 'status_significance'] = True 
-    sig_phyla = df.loc[df['status_significance'], 'Phylum'].unique()
-
-    
-    df['status_color'] = [phylum_color_dict[i] if s else 'lightgray' for i,s in zip(df['Phylum'], df['status_significance'])]
-    # Create plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sig = df #[df['significance'] == True]
-    palette = dict(zip(sig['status_color'], sig['status_color']))
-
-    ax= sns.stripplot(data=sig, x='status_stat', y='status_log_p', hue='status_color', orient="h",
-                  dodge=True, ax=ax, alpha=0.75, legend=False, palette=palette,
-                  jitter=True, size=5, linewidth=0.25, edgecolor='gray'
-                  )
-
-    '''
-    # Plot non-red points first
-    non_sig = df[df['status_significance'] == False]
-    plt.scatter(non_sig['status_stat'], non_sig['status_log_p'], c=non_sig['status_color'], alpha=1,
-                edgecolors='gray', linewidths=0.25,
-                s=10
-                )
-    
-    # Then plot red points on top
-    sig = df[df['status_significance'] == True]
-    plt.scatter(sig['status_stat'], sig['status_log_p'], c=sig['status_color'], alpha=1, edgecolors='gray',
-        linewidths=0.25,
-                s=75
-                )
-    
-    # Add reference lines
-    plt.axhline(-np.log10(p_thresh), linestyle='--', color='gray', linewidth=1, label=f'p={p_thresh}')
-    '''
-    # Create legend handles
-    legend_handles = [
-        mpatches.Patch(color=color, label=phylum)
-        for phylum, color in phylum_color_dict.items()
-        if phylum in sig_phyla
-    ]
-
-    # Add legend outside plot
-    plt.legend(
-        handles=legend_handles,
-        title='Phylum',
-        bbox_to_anchor=(1.05, 1),  # Right side
-        loc='upper left',
-        borderaxespad=0.
-    )
-
-    # Labels and title
-    plt.xlabel('Effect Size (stat)')
-    plt.ylabel('-log10(p-value)')
-    plt.title(f"Indicator Species Analysis (pval <= {p_thresh})")
-
-    # Round limits for nice ticks
-    xmin = 0
-    xmax = np.ceil(df['status_stat'].max() * 10) / 10  # e.g., 0.87 → 0.9
-    # Generate ticks every 0.1
-    xticks = np.arange(xmin, xmax + 0.01, 0.1)  # add 0.01 to ensure inclusion
-    # Set ticks and limits
-    ax.set_xticks(xticks)
-    ax.set_xlim(xmin, xmax)
-    ax.tick_params(axis='x', labelsize=10, bottom=True)
-    ax.invert_yaxis()
-    # Get current ticks and keep every other one
-    current_ticks = plt.yticks()[0]
-    plt.yticks(current_ticks[::2])
-    ax.spines['left'].set_visible(True)
-    ax.tick_params(axis='y', which='both', length=4, width=1, color='black', left=True, right=False)
-   # Optional: fix layout
-    fig.subplots_adjust(bottom=0.15)
-
-    # Save and show
-    plt.savefig(output_file, bbox_inches='tight')
-    plt.savefig(output_file.replace('.svg', '.pdf'), bbox_inches='tight')
-    plt.close()
-
 
 def split_taxa_string(taxa_str, delimiter=';'):
     """
@@ -611,28 +408,47 @@ sub_df = df.loc[df['index'].isin(type_index.keys())]
 venn_sub_df = sub_df.copy()
 venn_sub_df['index'] = [type2_ind[venn2palette[venn_dict[x]]] for x in venn_sub_df['ASV_ID']]
 
-type_isa_df = plot_volcano(sub_df, type_index, type_palette,
-                           output_file=os.path.join(data_dir, 'spark_old_output/brush/indicspecies/subclass2_ISA_plot.svg')
-                           )
-type_venn_df = plot_volcano(venn_sub_df, type_index, type_palette,
-                           output_file=os.path.join(data_dir, 'spark_old_output/brush/indicspecies/subclass2_Venn_plot.svg'),
-                           no_sig=True
-                           )
-
+type_isa_df = sig_table(sub_df, type_index, type_palette)
 type_isa_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_index', 'type_stat', 'type_p_value', 'type_log_p', 'type_significance',
                       'type_color', 'type_label'
                       ]
+plot_p_vs_stat_no_overlap(type_isa_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/subclass2_ISA_plot.svg'),
+                          type_palette=type_palette,
+                          x_col="type_stat",
+                          y_col="type_log_p",
+                          hue_col="type_label",
+                          )
+                           
+type_venn_df = sig_table(venn_sub_df, type_index, type_palette, non_sig=True)
 type_venn_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_index', 'type_stat', 'type_p_value', 'type_log_p', 'type_significance',
                       'type_color', 'type_label'
                       ]
+plot_p_vs_stat_no_overlap(type_venn_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/subclass2_Venn_plot.svg'),
+                          type_palette=type_palette,
+                          x_col="type_stat",
+                          y_col="type_log_p",
+                          hue_col="type_label",
+                          )
 
 sub_tax_df = sub_df.merge(tax_df, on='ASV_ID')
-
-plot_type_taxa(sub_tax_df, type_index, output_file=os.path.join(data_dir,
-               'spark_old_output/brush/indicspecies/subclass2_ISA_plot_Phylum.svg')
-)
+# List of unique Phyla in your data
+phyla = sub_tax_df['Phylum'].unique()
+# Generate color palette (qualitative)
+palette = sns.color_palette('tab20', len(phyla))  # or 'Set3', 'Paired', etc.
+# Map phylum to color
+phylum_color_dict = dict(zip(phyla, palette))
+phylum_color_dict['not_indicator'] = "lightgray"
+plot_p_vs_stat_no_overlap(sub_tax_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/subclass2_ISA_plot_Phylum.svg'),
+                          type_palette=phylum_color_dict,
+                          x_col="type_stat",
+                          y_col="type_log_p",
+                          hue_col="Phylum",
+                          )
 
 df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/indicspecies/status_indicator_species_results.tsv'), sep='\t')
 df.rename(columns={df.columns[0]: 'ASV_ID'}, inplace=True)
@@ -640,11 +456,18 @@ df.rename(columns={df.columns[0]: 'ASV_ID'}, inplace=True)
 index_dict = {1: 'Cancer', 2: 'Non-Cancer', 3: 'not_indicator'}
 status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026', 'not_indicator': 'lightgray'}
 marker_dict = {'Non-Cancer':'D', 'Cancer':'X', 'not_indicator':'o'}
-status_isa_df = plot_volcano(df, index_dict, status_palette, output_file=os.path.join(data_dir, 'spark_old_output/brush/indicspecies/status_Cancer_ISA_plot.svg'))
+status_isa_df = sig_table(df, index_dict, status_palette)
 status_isa_df.columns = ['ASV_ID', 'Cancer', 'Non-Cancer', 'status_index', 'status_stat',
                          'status_p_value', 'status_log_p', 'status_significance', 'status_color',
                          'status_label'
                          ]
+plot_p_vs_stat_no_overlap(status_isa_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/status_ISA_plot.svg'),
+                          type_palette=status_palette,
+                          x_col="status_stat",
+                          y_col="status_log_p",
+                          hue_col="status_label",
+                          )
 
 type_status_df = pd.merge(type_isa_df, status_isa_df, on='ASV_ID', how='right')
 type_status_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Type_status_ISA_results.tsv'), sep='\t')
@@ -658,10 +481,14 @@ plot_p_vs_stat_no_overlap(type_status_df,
                           style_col="status_label"
                           )
 
-TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
-plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
-               'spark_old_output/brush/indicspecies/Combined_ISA_plot_Phylum.svg')
-               )
+ts_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
+plot_p_vs_stat_no_overlap(ts_tax_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_ISA_plot_Phylum.svg'),
+                          type_palette=phylum_color_dict,
+                          x_col="type_stat",
+                          y_col="type_log_p",
+                          hue_col="Phylum",
+                          )
 
 type_status_df = pd.merge(type_venn_df, status_isa_df, on='ASV_ID', how='right')
 type_status_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Type_status_Venn_results.tsv'), sep='\t')
@@ -675,10 +502,14 @@ plot_p_vs_stat_no_overlap(type_status_df,
                           style_col="status_color"
                           )
 
-TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
-plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
-               'spark_old_output/brush/indicspecies/Combined_Venn_plot_Phylum.svg')
-               )
+ts_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
+plot_p_vs_stat_no_overlap(ts_tax_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_Venn_plot_Phylum.svg'),
+                          type_palette=phylum_color_dict,
+                          x_col="type_stat",
+                          y_col="type_log_p",
+                          hue_col="Phylum",
+                          )
 
 
 
