@@ -14,22 +14,15 @@ def main():
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
     # Create output directory if it doesn't exist
-    output_dir = os.path.join(data_dir, "spark_old_output/diversity")
-    mito_output_dir = os.path.join(data_dir, "spark_old_output/mito/diversity")
+    output_dir = os.path.join(data_dir, "spark_old_output/brush/diversity")
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
-    if mito_output_dir and not os.path.exists(mito_output_dir):
-        os.makedirs(mito_output_dir)
-        print(f"Created output directory: {mito_output_dir}")
 
-    asv_table = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_final.micro.tsv')
-    mito_table = os.path.join(data_dir, 'spark_old_output/mito/ASVs/ASV_final.mito.tsv')
+    asv_table = os.path.join(data_dir, 'spark_old_output/brush/ASVs/ASV_final.micro.tsv')
 
-    output_shannon = os.path.join(data_dir, 'spark_old_output/diversity/shannon.tsv')
-    output_shan_mito = os.path.join(data_dir, 'spark_old_output/mito/diversity/shannon.mito.tsv')
-    output_bray = os.path.join(data_dir, 'spark_old_output/diversity/bray.tsv')
-    output_br_mito = os.path.join(data_dir, 'spark_old_output/mito/diversity/bray.mito.tsv')
+    output_shannon = os.path.join(data_dir, 'spark_old_output/brush/diversity/shannon.tsv')
+    output_bray = os.path.join(data_dir, 'spark_old_output/brush/diversity/bray.tsv')
 
     # Load input tables
     asv_df = pd.read_csv(asv_table, sep="\t", index_col=0).T
@@ -44,18 +37,6 @@ def main():
     shannon_df.index.name = "sample"
     shannon_df.to_csv(output_shannon, sep="\t")
 
-    mito_df = pd.read_csv(mito_table, sep="\t", index_col=0).T
-    mito_df = mito_df[~(mito_df == 0).all(axis=1)]
-    
-    # Compute Shannon diversity for each sample from the ASV counts
-    shannon_results = {}
-    for sample in mito_df.index:
-        counts = mito_df.loc[sample].values
-        shannon_results[sample] = calc_shannon(counts)
-    shannon_df = pd.DataFrame.from_dict(shannon_results, orient="index", columns=["Shannon"])
-    shannon_df.index.name = "sample"
-    shannon_df.to_csv(output_shan_mito, sep="\t")
-    
     print(f"Shannon diversity saved to {output_shannon}")
 
     # Compute pairwise Bray-Curtis distances between sample
@@ -70,7 +51,7 @@ def main():
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
 
     # Compute pairwise Jaccard distances between sample
-    jaccard_output = os.path.join(data_dir, 'spark_old_output/diversity/jaccard.tsv')
+    jaccard_output = os.path.join(data_dir, 'spark_old_output/brush/diversity/jaccard.tsv')
 
     asv_binary = (asv_df > 0).astype(int).values  # Convert counts to presence/absence
     distances = pdist(asv_binary, metric="jaccard")
@@ -78,15 +59,6 @@ def main():
     jaccard_df = pd.DataFrame(jaccard_matrix, index=asv_df.index, columns=asv_df.index)
     jaccard_df.index.name = "sample"
     jaccard_df.to_csv(jaccard_output, sep="\t")
-
-    jaccard_mito_output = os.path.join(data_dir, 'spark_old_output/mito/diversity/jaccard.mito.tsv')
-
-    mito_binary = (mito_df > 0).astype(int).values
-    distances = pdist(mito_binary, metric="jaccard")
-    jaccard_matrix = squareform(distances)
-    jaccard_df = pd.DataFrame(jaccard_matrix, index=mito_df.index, columns=mito_df.index)
-    jaccard_df.index.name = "sample"
-    jaccard_df.to_csv(jaccard_mito_output, sep="\t")
 
     print(f"Jaccard beta diversity saved to {jaccard_output}")
 

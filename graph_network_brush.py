@@ -98,39 +98,21 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
-<<<<<<< HEAD
-node_features_file = os.path.join(data_dir, "spark_old_output/spieceasi/node_features.csv")
+node_features_file = os.path.join(data_dir, "spark_old_output/brush/spieceasi/node_features.csv")
 nfeatures_df = pd.read_csv(node_features_file, header=0, sep=',', index_col=0)
-isa_type_file = os.path.join(data_dir, "spark_old_output/indicspecies/type_group_indicator_species_results.tsv")
+isa_type_file = os.path.join(data_dir, "spark_old_output/brush/indicspecies/subclass2_indicator_species_results.tsv")
 isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
 isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-isa_status_file = os.path.join(data_dir, "spark_old_output/indicspecies/status_indicator_species_results.tsv")
+isa_status_file = os.path.join(data_dir, "spark_old_output/brush/indicspecies/status_indicator_species_results.tsv")
 isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
 isastatus_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-type_summary_file = os.path.join(data_dir, "spark_old_output/indicspecies/type_group_indicator_species_summary.tsv")
+type_summary_file = os.path.join(data_dir, "spark_old_output/brush/indicspecies/subclass2_indicator_species_summary.tsv")
 type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
 type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-status_summary_file = os.path.join(data_dir, "spark_old_output/indicspecies/status_indicator_species_summary.tsv")
+status_summary_file = os.path.join(data_dir, "spark_old_output/brush/indicspecies/status_indicator_species_summary.tsv")
 status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
 status_type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-venn_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
-=======
-node_features_file = os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/node_features.csv")
-nfeatures_df = pd.read_csv(node_features_file, header=0, sep=',', index_col=0)
-isa_type_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_results_Brush.tsv")
-isatype_df = pd.read_csv(isa_type_file, header=0, sep='\t', index_col=0).reset_index()
-isatype_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-isa_status_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_results_Brush.tsv")
-isastatus_df = pd.read_csv(isa_status_file, header=0, sep='\t', index_col=0).reset_index()
-isastatus_df.rename(columns={'level_0': 'ASV_ID'}, inplace=True)
-type_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/subclass2_indicator_species_summary_Brush.tsv")
-type_summary_df = pd.read_csv(type_summary_file, header=0, sep='\t')
-type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary_Brush.tsv")
-status_type_summary_df = pd.read_csv(status_summary_file, header=0, sep='\t')
-status_type_summary_df.rename(columns={'ASV': 'ASV_ID'}, inplace=True)
-venn_df = pd.read_csv(os.path.join(data_dir, "vsearch_output/metadata/venn3_presence_table_Brush.tsv"), sep="\t", header=0)
->>>>>>> a600334 (updated to brush)
+venn_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
 
 status_index = {1: 'Cancer',
                 2: 'Non-Cancer',
@@ -195,11 +177,7 @@ ss_long_df['tmp_grp'] = [status_index[x] for x in ss_long_df['index']]
 ss_long_df = ss_long_df.loc[ss_long_df['Group'] == ss_long_df['tmp_grp']]
 ss_long_df.drop(columns=['tmp_grp'], inplace=True)
 
-<<<<<<< HEAD
-asv_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_final.micro.tsv')
-=======
-asv_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_Brush.micro.tsv')
->>>>>>> a600334 (updated to brush)
+asv_path = os.path.join(data_dir, 'spark_old_output/brush/ASVs/ASV_final.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 asv_stack_df = asv_df.stack().reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
@@ -207,11 +185,7 @@ mean_stack_df = asv_stack_df.groupby(['ASV_ID'])['count'].mean().reset_index()
 mean_stack_df.columns = ['ASV_ID', 'mean']
 mean_stack_df['mean'] = np.ceil(mean_stack_df['mean'])
 
-<<<<<<< HEAD
-metadata_table_path = os.path.join(data_dir, 'spark_old_output/metadata/metadata_updated.tsv')
-=======
-metadata_table_path = os.path.join(data_dir, 'vsearch_output/metadata/master_table_Brush.tsv')
->>>>>>> a600334 (updated to brush)
+metadata_table_path = os.path.join(data_dir, 'spark_old_output/brush/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 metadata_df.set_index('sample', inplace=True)
 metadata_df['status'] = ['Non-Cancer' if x == 'Non-Cancer' else x for x in metadata_df['Case']]
@@ -280,7 +254,7 @@ isatype_df['venn_color'] = venn_colors
 
 
 
-taxonomy_path = os.path.join(data_dir, 'spark_old_output/metadata/taxonomy_updated.tsv')
+taxonomy_path = os.path.join(data_dir, 'spark_old_output/brush/metadata/taxonomy_updated.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['ASV_ID'] = [x.rsplit(';', 1)[0] for x in tax_df['ASV_ID']]
 tax_df.set_index('ASV_ID', inplace=True)
@@ -340,19 +314,11 @@ phylum_color_dict = dict(zip(phyla, palette))
 nfeat_type_df = nfeatures_df.merge(isatype_df, left_on='Taxon', right_index=True)
 nfeat_status_df = nfeatures_df.merge(isastatus_df, left_on='Taxon', right_index=True)
 
-<<<<<<< HEAD
-nfeat_type_df.to_csv(os.path.join(data_dir, "spark_old_output/spieceasi/node_features.type.tsv"),
+nfeat_type_df.to_csv(os.path.join(data_dir, "spark_old_output/brush/spieceasi/node_features.type.tsv"),
                      sep='\t'
                      )
 
-nfeat_status_df.to_csv(os.path.join(data_dir, "spark_old_output/spieceasi/node_features.status.tsv"),
-=======
-nfeat_type_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/node_features.type.tsv"),
-                     sep='\t'
-                     )
-
-nfeat_status_df.to_csv(os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/node_features.status.tsv"),
->>>>>>> a600334 (updated to brush)
+nfeat_status_df.to_csv(os.path.join(data_dir, "spark_old_output/brush/spieceasi/node_features.status.tsv"),
                      sep='\t'
                      )
 
@@ -371,7 +337,7 @@ keep_cols = ['Taxon', 'Degree',
              'EigenCentral','stat',
              'p.value', 'log_p',
              'significance', 'color',
-             'type_group',
+             'subclass2',
              'mean',
              'IndVal', 'status_color',
              'type_color', 'Phylum',
@@ -383,11 +349,7 @@ keep_cols = ['Taxon', 'Degree',
              ]
 
 
-<<<<<<< HEAD
-network_file = os.path.join(data_dir, "spark_old_output/spieceasi/network_pos_all.graphml")
-=======
-network_file = os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/network_pos_all.graphml")
->>>>>>> a600334 (updated to brush)
+network_file = os.path.join(data_dir, "spark_old_output/brush/spieceasi/network_pos_all.graphml")
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -460,17 +422,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are all positive correlations")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
 
-network_file = os.path.join(data_dir, "spark_old_output/spieceasi/network_pos_sub.graphml")
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_POS_ALL.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_POS_ALL.pdf"), bbox_inches='tight')
-
-network_file = os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/network_pos_all.graphml")
->>>>>>> a600334 (updated to brush)
+network_file = os.path.join(data_dir, "spark_old_output/brush/spieceasi/network_pos_all.graphml")
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -543,13 +498,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree\nEdge are positive correlations >= 0.1")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_SUB.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_degree_plot_POS_SUB.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -612,13 +562,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on ASV Mean Abundance")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_abundance_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_abundance_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_abundance_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_abundance_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_abundance_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_abundance_plot.pdf"), bbox_inches='tight')
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -692,14 +637,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot.pdf"), bbox_inches='tight')
-
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
 
 '''
 G = nx.read_graphml(network_file)
@@ -792,16 +731,10 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Sample Type\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
 '''
 '''
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_LABELED.pdf"), bbox_inches='tight')
-
->>>>>>> a600334 (updated to brush)
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -892,15 +825,9 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
 '''
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
-
->>>>>>> a600334 (updated to brush)
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -968,14 +895,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Venn Diagram Grouping\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_venn_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_venn_plot.pdf"), bbox_inches='tight')
-
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
 
 '''
 G = nx.read_graphml(network_file)
@@ -1078,15 +999,9 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
 '''
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_status_plot_LABELED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_status_plot_LABELED.pdf"), bbox_inches='tight')
-
->>>>>>> a600334 (updated to brush)
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -1165,13 +1080,8 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on ISA for Cancer Status\nNode size based on Indicator Species Strength")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_status_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_status_plot.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_status_plot.pdf"), bbox_inches='tight')
 
 
 G = nx.read_graphml(network_file)
@@ -1247,13 +1157,9 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_Phylum_ABUND.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_Phylum_ABUND.pdf"), bbox_inches='tight')
+
 
 
 G = nx.read_graphml(network_file)
@@ -1329,739 +1235,5 @@ plt.ylim(auto=False)      # Freeze y-axis scaling
 plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on Phylum \nNode size based on Mean ASV Abundance")
 plt.axis('off')
 plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ONLY BRING THE GOOD STUFF BACK UP
-flurp
-
-
-for t in ['BAL', 'Lung Brush', 'Oral Rinse']:
-    t_str = t.replace(' ', '_')
-    print(t)
-    nfeat_sub_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == t]
-    G = nx.read_graphml(network_file)
-    # Add metadata to graph nodes
-    for node in G.nodes:
-        if node in nfeat_sub_df.index:
-            for col in nfeat_sub_df.columns:
-                if col in keep_cols:
-                    G.nodes[node][col] = nfeat_sub_df.loc[node, col]
-
-
-    # Choose your main color
-    base_color = mcolors.to_rgb(type_palette[t])
-    node_colors = {}
-    norm_cnts = nx.get_node_attributes(G, 'IndVal')
-
-    for node in G.nodes:
-        if node in norm_cnts:
-            norm = norm_cnts[node]
-            blended = np.clip(
-                np.array(base_color) * norm + np.array([1, 1, 1]) * (1 - norm),
-                0, 1
-            )
-            node_colors[node] = blended
-        else:
-            node_colors[node] = 'white'
-
-    node_sizes = {}
-    for node in G.nodes:
-        if node in norm_cnts:
-            IndVal = G.nodes[node].get('IndVal')
-            node_sizes[node] = IndVal * 5e2
-        else:
-            node_sizes[node] = 0
-        plt.figure(figsize=(18, 18))
-
-    for node in G.nodes:
-        color = node_colors[node]
-        #color = G.nodes[node].get('color', 'white')
-        size = node_sizes[node]
-        nx.draw_networkx_nodes(
-            G, pos,
-            nodelist=[node],
-            node_color=[color],
-            node_size=[size],
-            edgecolors='black',
-            linewidths=0.25,
-            alpha=1.0
-        )
-    nx.draw_networkx_edges(G, pos,
-                           connectionstyle='arc3,rad=0.2',
-                           edge_color='lightgray',
-                           alpha=1)
-
-    # Build size legend
-    size_legend = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25]  # Example degree values
-    size_handles = [plt.scatter([], [], s=s * 5e2, edgecolors='black',
-                                facecolors='gray', alpha=1, label=f'IndVal: {s}')
-                    for s in size_legend]
-
-    plt.legend(
-        handles=size_handles,
-        loc='upper left',
-        bbox_to_anchor=(1, 1),
-        title="Node Attributes",
-        frameon=False,
-        scatterpoints=1,     # Don't stack points
-        labelspacing=1.5     # Increase vertical space between entries
-    )
-
-    # >>> STOP matplotlib from rescaling everything <<<
-    plt.axis('equal')         # Keep proportions
-    plt.xlim(auto=False)      # Freeze x-axis scaling
-    plt.ylim(auto=False)      # Freeze y-axis scaling
-
-    plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for {t}\nNode size based on IndVal")
-    plt.axis('off')
-    plt.tight_layout()
-    try:
-<<<<<<< HEAD
-        plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_{t_str}_plot.svg"), bbox_inches='tight')
-        plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_{t_str}_plot.pdf"), bbox_inches='tight')
-=======
-        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_{t_str}_plot.svg"), bbox_inches='tight')
-        plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_{t_str}_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-    except:
-        print(t, ' skipped...')
-
-
-G = nx.read_graphml(network_file)
-# Add metadata to graph nodes
-for node in G.nodes:
-    if node in nfeat_type_df.index:
-        for col in nfeat_type_df.columns:
-            if col in keep_cols:
-                G.nodes[node][col] = nfeat_type_df.loc[node, col]
-
-# === Visualization ===
-pos = nx.spring_layout(G, seed=42)
-
-# Stretch the layout (e.g., 2x wider)
-scale = 3.0
-pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
-
-plt.figure(figsize=(18, 18))
-# Loop through nodes to apply custom alpha
-gets_label = []
-for node in G.nodes:
-    color = G.nodes[node].get('status_sig_color', 'lightgray')
-    size = (G.nodes[node].get('Degree', 1) + 1) * 80
-    alpha = 0.5 if color == 'lightgray' else 1.0
-    if color != 'lightgray':
-        gets_label.append(node)
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',
-        linewidths=0.25,
-        alpha=alpha
-    )
-
-nx.draw_networkx_edges(G, pos,
-                       connectionstyle='arc3,rad=0.2',
-                       edge_color='lightgray',
-                       alpha=1)
-
-# add labels
-texts = []
-for n in gets_label:
-    x, y = pos[n]
-    label = G.nodes[n].get('Taxon', "")
-    texts.append(
-        plt.text(
-            x, y, label,
-            fontsize=9,
-            weight='bold',
-            ha='center', va='center'
-        )
-    )
-adjust_text(
-    texts,
-    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
-    expand_text=(1.2, 1.2),
-    force_text=0.5,
-    force_points=0.2
-)
-
-# Create legend handles
-legend_handles = [
-    mpatches.Patch(color=color, label=type)
-    for type, color in type_palette.items()
-    ]
-
-# Build size legend
-size_legend = [0, 1, 3, 5, 10]
-size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'Degree: {s}')
-                for s in size_legend]
-
-plt.legend(
-    handles=legend_handles + size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Attributes",
-    frameon=False,
-    scatterpoints=1,     # Don't stack points
-    labelspacing=1.5     # Increase vertical space between entries
-)
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_status_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_status_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-
-G = nx.read_graphml(network_file)
-# Add metadata to graph nodes
-for node in G.nodes:
-    if node in nfeat_type_df.index:
-        for col in nfeat_type_df.columns:
-            if col in keep_cols:
-                G.nodes[node][col] = nfeat_type_df.loc[node, col]
-
-# === Visualization ===
-pos = nx.spring_layout(G, seed=42)
-
-# Stretch the layout (e.g., 2x wider)
-scale = 3.0
-pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
-
-plt.figure(figsize=(18, 18))
-gets_label = []
-# Loop through nodes to apply custom alpha
-for node in G.nodes:
-    color = G.nodes[node].get('cancer_color', 'lightgray')
-    size = (G.nodes[node].get('Degree', 1) + 1) * 80
-    alpha = 0.5 if color == 'lightgray' else 1.0
-    if color != 'lightgray':
-        gets_label.append(node)
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',
-        linewidths=0.25,
-        alpha=alpha
-    )
-
-nx.draw_networkx_edges(G, pos,
-                       connectionstyle='arc3,rad=0.2',
-                       edge_color='lightgray',
-                       alpha=1)
-
-# Create legend handles
-legend_handles = [
-    mpatches.Patch(color=color, label=type)
-    for type, color in type_palette.items()
-    ]
-
-# Build size legend
-size_legend = [0, 1, 3, 5, 10]
-size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'Degree: {s}')
-                for s in size_legend]
-# add labels
-texts = []
-for n in gets_label:
-    x, y = pos[n]
-    label = G.nodes[n].get('Taxon', "")
-    texts.append(
-        plt.text(
-            x, y, label,
-            fontsize=9,
-            weight='bold',
-            ha='center', va='center'
-        )
-    )
-adjust_text(
-    texts,
-    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
-    expand_text=(1.2, 1.2),
-    force_text=0.5,
-    force_points=0.2
-)
-plt.legend(
-    handles=legend_handles + size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Attributes",
-    frameon=False,
-    scatterpoints=1,     # Don't stack points
-    labelspacing=1.5     # Increase vertical space between entries
-)
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_cancer_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_cancer_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-
-G = nx.read_graphml(network_file)
-# Add metadata to graph nodes
-for node in G.nodes:
-    if node in nfeat_type_df.index:
-        for col in nfeat_type_df.columns:
-            if col in keep_cols:
-                G.nodes[node][col] = nfeat_type_df.loc[node, col]
-
-# === Visualization ===
-pos = nx.spring_layout(G, seed=42)
-
-# Stretch the layout (e.g., 2x wider)
-scale = 3.0
-pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
-
-plt.figure(figsize=(18, 18))
-gets_label = []
-# Loop through nodes to apply custom alpha
-for node in G.nodes:
-    color = G.nodes[node].get('non-cancer_color', 'lightgray')
-    size = (G.nodes[node].get('Degree', 1) + 1) * 80
-    alpha = 0.5 if color == 'lightgray' else 1.0
-    if color != 'lightgray':
-        gets_label.append(node)
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',
-        linewidths=0.25,
-        alpha=alpha
-    )
-
-nx.draw_networkx_edges(G, pos,
-                       connectionstyle='arc3,rad=0.2',
-                       edge_color='lightgray',
-                       alpha=1)
-
-# Create legend handles
-legend_handles = [
-    mpatches.Patch(color=color, label=type)
-    for type, color in type_palette.items()
-    ]
-
-# Build size legend
-size_legend = [0, 1, 3, 5, 10]
-size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'Degree: {s}')
-                for s in size_legend]
-# add labels
-texts = []
-for n in gets_label:
-    x, y = pos[n]
-    label = G.nodes[n].get('Taxon', "")
-    texts.append(
-        plt.text(
-            x, y, label,
-            fontsize=9,
-            weight='bold',
-            ha='center', va='center'
-        )
-    )
-adjust_text(
-    texts,
-    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
-    expand_text=(1.2, 1.2),
-    force_text=0.5,
-    force_points=0.2
-)
-plt.legend(
-    handles=legend_handles + size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Attributes",
-    frameon=False,
-    scatterpoints=1,     # Don't stack points
-    labelspacing=1.5     # Increase vertical space between entries
-)
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_non-cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_non-cancer_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_non-cancer_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_non-cancer_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-
-G = nx.read_graphml(network_file)
-# Add metadata to graph nodes
-for node in G.nodes:
-    if node in nfeat_type_df.index:
-        for col in nfeat_type_df.columns:
-            if col in keep_cols:
-                G.nodes[node][col] = nfeat_type_df.loc[node, col]
-
-# === Visualization ===
-pos = nx.spring_layout(G, seed=42)
-
-# Stretch the layout (e.g., 2x wider)
-scale = 3.0
-pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
-
-plt.figure(figsize=(18, 18))
-gets_label = []
-# Loop through nodes to apply custom alpha
-for node in G.nodes:
-    color = G.nodes[node].get('all_status_color', 'lightgray')
-    size = (G.nodes[node].get('Degree', 1) + 1) * 80
-    alpha = 0.5 if color == 'lightgray' else 1.0
-    if color != 'lightgray':
-        gets_label.append(node)
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',
-        linewidths=0.25,
-        alpha=alpha
-    )
-
-nx.draw_networkx_edges(G, pos,
-                       connectionstyle='arc3,rad=0.2',
-                       edge_color='lightgray',
-                       alpha=1)
-
-# Create legend handles
-legend_handles = [
-    mpatches.Patch(color=color, label=type)
-    for type, color in type_palette.items()
-    ]
-
-# Build size legend
-size_legend = [0, 1, 3, 5, 10]
-size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'Degree: {s}')
-                for s in size_legend]
-# add labels
-texts = []
-for n in gets_label:
-    x, y = pos[n]
-    label = G.nodes[n].get('Taxon', "")
-    texts.append(
-        plt.text(
-            x, y, label,
-            fontsize=9,
-            weight='bold',
-            ha='center', va='center'
-        )
-    )
-adjust_text(
-    texts,
-    arrowprops=dict(arrowstyle="->", color="gray", lw=0.5),
-    expand_text=(1.2, 1.2),
-    force_text=0.5,
-    force_points=0.2
-)
-plt.legend(
-    handles=legend_handles + size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Attributes",
-    frameon=False,
-    scatterpoints=1,     # Don't stack points
-    labelspacing=1.5     # Increase vertical space between entries
-)
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based in ISA for Sample Type")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_all-status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_type_all-status_plot.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_all-status_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_type_all-status_plot.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
-
-
-
-
-
-
-flurp
-from matplotlib.colors import LinearSegmentedColormap
-
-# Define your custom gradient: Green -> Cyan -> Blue
-cmap = LinearSegmentedColormap.from_list(
-    'LungBrush_BAL',
-    ['#009E73', '#00FFFF', '#0072B2'],  # Green -> Cyan -> Blue
-    N=256
-)
-
-lung_brush_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == 'Lung Brush']
-bal_df = nfeat_groups_df.loc[nfeat_groups_df['type'] == 'BAL']
-
-G = nx.read_graphml(network_file)
-
-for node in G.nodes:
-    if node in lung_brush_df.index:
-        G.nodes[node]['lung_brush_IndVal'] = lung_brush_df.loc[node, 'IndVal']
-    if node in bal_df.index:
-        G.nodes[node]['bal_IndVal'] = bal_df.loc[node, 'IndVal']
-
-node_colors = {}
-for node in G.nodes:
-    lung_val = G.nodes[node].get('lung_brush_IndVal', 0)
-    bal_val = G.nodes[node].get('bal_IndVal', 0)
-
-    total = lung_val + bal_val
-    if total == 0:
-        gradient_pos = 0.5  # No association: middle (cyan)
-    else:
-        gradient_pos = lung_val / total  # 1 = pure Lung Brush (green), 0 = pure BAL (blue)
-
-    color = cmap(gradient_pos)
-    node_colors[node] = color
-
-node_sizes = {}
-for node in G.nodes:
-    lung_val = G.nodes[node].get('lung_brush_IndVal', 0)
-    bal_val = G.nodes[node].get('bal_IndVal', 0)
-    total_strength = lung_val + bal_val
-
-    node_sizes[node] = total_strength * 5e2  # or whatever scaling looks best
-
-
-fig, ax = plt.subplots(figsize=(18, 18))
-
-for node in G.nodes:
-    color = node_colors.get(node, 'white')  # fallback if missing
-    size = node_sizes.get(node, 0)
-
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',   # nice outline
-        linewidths=0.25,
-        alpha=1.0,
-        ax=ax
-    )
-
-nx.draw_networkx_edges(
-    G, pos,
-    connectionstyle='arc3,rad=0.2',
-    edge_color='lightgray',
-    alpha=1.0,
-    ax=ax  # <<< ADD THIS TOO
-)
-
-size_legend = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25]  # Example degree values
-size_handles = [plt.scatter([], [], s=s * 5e2, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'IndVal: {s}')
-                for s in size_legend]
-
-plt.legend(
-    handles=size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Attributes",
-    frameon=False,
-    scatterpoints=1,     # Don't stack points
-    labelspacing=1.5     # Increase vertical space between entries
-)
-
-import matplotlib as mpl
-
-# Create a "fake" ScalarMappable to generate colorbar
-sm = mpl.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
-sm.set_array([])
-
-# Add colorbar
-cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02)
-cbar.set_label('Lung Brush ← ISA Score → BAL', fontsize=14)
-cbar.ax.tick_params(labelsize=12)
-cbar.set_ticks([0, 0.5, 1])
-cbar.set_ticklabels(['BAL', 'Mixed', 'Lung Brush'])
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode color based on strength of association with BAL and Lung Brush")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_BAL_LUNG_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_BAL_LUNG_plot.pdf"), bbox_inches='tight')
-
-
-
-signed_network_file = os.path.join(data_dir, "spark_old_output/spieceasi/network_signed.graphml")
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_BAL_LUNG_plot.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_BAL_LUNG_plot.pdf"), bbox_inches='tight')
-
-
-
-signed_network_file = os.path.join(data_dir, "vsearch_output/spieceasi_BRUSH/network_signed.graphml")
->>>>>>> a600334 (updated to brush)
-G = nx.read_graphml(signed_network_file)
-# Add metadata to graph nodes
-for node in G.nodes:
-    if node in nfeat_type_df.index:
-        for col in nfeat_type_df.columns:
-            if col in keep_cols:
-                G.nodes[node][col] = nfeat_type_df.loc[node, col]
-
-# === Visualization ===
-pos = nx.spring_layout(G, seed=42)
-
-# Stretch the layout (e.g., 2x wider)
-scale = 3.0
-pos = {node: (x * scale, y * scale) for node, (x, y) in pos.items()}
-
-# — separate edges by sign and collect absolute weights for width scaling —
-pos_edges, pos_w = [], []
-neg_edges, neg_w = [], []
-for u, v, data in G.edges(data=True):
-    w = data.get("weight", 0)
-    if w > 0:
-        pos_edges.append((u, v));    pos_w.append(w)
-    elif w < 0:
-        neg_edges.append((u, v));    neg_w.append(abs(w))
-
-plt.figure(figsize=(18, 18))
-# Loop through nodes to apply custom alpha
-for node in G.nodes:
-    color = 'black'
-    size = (G.nodes[node].get('Degree', 1) + 1) * 80
-    alpha = 0.5
-
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=[node],
-        node_color=[color],
-        node_size=[size],
-        edgecolors='black',
-        linewidths=0.25,
-        alpha=alpha
-    )
-
-# — draw positive edges in blue, solid —
-nx.draw_networkx_edges(G, pos,
-                       edgelist=pos_edges,
-                       width=[w * 5 for w in pos_w],   # scale up for visibility
-                       edge_color="blue",
-                       alpha=0.6)
-
-# — draw negative edges in red, dashed —
-nx.draw_networkx_edges(G, pos,
-                       edgelist=neg_edges,
-                       width=[w * 5 for w in neg_w],
-                       edge_color="red",
-                       style="dashed",
-                       alpha=0.6)
-
-# Build size legend
-size_legend = [0, 1, 3, 5, 10]
-size_handles = [plt.scatter([], [], s=(s + 1) * 80, edgecolors='black',
-                            facecolors='gray', alpha=1, label=f'{s}')
-                for s in size_legend]
-
-plt.legend(
-    handles=size_handles,
-    loc='upper left',
-    bbox_to_anchor=(1, 1),
-    title="Node Degree",
-    frameon=False,
-    scatterpoints=1,
-    labelspacing=1.5
-)
-
-# >>> STOP matplotlib from rescaling everything <<<
-plt.axis('equal')         # Keep proportions
-plt.xlim(auto=False)      # Freeze x-axis scaling
-plt.ylim(auto=False)      # Freeze y-axis scaling
-
-plt.title("SPIEC-EASI Co-Occurrence Network\nNode size based on Degree")
-plt.axis('off')
-plt.tight_layout()
-<<<<<<< HEAD
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_SIGNED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/spieceasi/network_degree_plot_SIGNED.pdf"), bbox_inches='tight')
-=======
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_SIGNED.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"vsearch_output/spieceasi_BRUSH/network_degree_plot_SIGNED.pdf"), bbox_inches='tight')
->>>>>>> a600334 (updated to brush)
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_Phylum_ISA.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/spieceasi/network_type_plot_Phylum_ISA.pdf"), bbox_inches='tight')

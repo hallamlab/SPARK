@@ -316,14 +316,7 @@ def parse_arguments():
     return args, unknown_args
 
 def main():  
-    
-    data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-       
-    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
-    metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-    #metadata_df['sample'] = metadata_df.copy()['sample']
 
-<<<<<<< HEAD
     keep_types = [
                 'Oral Rinse',
                 'Lung Brush',
@@ -342,113 +335,81 @@ def main():
            'BAL': '#0072B2',
            'Oral Rinse': '#6A3D9A',
            'Failed-QC': 'lightgray'
-=======
-    three_palette = {'ca-lung': '#009E73',
+            }
+    brush_palette = {'ca-lung': '#009E73',
            'ca-contra': '#0072B2',
            'ctrl-brush': '#6A3D9A'
->>>>>>> a600334 (updated to brush)
            }
-    type_list = ['ctrl-brush', 'ca-contra', 'ca-lung']
+    brush_list = ['ctrl-brush', 'ca-contra', 'ca-lung']
 
-<<<<<<< HEAD
-    metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
-   
-    fastq_stats_path = os.path.join(data_dir, 'spark_old_output/stats/fastq_stats.tsv')
-    fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-    #fstats_df['sample'] = [str(x.split('/')[-1].split('_')[0]) for x in fstats_df['file']]
-    fstats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
-    raw_reads_df = fstats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
-=======
-    data_dir = '/home/ryan/Projects/UBC/LMP/SPARK_data/'
+
+    
+    data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
        
-    metadata_table_path = os.path.join(data_dir, 'vsearch_output/metadata/metadata_updated_Brush.tsv')
+    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
+    metadata_df = metadata_df[['sample', 'kit', 'Participant_ID',
+                               'Case', 'Cancer_Site', 'Type', 'Barcode',
+                               'Set', 'experiment', 'type_group', 'DNA_conc',
+                               'DNA_plate', 'DNA_well', 'patient_samples',
+                               'ZYMO_lysates'
+                               ]]
+    voc_table_path = os.path.join(data_dir, 'ref_db/VOC_table.tsv')
+    voc_df = pd.read_csv(voc_table_path, header=0, sep='\t')
+    voc_df = voc_df[['sample_name', 'sample', 'participant_num',
+                     'sample_category', 'sample_family',
+                     'sample_type', 'class', 'class_sample', 'subclass1',
+                     'subclass2', 'cancer_RL', 'cancer_location'
+                     ]]
+    meta_merge_df = metadata_df.merge(voc_df, on='sample', how='inner').drop_duplicates(subset=['sample'])
+    print(len(meta_merge_df['sample'].unique()))
 
-    fastq_stats_path = os.path.join(data_dir, 'vsearch_output/stats/fastq_stats.tsv')
+    fastq_stats_path = os.path.join(data_dir, 'spark_old_output/stats/fastq_stats.tsv')
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
     fstats_df['sample'] = [x.split('/')[-1].split('_L001_R')[0].rsplit('_', 1)[0] for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
->>>>>>> a600334 (updated to brush)
-    read_meta_df = raw_reads_df.merge(metadata_df, on='sample')
+    read_meta_df = raw_reads_df.merge(meta_merge_df, on='sample', how='inner')
+    print(len(read_meta_df['sample'].unique()))
 
     filter_stats_path = os.path.join(data_dir, 'spark_old_output/stats/filtered_fastqs.tsv')
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
-<<<<<<< HEAD
-    #filter_stats_df['sample'] = [str(x.split('/')[-1].split('.')[0]) for x in filter_stats_df['file']]
     filter_stats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
-=======
-    filter_stats_df['sample'] = [x.split('/')[-1].split('_L001')[0].rsplit('_', 1)[0] for x in filter_stats_df['file']]
-    filter_reads_df = filter_stats_df.groupby(['sample'])[['num_seqs', 'sum_len']].sum().reset_index()
->>>>>>> a600334 (updated to brush)
-    filter_meta_df = filter_reads_df.merge(metadata_df, on='sample')
+    filter_meta_df = filter_reads_df.merge(meta_merge_df, on='sample', how='inner')
+    print(len(filter_meta_df['sample'].unique()))
 
     asv_raw_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_counts.tsv')
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
-<<<<<<< HEAD
-=======
-    asv_raw_df.columns = [x.rsplit('_', 2)[0] for x in asv_raw_df.columns]
->>>>>>> a600334 (updated to brush)
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
     asv_raw_stack_df.columns = ['ASV_ID', 'sample', 'count']
-    asv_raw_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_raw_stack_df['sample']]
-    asv_raw_stack_df = asv_raw_stack_df.loc[asv_raw_stack_df['count'] > 0]
+    asv_raw_stack_df['sample'] = [str(x.rsplit('_', 2)[0]) for x in asv_raw_stack_df['sample']]
     asv_raw_stack_df.set_index('ASV_ID', inplace=True)
-    asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='sample')
-<<<<<<< HEAD
-    asv_raw_cnt_df = asv_raw_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
-=======
+    asv_raw_meta_df = asv_raw_stack_df.merge(meta_merge_df, on='sample', how='inner')
+    asv_raw_meta_df = asv_raw_meta_df.loc[asv_raw_meta_df['count'] > 0]
     asv_raw_cnt_df = asv_raw_meta_df.groupby(['subclass2', 'sample'])['count'].sum().reset_index()
->>>>>>> a600334 (updated to brush)
+    print(len(asv_raw_meta_df['sample'].unique()))
 
     asv_decon_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.decon.tsv')
     asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
-<<<<<<< HEAD
-=======
-    asv_decon_df.columns = [x.rsplit('_', 2)[0] for x in asv_decon_df.columns]
->>>>>>> a600334 (updated to brush)
     asv_decon_stack_df = asv_decon_df.stack().reset_index()
     asv_decon_stack_df.columns = ['ASV_ID', 'sample', 'count']
-    asv_decon_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_decon_stack_df['sample']]
-    asv_decon_stack_df = asv_decon_stack_df.loc[asv_decon_stack_df['count'] > 0]
+    asv_decon_stack_df['sample'] = [str(x.rsplit('_', 2)[0]) for x in asv_decon_stack_df['sample']]
     asv_decon_stack_df.set_index('ASV_ID', inplace=True)
-    asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on='sample')
-<<<<<<< HEAD
-    asv_decon_cnt_df = asv_decon_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
+    asv_decon_meta_df = asv_decon_stack_df.merge(meta_merge_df, on='sample', how='inner')
+    asv_decon_meta_df = asv_decon_meta_df.loc[asv_decon_meta_df['count'] > 0]
+    asv_decon_cnt_df = asv_decon_meta_df.groupby(['subclass2', 'sample'])['count'].sum().reset_index()
+    print(len(asv_decon_meta_df['sample'].unique()))
 
     asv_micro_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.micro.tsv')
     asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
-=======
-    asv_decon_cnt_df = asv_decon_meta_df.groupby(['subclass2', 'sample'])['count'].sum().reset_index()
-
-    asv_micro_path = os.path.join(data_dir, 'vsearch_output/ASVs/ASV_Brush.micro.tsv')
-    asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
-    asv_micro_df.columns = [x for x in asv_micro_df.columns]
->>>>>>> a600334 (updated to brush)
     asv_micro_stack_df = asv_micro_df.stack().reset_index()
     asv_micro_stack_df.columns = ['ASV_ID', 'sample', 'count']
     asv_micro_stack_df['sample'] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_micro_stack_df['sample']]
-    asv_micro_stack_df = asv_micro_stack_df.loc[asv_micro_stack_df['count'] > 0]
     asv_micro_stack_df.set_index('ASV_ID', inplace=True)
-    asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on='sample')
-<<<<<<< HEAD
-    asv_micro_cnt_df = asv_micro_meta_df.groupby(['type_group', 'sample'])['count'].sum().reset_index()
-
-    read_grp_df = read_meta_df.groupby(['type_group'])['num_seqs'].sum().reset_index()
-    read_grp_df['num_reads'] = read_grp_df['num_seqs'] / 2
-    
-    filter_grp_df = filter_meta_df.groupby(['type_group'])['num_seqs'].sum().reset_index()
-    filter_grp_df['num_reads'] = filter_grp_df['num_seqs']
-
-    asv_raw_grp_df = asv_raw_cnt_df.groupby(['type_group'])['count'].sum().reset_index()
-    asv_raw_grp_df['num_reads'] = asv_raw_grp_df['count']
-
-    asv_decon_grp_df = asv_decon_cnt_df.groupby(['type_group'])['count'].sum().reset_index()
-    asv_decon_grp_df['num_reads'] = asv_decon_grp_df['count']
-
-    asv_micro_grp_df = asv_micro_cnt_df.groupby(['type_group'])['count'].sum().reset_index()
-=======
+    asv_micro_meta_df = asv_micro_stack_df.merge(meta_merge_df, on='sample', how='inner')
+    asv_micro_meta_df = asv_micro_meta_df.loc[asv_micro_meta_df['count'] > 0]
     asv_micro_cnt_df = asv_micro_meta_df.groupby(['subclass2', 'sample'])['count'].sum().reset_index()
+    print(len(asv_micro_meta_df['sample'].unique()))
 
     read_grp_df = read_meta_df.groupby(['subclass2'])['num_seqs'].sum().reset_index()
     read_grp_df['num_reads'] = read_grp_df['num_seqs'] / 2
@@ -463,7 +424,6 @@ def main():
     asv_decon_grp_df['num_reads'] = asv_decon_grp_df['count']
 
     asv_micro_grp_df = asv_micro_cnt_df.groupby(['subclass2'])['count'].sum().reset_index()
->>>>>>> a600334 (updated to brush)
     asv_micro_grp_df['num_reads'] = asv_micro_grp_df['count']
 
     raw_reads = int(read_grp_df['num_reads'].sum())
@@ -476,18 +436,8 @@ def main():
 
     steps_list = ['Quality Control', 'Error Correction', 'Decontamination', 'Off-Target Filtering', 'Finished Data']
     counts_list = [raw_reads, filter_reads, asv_raw_reads, asv_decon_reads, asv_micro_reads]
-<<<<<<< HEAD
-    seqtype_list = keep_types
-
-    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['type_group'] == x]['num_reads'].values) for x in seqtype_list}
-    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['type_group'] == x]['num_reads'].values)
-                           if x in list(asv_micro_grp_df['type_group'])
-                           else 0 for x in seqtype_list
-                           }
-=======
-    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['subclass2'] == x]['num_reads']) for x in type_list}
-    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['subclass2'] == x]['num_reads']) for x in type_list}
->>>>>>> a600334 (updated to brush)
+    input_samples_dict = {x: int(read_grp_df.loc[read_grp_df['subclass2'] == x]['num_reads']) for x in brush_list}
+    output_samples_dict = {x: int(asv_micro_grp_df.loc[asv_micro_grp_df['subclass2'] == x]['num_reads']) for x in brush_list}
 
     print("Parsed steps:")
     for step_name, count in zip(steps_list, counts_list):
@@ -496,18 +446,11 @@ def main():
     for sample_name, count in input_samples_dict.items():
         print(f"{sample_name}: {count}")
 
-<<<<<<< HEAD
-    output = os.path.join(data_dir, 'spark_old_output/metadata/data_loss_sankey_label.html')
-    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, type_palette, output)
-    output = os.path.join(data_dir, 'spark_old_output/metadata/data_loss_sankey.html')
-    build_sankey_nolabels(steps_list, counts_list, input_samples_dict, output_samples_dict, type_palette, output)
-=======
     print(input_samples_dict)
-    output = os.path.join(data_dir, 'vsearch_output/metadata/data_loss_sankey_label.html')
-    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, three_palette, output)
-    output = os.path.join(data_dir, 'vsearch_output/metadata/data_loss_sankey.html')
-    build_sankey_nolabels(steps_list, counts_list, input_samples_dict, output_samples_dict, three_palette, output)
->>>>>>> a600334 (updated to brush)
+    output = os.path.join(data_dir, 'spark_old_output/brush/metadata/data_loss_sankey_label.html')
+    build_sankey(steps_list, counts_list, input_samples_dict, output_samples_dict, brush_palette, output)
+    output = os.path.join(data_dir, 'spark_old_output/brush/metadata/data_loss_sankey.html')
+    build_sankey_nolabels(steps_list, counts_list, input_samples_dict, output_samples_dict, brush_palette, output)
 
 if __name__ == "__main__":
     main()

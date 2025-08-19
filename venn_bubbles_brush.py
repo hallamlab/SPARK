@@ -36,11 +36,11 @@ sns.set_style("white")
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 # Load ASV metadata
-metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/metadata/master_table.tsv'), sep='\t')
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
+metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/master_table.tsv'), sep='\t')
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/ASV_meta.tsv'), sep='\t', header=0)
 # Load venn diagram data
-venn_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/metadata/venn3_presence_table.tsv"), sep="\t", header=0)
-#venn_kit_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/metadata/venn3_presence_table_kit.tsv"), sep="\t", header=0)
+venn_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
+#venn_kit_df = pd.read_csv(os.path.join(data_dir, "spark_old_output/brush/metadata/venn3_presence_table_kit.tsv"), sep="\t", header=0)
 all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
            'Lung Brush': '#009E73',
@@ -63,21 +63,26 @@ status_palette = {'Non-Cancer':'white',
                   'Cancer':'#A50026',
                   'methods':'lightgray'
                   }
+
+brush_palette = {'ca-lung': '#009E73',
+           'ca-contra': '#0072B2',
+           'ctrl-brush': '#6A3D9A'
+           }
                   
 # Bubbles for the Venn Groups
 sub_df = metastat_df.loc[metastat_df['pass_filter'] != 'Failed-QC']
 
-ordered_type = ['Oral Rinse', 'BAL', 'Lung Brush']
+ordered_type = ['ctrl-brush', 'ca-contra', 'ca-lung']
 venn_tax_dfs = []
 for vgrp in venn_df['grouping'].unique():
     print(f"Processing Venn group: {vgrp}")
     vgrp_str = vgrp.replace(' ', '_')
     v_asvs = venn_df.loc[venn_df['grouping'] == vgrp]['ASV_ID'].tolist()
     v_spp_df = asv_meta_df.loc[asv_meta_df['ASV_ID'].isin(v_asvs)
-                                   ].groupby(['type_group', 'Family', 'Genus'], dropna=False)['corr_count'].sum().reset_index(
+                                   ].groupby(['subclass2', 'Family', 'Genus'], dropna=False)['corr_count'].sum().reset_index(
                                     )
 
-    v_spp_df['type_group'] = pd.Categorical(v_spp_df['type_group'], ordered_type)
+    v_spp_df['subclass2'] = pd.Categorical(v_spp_df['subclass2'], ordered_type)
     v_spp_df['Family Genus'] = [f'{x} {y}' for x,y in 
              zip(v_spp_df['Family'], v_spp_df['Genus'])
              ]
@@ -87,9 +92,9 @@ for vgrp in venn_df['grouping'].unique():
     num_rows = len(v_spp_df['Family Genus'].unique())
     fig_height = max(4, min(0.4 * num_rows, 15))  # auto-scale with sane bounds
     fig, ax = plt.subplots(figsize=(12, fig_height), constrained_layout=True)
-    sns.scatterplot(data=v_spp_df, x='type_group', y='Family Genus',
-                    size='corr_count', sizes=(5, 500), palette=all_type_palette,
-                    hue_order=ordered_type, hue='type_group', alpha=0.75
+    sns.scatterplot(data=v_spp_df, x='subclass2', y='Family Genus',
+                    size='corr_count', sizes=(5, 500), palette=brush_palette,
+                    hue_order=ordered_type, hue='subclass2', alpha=0.75
                     )
     sns.despine(top=True, right=True)
 
@@ -98,7 +103,7 @@ for vgrp in venn_df['grouping'].unique():
     
     # Move legend outside
     ax.legend(
-        title='Sample Type',
+        title='Sample Subclass2',
         bbox_to_anchor=(1.01, 1),
         loc='upper left',
         borderaxespad=0,
@@ -106,61 +111,8 @@ for vgrp in venn_df['grouping'].unique():
     )
     plt.xticks(rotation=45)
 
-    plt.savefig(os.path.join(data_dir, f'spark_old_output/metadata/{vgrp_str}_Genus_bubbleplot.svg'))
-    plt.savefig(os.path.join(data_dir, f'spark_old_output/metadata/{vgrp_str}_Genus_bubbleplot.pdf'))
+    plt.savefig(os.path.join(data_dir, f'spark_old_output/brush/metadata/{vgrp_str}_Genus_bubbleplot.svg'))
+    plt.savefig(os.path.join(data_dir, f'spark_old_output/brush/metadata/{vgrp_str}_Genus_bubbleplot.pdf'))
     plt.close()
 venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, 'spark_old_output/metadata/venn3_presence_table_tax.tsv'), sep='\t')
-
-
-
-
-
-
-
-flurp
-ordered_type = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
-venn_tax_dfs = []
-for vgrp in venn_kit_df['grouping'].unique():
-    vgrp_str = vgrp.replace(' ', '_')
-    v_asvs = venn_kit_df.loc[venn_kit_df['grouping'] == vgrp]['ASV_ID'].tolist()
-    v_spp_df = asv_meta_df.loc[asv_meta_df['ASV_ID'].isin(v_asvs)
-                                   ].groupby(['kit', 'Family', 'Genus'])['corr_count'].sum().reset_index(
-                                    )
-    v_spp_df['kit'] = pd.Categorical(v_spp_df['kit'], ordered_type)
-    v_spp_df['Family Genus'] = [f'{x} {y}' for x,y in
-                                zip(v_spp_df['Family'], v_spp_df['Genus'])]
-    v_spp_df.replace(0, np.nan, inplace=True)
-    venn_tax_dfs.append(v_spp_df)
-
-    num_rows = len(v_spp_df['Family Genus'].unique())
-    fig_height = max(4, min(0.4 * num_rows, 15))  # auto-scale with sane bounds
-    fig, ax = plt.subplots(figsize=(12, fig_height), constrained_layout=True)
-    sns.scatterplot(data=v_spp_df, x='kit', y='Family Genus',
-                    size='corr_count', sizes=(5, 500), palette=kit_pallete,
-                    hue_order=ordered_type, hue='kit', alpha=0.75
-                    )
-    sns.despine(top=True, right=True)
-
-    ax = plt.gca()
-    ax.margins(y=0.2)          # remove top/bottom padding
-    
-    # Move legend outside
-    ax.legend(
-        title='Sample Type',
-        bbox_to_anchor=(1.01, 1),
-        loc='upper left',
-        borderaxespad=0,
-        frameon=False
-    )
-    plt.xticks(rotation=45)
-
-    plt.savefig(os.path.join(data_dir, f'spark_old_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.svg'))
-    plt.savefig(os.path.join(data_dir, f'spark_old_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.pdf'))
-    plt.close()
-venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, 'spark_old_output/metadata/venn3_presence_table_kit_tax.tsv'), sep='\t')
-
-
-
-
+venn_tax_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/Three_types_venn_presence_tax.tsv'), sep='\t')

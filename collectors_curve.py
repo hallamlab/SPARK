@@ -346,8 +346,8 @@ def main():
     user_map = parse_group_colors(args.group_colors)
     colors = color_map_for_groups(groups_order, palette_name=args.palette, user_map=user_map)
 
-    overlay_png = f"{args.out_prefix}_overlay.svg"
-    faceted_png = f"{args.out_prefix}_faceted.svg"
+    overlay_png = f"{args.out_prefix}_overlay.pdf"
+    faceted_png = f"{args.out_prefix}_faceted.pdf"
     plot_overlay(curves, colors, args.group_col, overlay_png, xpad=args.xpad, groups_order=groups_order)
     plot_faceted(curves, colors, args.group_col, faceted_png, xpad=args.xpad, groups_order=groups_order)
 
