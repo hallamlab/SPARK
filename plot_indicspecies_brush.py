@@ -9,6 +9,7 @@ import os
 import seaborn as sns
 import colorsys
 from matplotlib import font_manager as fm, rcParams
+import matplotlib.colors as mcolors
 
 
 # Global settings — at the top of script or notebook cell
@@ -39,20 +40,11 @@ def plot_volcano(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0,
         df.loc[((df['p.value'] < p_thresh) & (df['stat'] > stat_thresh)), 'significance'] = True 
     
     df['color'] = [cmap[ind[i]] if s else 'lightgray' for i,s in zip(df['index'], df['significance'])]
+    df['label'] = [ind[i] if s else 'not_indicator' for i,s in zip(df['index'], df['significance'])]
     cmap['not_indicator'] = 'lightgray'
-    
+
     # Create plot
     fig, ax = plt.subplots(figsize=(8, 6))
-
-    # Plot non-red points first
-    #non_sig = df[df['significance'] == False]
-    #sns.swarmplot(data=non_sig, x='stat', y='log_p', color='gray', orient="h",
-    #            dodge=True, ax=ax, alpha=0.75, s=1, legend=False
-    #            )
-    #plt.scatter(non_sig['stat'], non_sig['log_p'], c=non_sig['color'], alpha=0.75, edgecolors='gray', linewidths=0.25,
-    #            s=10
-    #            )
-    
     # Then plot red points on top
     sig = df #[df['significance'] == True]
     palette = dict(zip(sig['color'], sig['color']))
@@ -61,17 +53,6 @@ def plot_volcano(df, ind, cmap, p_thresh=0.05, stat_thresh=0.0,
                   dodge=True, ax=ax, alpha=0.75, legend=False, palette=palette,
                   jitter=True, size=5, linewidth=0.25, edgecolor='gray'
                   )
-    # Set edgecolor for all swarm points
-#    for collection in ax.collections:
-#        collection.set_edgecolor('gray')
-#        collection.set_linewidth(0.5)
-
-    #plt.scatter(sig['stat'], sig['log_p'], c=sig['color'], alpha=0.75, edgecolors='gray', linewidths=0.25,
-    #            s=75
-    #            )
-    
-    # Add reference lines
-    #plt.axhline(-np.log10(p_thresh), linestyle='--', color='gray', linewidth=1, label=f'p={p_thresh}')
 
     # Create legend handles with light grey borders
     legend_handles = [
@@ -211,141 +192,251 @@ def plot_type_taxa(df, ind, p_thresh=0.05, stat_thresh=0.0, output_file='volcano
     plt.savefig(output_file.replace('.svg', '.pdf'), bbox_inches='tight')
     plt.close()
 
-
-def plot_combined(df, output_file, type_palette, marker_dict, no_sig=False):
+def plot_p_vs_stat_no_overlap(
+    df,
+    output_file,
+    type_palette=None,      # optional: {category_name -> color}; legend will show ALL keys here
+    marker_dict=None,       # optional: {category_name -> marker}; legend will show ALL keys here
+    x_col="status_stat",
+    y_col="-log10(p)",      # name you want on the y-axis label
+    hue_col=None,           # column used for color groups; can be names OR actual color strings
+    style_col=None,         # column used for marker groups (categories)
+    # --- axis-wise jitter controls (normalized [0..1]) ---
+    min_dist_x=0.02,
+    min_dist_y=0.03,
+    step_x=0.35,
+    step_y=0.35,
+    anchor=0.05,
+    iters=200,
+    invert_y=False,
+    point_size=50,
+    alpha=0.85,
+    add_random_eps=(0.0, 0.0),  # tiny extra jitter (x,y) in norm units
+    show_legend=True,
+    legend_color_title="Type",
+    legend_marker_title="Status",
+):
     """
-    Stripplot-based viz with fixed 0.1 y-bins and stable ordering.
-    - df must have columns: ['status_stat', 'status_log_p', 'type_color', 'status_color', 'status_significance']
-    - type_palette: mapping of type name -> color (for legend)
-    - marker_dict: mapping of status_color -> marker (e.g., {'Non-Cancer':'o','Cancer':'X'})
+    Scatter of x_col vs y_col with guaranteed non-overlap via axis-wise repulsive jitter.
+    - If hue_col values are *color strings*, but you also provide `type_palette={name->color}`,
+      the plot will use the NAMES (keys) for hue so the legend shows names, not colors.
+    - Legends:
+        * Color legend lists ALL entries in `type_palette` (even if not present in data).
+        * Marker legend lists ALL entries in `marker_dict` (even if not present in data).
+
+    Returns: jittered DataFrame with columns '_x_' and '_y_'.
     """
 
-    p_thresh = 0.05
+    # ---------- prep ----------
+    dd = df.copy()
+    # Try common actual columns if user kept old names:
+    x_src = x_col if x_col in dd.columns else ("status_stat" if "status_stat" in dd.columns else x_col)
+    y_src = y_col if y_col in dd.columns else ("status_log_p" if "status_log_p" in dd.columns else y_col)
 
-    df = df.copy()
+    dd[x_src] = pd.to_numeric(dd[x_src], errors="coerce")
+    dd[y_src] = pd.to_numeric(dd[y_src], errors="coerce")
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=[x_src, y_src])
+    if dd.empty:
+        raise ValueError("No data to plot after dropping NaN/inf in x/y.")
 
-    # -------- significance coloring (preserve 'lightgray' for non-significant) --------
-    if no_sig:
-        df['status_significance'] = True
-    else:
-        # Keep color if significant, else lightgray
-        df['type_color'] = [
-            x if bool(y) is True else 'lightgray'
-            for x, y in zip(df['type_color'], df['status_significance'])
-        ]
-        # Guard: if color was already lightgray and significant, keep it lightgray
-        df['type_color'] = [
-            'lightgray' if (bool(y) is True and x == 'lightgray') else x
-            for x, y in zip(df['type_color'], df['status_significance'])
-        ]
+    x = dd[x_src].to_numpy()
+    y = dd[y_src].to_numpy()
 
-    # ------------------------ bin y at 0.1 and lock order ------------------------
-    y = pd.to_numeric(df['status_log_p'], errors='coerce').replace([np.inf, -np.inf], np.nan)
+    xmin, xmax = float(np.nanmin(x)), float(np.nanmax(x))
+    ymin, ymax = float(np.nanmin(y)), float(np.nanmax(y))
+    if xmin == xmax: xmin -= 0.05; xmax += 0.05
+    if ymin == ymax: ymin -= 0.05; ymax += 0.05
 
-    if np.isfinite(np.nanmin(y)):
-        ymin = float(np.floor(np.nanmin(y) * 10) / 10)
-    else:
-        ymin = 0.0
-    if np.isfinite(np.nanmax(y)):
-        ymax = float(np.ceil(np.nanmax(y) * 10) / 10)
-    else:
-        ymax = 1.0
-    if ymin == ymax:
-        ymin -= 0.05
-        ymax += 0.05
+    # ---------- normalize & repulse (axis-wise rectangle) ----------
+    nx = (x - xmin) / (xmax - xmin)
+    ny = (y - ymin) / (ymax - ymin)
+    pos = np.stack([nx, ny], axis=1).astype(float)
+    orig = pos.copy()
 
-    edges = np.round(np.arange(ymin, ymax + 0.1001, 0.1), 1)
-    cats = pd.cut(y, bins=edges, include_lowest=True)  # Interval categories (unique)
-    df['status_log_p_bin'] = pd.Categorical(cats, categories=cats.cat.categories, ordered=True)
-    y_order = list(df['status_log_p_bin'].cat.categories)  # stable global order
+    n = len(pos)
+    eye_mask = ~np.eye(n, dtype=bool)
+    for _ in range(iters):
+        dx = pos[:, None, 0] - pos[None, :, 0]  # (n,n)
+        dy = pos[:, None, 1] - pos[None, :, 1]  # (n,n)
+        mask = eye_mask & (np.abs(dx) < min_dist_x) & (np.abs(dy) < min_dist_y)
+        if not mask.any():
+            break
 
-    # ------------------------------- plotting -----------------------------------
+        # directions (avoid zero)
+        sign_x = np.sign(dx); sign_y = np.sign(dy)
+        if np.any(sign_x == 0):
+            sign_x[sign_x == 0] = np.random.choice([-1.0, 1.0], size=(sign_x == 0).sum())
+        if np.any(sign_y == 0):
+            sign_y[sign_y == 0] = np.random.choice([-1.0, 1.0], size=(sign_y == 0).sum())
+
+        # push toward boundary of the no-overlap rectangle
+        force_x = np.zeros_like(dx); force_y = np.zeros_like(dy)
+        force_x[mask] = (min_dist_x - np.abs(dx[mask])) * sign_x[mask]
+        force_y[mask] = (min_dist_y - np.abs(dy[mask])) * sign_y[mask]
+
+        delta_x = force_x.sum(axis=1)
+        delta_y = force_y.sum(axis=1)
+
+        pos[:, 0] += step_x * delta_x - anchor * (pos[:, 0] - orig[:, 0])
+        pos[:, 1] += step_y * delta_y - anchor * (pos[:, 1] - orig[:, 1])
+
+        np.clip(pos, 0.0, 1.0, out=pos)
+
+    if add_random_eps != (0.0, 0.0):
+        rng = np.random.default_rng(0)
+        pos[:, 0] = np.clip(pos[:, 0] + rng.normal(0, add_random_eps[0], n), 0, 1)
+        pos[:, 1] = np.clip(pos[:, 1] + rng.normal(0, add_random_eps[1], n), 0, 1)
+
+    dd["_x_"] = pos[:, 0] * (xmax - xmin) + xmin
+    dd["_y_"] = pos[:, 1] * (ymax - ymin) + ymin
+
+    # ---------- resolve hue (color) semantics ----------
+    hue_used = None
+    plot_palette = None
+
+    if hue_col is not None:
+        # Build a plotting hue column that prefers *names* when a mapping is given
+        dd["__hue_raw__"] = dd[hue_col].astype(str)
+
+        if type_palette:
+            # reverse map {color -> name}
+            rev = {v: k for k, v in type_palette.items()}
+            def to_name(v):
+                # if the cell already holds a name key, keep it; else try color->name
+                if v in type_palette:
+                    return v
+                if mcolors.is_color_like(v) and v in rev:
+                    return rev[v]
+                return v  # fallback: leave as-is (but legend will still show palette keys)
+            dd["__hue__"] = dd["__hue_raw__"].map(to_name)
+            hue_used = "__hue__"
+            # palette for plotting only needs present labels that are in the provided palette
+            present = [h for h in dd["__hue__"].dropna().unique().tolist() if h in type_palette]
+            plot_palette = {k: type_palette[k] for k in present}
+        else:
+            # No palette provided: if values are actual colors, use identity palette
+            levels = dd["__hue_raw__"].dropna().unique().tolist()
+            hue_used = "__hue_raw__"
+            if all(mcolors.is_color_like(v) for v in levels):
+                plot_palette = {v: v for v in levels}  # identity
+            else:
+                plot_palette = None  # seaborn default palette
+    # else: no hue
+
+    # ---------- resolve style (marker) semantics ----------
+    style_used = None
+    markers_for_plot = True
+    if style_col is not None:
+        style_used = style_col
+        cats = dd[style_used].dropna().unique().tolist()
+        if marker_dict:
+            markers_for_plot = {c: marker_dict.get(c, "o") for c in cats}
+        else:
+            default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
+            markers_for_plot = {c: default_markers[i % len(default_markers)] for i, c in enumerate(cats)}
+
+    # ---------- plot ----------
     fig, ax = plt.subplots(figsize=(8, 6))
-
-    # Identity palette for per-point colors already encoded in df['type_color']
-    point_palette = {c: c for c in df['type_color'].dropna().unique()}
-
-    # Plot each marker group using the SAME y order so axis stays fixed
-    for k, sub in df.groupby("status_color", dropna=False):
-        sns.stripplot(
-            data=sub,
-            x='status_stat',
-            y='status_log_p_bin',
-            order=y_order,
-            hue='type_color',
-            orient="h",
-            dodge=True,
-            jitter=0.15,                    # consistent jitter
-            size=5,
-            linewidth=0.25,
-            edgecolor='gray',
-            marker=marker_dict.get(k, 'o'), # fallback if missing
-            legend=False,
-            palette=point_palette,
-            ax=ax,
-        )
-
-    # ------------------------------- legends ------------------------------------
-    # Color legend (types): use types present if available, otherwise all in type_palette
-    present_types = []
-    if 'type' in df.columns:
-        present_types = [t for t in df['type'].dropna().unique() if t in type_palette]
-    if not present_types:
-        present_types = [t for t in type_palette]
-
-    color_handles = [mpatches.Patch(color=type_palette[t], label=t) for t in present_types]
-
-    status_dict = (
-        {k: marker_dict.get(k, 'o') for k in df['status_color'].dropna().unique()}
-        or {'Non-Cancer': 'o', 'Cancer': 'X'}
+    plot_kwargs = dict(
+        data=dd, x="_x_", y="_y_",
+        s=point_size, alpha=alpha,
+        linewidth=0.5, edgecolor="black",
+        ax=ax, legend=False  # we'll build explicit legends
     )
+    if hue_used is not None:
+        plot_kwargs["hue"] = hue_used
+        if plot_palette is not None:
+            plot_kwargs["palette"] = plot_palette
+    if style_used is not None:
+        plot_kwargs["style"] = style_used
+        plot_kwargs["markers"] = markers_for_plot
 
-    marker_handles = [
-        mlines.Line2D([], [], color='gray', marker=mk, linestyle='None', markersize=8, label=lab)
-        for lab, mk in {'Non-Cancer': 'D', 'Cancer': 'X', 'not_indicator': 'o'}.items()
-    ]
+    sns.scatterplot(**plot_kwargs)
 
-    leg1 = ax.legend(handles=color_handles, title='Type', loc='upper right', bbox_to_anchor=(1.5, 1))
-    leg2 = ax.legend(handles=marker_handles, title='status', loc='upper right', bbox_to_anchor=(1.5, 0.4))
-    ax.add_artist(leg1)
+    ax.set_xlabel(x_col if x_col in df.columns else x_src)
+    ax.set_ylabel(y_col if y_col in df.columns else y_src)
+    ax.set_xlim(0.1, xmax + 0.1)
+    ax.set_ylim(-0.1, ymax + 0.1)
+    if invert_y:
+        ax.invert_yaxis()
+    ax.grid(True, linewidth=0.3, alpha=0.3)
+    ax.tick_params(axis="both", which="both", length=4, width=1)
 
-    # ------------------------------ axes & labels -------------------------------
-    ax.set_xlabel('Effect Size (stat)')
-    ax.set_ylabel('-log10(p-value)')
-    ax.set_title(f"Indicator Species Analysis (pval <= {p_thresh})")
+    # ---------- legends (never clip) ----------
+    extra_artists = []
 
-    # X axis ticks/limits
-    xnum = pd.to_numeric(df['status_stat'], errors='coerce').replace([np.inf, -np.inf], np.nan)
-    xmax = float(np.ceil(np.nanmax(xnum) * 10) / 10) if np.isfinite(np.nanmax(xnum)) else 1.0
-    ax.set_xticks(np.arange(0, xmax + 0.01, 0.1))
-    ax.set_xlim(0, xmax)
+    if show_legend:
+        # Color legend: show ALL keys from type_palette if provided,
+        # otherwise show present hue levels (with colors if available).
+        color_handles = []
+        if type_palette:
+            for name, color in type_palette.items():
+                color_handles.append(
+                    mlines.Line2D([], [], marker="o", linestyle="None",
+                                  markerfacecolor=color, markeredgecolor="black",
+                                  markersize=8, label=str(name), markeredgewidth=0.5)
+                )
+        elif hue_used is not None:
+            present_levels = dd[hue_used].dropna().unique().tolist()
+            if plot_palette:
+                for lab in present_levels:
+                    col = plot_palette.get(lab, "lightgray")
+                    color_handles.append(
+                        mlines.Line2D([], [], marker="o", linestyle="None",
+                                      markerfacecolor=col, markeredgecolor="black",
+                                      markersize=8, label=str(lab), markeredgewidth=0.5)
+                    )
+            else:
+                for lab in present_levels:
+                    color_handles.append(
+                        mlines.Line2D([], [], marker="o", linestyle="None",
+                                      markerfacecolor="lightgray", markeredgecolor="black",
+                                      markersize=8, label=str(lab), markeredgewidth=0.5)
+                    )
 
-    # Y axis: EVERY 0.1 tick label
-    tick_positions = np.arange(len(y_order))
-    tick_labels = [f"{iv.right:.1f}" for iv in y_order]  # label by bin right edge
-    ax.set_yticks(tick_positions, tick_labels)
-    ax.invert_yaxis()  # larger -log10(p) at top
-    ax.tick_params(axis='y', labelsize=8)
-    # Get current ticks and keep every other one
-    current_ticks = plt.yticks()[0]
-    plt.yticks(current_ticks[::2])
-    ax.spines['left'].set_visible(True)
-    ax.tick_params(axis='y', which='both', length=4, width=1, color='black', left=True, right=False)
+        if color_handles:
+            leg1 = ax.legend(handles=color_handles, title=legend_color_title,
+                             loc="upper left", bbox_to_anchor=(1.01, 1.0),
+                             borderaxespad=0.0, frameon=True)
+            ax.add_artist(leg1)
+            extra_artists.append(leg1)
 
-    # Styling
-    ax.spines['left'].set_visible(True)
-    ax.tick_params(axis='both', which='both', length=4, width=1, color='black')
-    fig.subplots_adjust(bottom=0.15)
+        # Marker legend: ALL keys from marker_dict if provided,
+        # else only present styles.
+        marker_handles = []
+        if style_used is not None:
+            if marker_dict:
+                for name, mk in marker_dict.items():
+                    marker_handles.append(
+                        mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
+                                      markersize=8, label=str(name), markeredgewidth=0.5)
+                    )
+            elif isinstance(markers_for_plot, dict):
+                for name, mk in markers_for_plot.items():
+                    marker_handles.append(
+                        mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
+                                      markersize=8, label=str(name), markeredgewidth=0.5)
+                    )
+        if marker_handles:
+            leg2 = ax.legend(handles=marker_handles, title=legend_marker_title,
+                             loc="upper left", bbox_to_anchor=(1.01, 0.55),
+                             borderaxespad=0.0, frameon=True)
+            extra_artists.append(leg2)
 
-    # ------------------------------- save ---------------------------------------
-    plt.savefig(output_file, bbox_inches='tight')
-    if output_file.endswith('.svg'):
-        plt.savefig(output_file.replace('.svg', '.pdf'), bbox_inches='tight')
+    # ---------- save (expand bbox to include legends) ----------
+    plt.tight_layout()
+    if extra_artists:
+        plt.savefig(output_file, bbox_inches="tight", bbox_extra_artists=extra_artists)
+        if output_file.endswith(".svg"):
+            plt.savefig(output_file.replace(".svg", ".pdf"),
+                        bbox_inches="tight", bbox_extra_artists=extra_artists)
+    else:
+        plt.savefig(output_file, bbox_inches="tight")
+        if output_file.endswith(".svg"):
+            plt.savefig(output_file.replace(".svg", ".pdf"), bbox_inches="tight")
     plt.close()
 
-    return df
-
-
+    return dd
 
 def plot_comb_taxa(df, ind, p_thresh=0.05, stat_thresh=0.0, output_file='volcano_plot.svg'):
 
@@ -530,11 +621,11 @@ type_venn_df = plot_volcano(venn_sub_df, type_index, type_palette,
 
 type_isa_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_index', 'type_stat', 'type_p_value', 'type_log_p', 'type_significance',
-                      'type_color'
+                      'type_color', 'type_label'
                       ]
 type_venn_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_index', 'type_stat', 'type_p_value', 'type_log_p', 'type_significance',
-                      'type_color'
+                      'type_color', 'type_label'
                       ]
 
 sub_tax_df = sub_df.merge(tax_df, on='ASV_ID')
@@ -548,20 +639,25 @@ df.rename(columns={df.columns[0]: 'ASV_ID'}, inplace=True)
 
 index_dict = {1: 'Cancer', 2: 'Non-Cancer', 3: 'not_indicator'}
 status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026', 'not_indicator': 'lightgray'}
-marker_dict = {'white':'D', '#A50026':'X', 'lightgray':'o'}
+marker_dict = {'Non-Cancer':'D', 'Cancer':'X', 'not_indicator':'o'}
 status_isa_df = plot_volcano(df, index_dict, status_palette, output_file=os.path.join(data_dir, 'spark_old_output/brush/indicspecies/status_Cancer_ISA_plot.svg'))
-status_isa_df.columns = ['ASV_ID', 'Cancer', 'Non-Cancer', 'status_index', 'status_stat', 'status_p_value', 'status_log_p', 'status_significance', 'status_color']
+status_isa_df.columns = ['ASV_ID', 'Cancer', 'Non-Cancer', 'status_index', 'status_stat',
+                         'status_p_value', 'status_log_p', 'status_significance', 'status_color',
+                         'status_label'
+                         ]
 
 type_status_df = pd.merge(type_isa_df, status_isa_df, on='ASV_ID', how='right')
 type_status_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Type_status_ISA_results.tsv'), sep='\t')
-plot_combined(type_status_df,
-              os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_ISA_plot.svg'),
-              type_palette, marker_dict
-              )
-plot_combined(type_status_df.loc[type_status_df['type_significance'] == True],
-              os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_noNoType_ISA_plot.svg'),
-              type_palette, marker_dict
-              )
+plot_p_vs_stat_no_overlap(type_status_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_ISA_plot.svg'),
+                          type_palette=type_palette,
+                          marker_dict=marker_dict,
+                          x_col="status_stat",
+                          y_col="status_log_p",
+                          hue_col="type_color",
+                          style_col="status_label"
+                          )
+
 TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
                'spark_old_output/brush/indicspecies/Combined_ISA_plot_Phylum.svg')
@@ -569,14 +665,16 @@ plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
 
 type_status_df = pd.merge(type_venn_df, status_isa_df, on='ASV_ID', how='right')
 type_status_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Type_status_Venn_results.tsv'), sep='\t')
-plot_combined(type_status_df,
-              os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_Venn_plot.svg'),
-              type_palette, marker_dict, no_sig=True
-              )
-plot_combined(type_status_df.loc[type_status_df['type_significance'] == True],
-              os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_noNoType_Venn_plot.svg'),
-              type_palette, marker_dict, no_sig=True
-              )
+plot_p_vs_stat_no_overlap(type_status_df,
+                          os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Combined_Venn_plot.svg'),
+                          type_palette=type_palette,
+                          marker_dict=marker_dict,
+                          x_col="status_stat",
+                          y_col="status_log_p",
+                          hue_col="type_color",
+                          style_col="status_color"
+                          )
+
 TS_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_comb_taxa(TS_tax_df, index_dict, output_file=os.path.join(data_dir,
                'spark_old_output/brush/indicspecies/Combined_Venn_plot_Phylum.svg')
