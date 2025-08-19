@@ -91,9 +91,9 @@ def perform_umap(
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 # Load ASV metadata
-metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/metadata/master_table.tsv'), sep='\t')
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
-metadata_table_path = os.path.join(data_dir, 'spark_old_output/metadata/metadata_updated.tsv')
+metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_methods_output/metadata/master_table.tsv'), sep='\t')
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_methods_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
+metadata_table_path = os.path.join(data_dir, 'spark_methods_output/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
 keep_types = ['Scope Flush',
@@ -130,9 +130,9 @@ filter_types = ['Skin Brush', 'Scope Flush']
 seqtype_list = ['Oral Rinse', 'BAL', 'Lung Brush']
 
 ###########################################################################################################
-alpha_path = os.path.join(data_dir, 'spark_old_output/diversity/shannon.tsv')
+alpha_path = os.path.join(data_dir, 'spark_methods_output/diversity/shannon.tsv')
 alpha_df = pd.read_csv(alpha_path, header=0, sep='\t')
-bray_path = os.path.join(data_dir, 'spark_old_output/diversity/bray.tsv')
+bray_path = os.path.join(data_dir, 'spark_methods_output/diversity/bray.tsv')
 bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
 bray_reducer, bray_umap = perform_umap(data=bray_df,
                                        n_neighbors=30,
@@ -140,7 +140,7 @@ bray_reducer, bray_umap = perform_umap(data=bray_df,
                                        random_state=42,
                                        precomputed=True
                                        )
-jacc_path = os.path.join(data_dir, 'spark_old_output/diversity/jaccard.tsv')
+jacc_path = os.path.join(data_dir, 'spark_methods_output/diversity/jaccard.tsv')
 jacc_df = pd.read_csv(jacc_path, header=0, sep='\t', index_col=0)
 jacc_reducer, jacc_umap = perform_umap(data=jacc_df,
                                        n_neighbors=30,
@@ -150,10 +150,10 @@ jacc_reducer, jacc_umap = perform_umap(data=jacc_df,
                                        )
 jacc_umap.columns = ['Jacc_UMAP1', 'Jacc_UMAP2']
 
-olall_path = os.path.join(data_dir, 'spark_old_output/metadata/outliers_table.tsv')
+olall_path = os.path.join(data_dir, 'spark_methods_output/metadata/outliers_table.tsv')
 olall_df = pd.read_csv(olall_path, header=0, sep='\t')
 
-oltype_path = os.path.join(data_dir, 'spark_old_output/metadata/outliers_type_group.tsv')
+oltype_path = os.path.join(data_dir, 'spark_methods_output/metadata/outliers_type_group.tsv')
 oltype_df = pd.read_csv(oltype_path, header=0, sep='\t')
 
 
@@ -187,10 +187,10 @@ _, pvals_corrected, _, _ = multipletests(sample_type_ttests['pval'], method='fdr
 sample_type_ttests['pval_adj'] = pvals_corrected
 sample_type_ttests['significant'] = sample_type_ttests['pval_adj'] < 0.05  # Boolean
 print(sample_type_ttests)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_old_output/diversity/alpha_sample_ttest.tsv'), sep='\t', index=False)
+sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_methods_output/diversity/alpha_sample_ttest.tsv'), sep='\t', index=False)
 
 # Load Bray-Curtis matrix
-bray_path = os.path.join(data_dir, 'spark_old_output/diversity/bray.tsv')
+bray_path = os.path.join(data_dir, 'spark_methods_output/diversity/bray.tsv')
 bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
 m_df = metadata_df.copy().set_index('sample')
 sample_ids = m_df.index
@@ -237,7 +237,7 @@ pvals = pairwise_df['p-value']
 pairwise_df['q-value'] = multipletests(pvals, method='fdr_bh')[1]
 
 print(pairwise_df)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_old_output/diversity/beta_type_group_permanova.tsv'), sep='\t', index=False)
+sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_methods_output/diversity/beta_type_group_permanova.tsv'), sep='\t', index=False)
 
 # Pivot to symmetric matrix
 heatmap_df = pairwise_df.pivot(index='Group1', columns='Group2', values='q-value')
@@ -257,8 +257,8 @@ sns.heatmap(
 )
 plt.title('Pairwise PERMANOVA (q-values)\nBlue = Not Significant, Red = Significant')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_Heatmap_permanova.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_Heatmap_permanova.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_Heatmap_permanova.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_Heatmap_permanova.pdf"))
 plt.close()
 
 
@@ -278,8 +278,8 @@ annotator.apply_and_annotate()
 plt.xticks(rotation=45)
 plt.ylim(alpha_y_bounds)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Alpha_type_group_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Alpha_type_group_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Alpha_type_group_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Alpha_type_group_boxplot.pdf"))
 plt.close()
 
 
@@ -295,8 +295,8 @@ g = sns.catplot(data=sub_df,
 plt.xticks(rotation=45)
 plt.ylim(alpha_y_bounds)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Alpha_status_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Alpha_status_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Alpha_status_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Alpha_status_boxplot.pdf"))
 plt.close()
 
 
@@ -354,8 +354,8 @@ ax.legend(
 )
 plt.title("Sample Type UMAP")
 fig.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group.pdf"))
 plt.close()
 
 
@@ -408,8 +408,8 @@ ax.legend(
 )
 plt.title("Sample Type UMAP")
 fig.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group_lung.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group_lung.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group_lung.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group_lung.pdf"))
 plt.close()
 
 
@@ -464,8 +464,8 @@ ax.legend(
 )
 plt.title("Sample Type UMAP")
 fig.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group_status.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_group_status.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group_status.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_group_status.pdf"))
 plt.close()
 
 
@@ -524,8 +524,8 @@ ax.legend(
 plt.title("Cancer Status UMAP")
 fig.tight_layout()
 
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_status.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_status.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_status.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_status.pdf"))
 plt.close()
 
 fig, ax = plt.subplots(figsize=(12, 10))
@@ -579,8 +579,8 @@ ax.legend(
 plt.title("Sample Type UMAP with study-wide outliers annotated")
 fig.tight_layout()
 
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_olall.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_olall.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_olall.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_olall.pdf"))
 plt.close()
 
 fig, ax = plt.subplots(figsize=(12, 10))
@@ -634,25 +634,25 @@ ax.legend(
 plt.title("Sample Type UMAP with type-wise outliers annotated")
 fig.tight_layout()
 
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_oltype.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/diversity/Beta_UMAP_type_oltype.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_oltype.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/Beta_UMAP_type_oltype.pdf"))
 plt.close()
 
 
 # MITO diversity
-alpha_path = os.path.join(data_dir, 'spark_old_output/mito/diversity/shannon.mito.tsv')
+alpha_path = os.path.join(data_dir, 'spark_methods_output/mito/diversity/shannon.mito.tsv')
 alpha_df = pd.read_csv(alpha_path, header=0, sep='\t')
 
-bray_path = os.path.join(data_dir, 'spark_old_output/mito/diversity/bray.mito.tsv')
+bray_path = os.path.join(data_dir, 'spark_methods_output/mito/diversity/bray.mito.tsv')
 bray_df = pd.read_csv(bray_path, header=0, sep='\t', index_col=0)
 bray_reducer, bray_umap = perform_umap(bray_df, random_state=42)
 
-jacc_path = os.path.join(data_dir, 'spark_old_output/mito/diversity/jaccard.mito.tsv')
+jacc_path = os.path.join(data_dir, 'spark_methods_output/mito/diversity/jaccard.mito.tsv')
 jacc_df = pd.read_csv(jacc_path, header=0, sep='\t', index_col=0)
 jacc_reducer, jacc_umap = perform_umap(jacc_df, random_state=42)
 jacc_umap.columns = ['Jacc_UMAP1', 'Jacc_UMAP2']
 
-mito_asv_path = os.path.join(data_dir, 'spark_old_output/mito/ASVs/ASV_final.mito.tsv')
+mito_asv_path = os.path.join(data_dir, 'spark_methods_output/mito/ASVs/ASV_final.mito.tsv')
 mito_asv_df = pd.read_csv(mito_asv_path, header=0, sep='\t', index_col=0)
 mito_asv_df.columns = [x.rsplit('_', 1)[0] for x in mito_asv_df.columns]
 mito_asv_stack_df = mito_asv_df.stack().reset_index()
@@ -670,7 +670,7 @@ mito_meta_df['pass_filter'] = [t if s in list(asv_meta_df['sample']) else 'Faile
                               ]
 asv_mito_meta_df = mito_asv_stack_df.reset_index().merge(metadata_df, how='left', on='sample')
 
-mito_meta_df.to_csv(os.path.join(data_dir, 'spark_old_output/mito/metadata/master_table_mito.tsv'), sep='\t', index=False)
+mito_meta_df.to_csv(os.path.join(data_dir, 'spark_methods_output/mito/metadata/master_table_mito.tsv'), sep='\t', index=False)
 mito_meta_df = mito_meta_df.loc[((~mito_meta_df['type_group'].isin(['Skin Brush', 'Scope Flush'])) & (mito_meta_df['pass_filter'] != 'Failed-QC'))]
 mito_meta_df = mito_meta_df.loc[mito_meta_df['pass_filter'] != 'Failed-QC']
 type_order = seqtype_list
@@ -687,7 +687,7 @@ _, pvals_corrected, _, _ = multipletests(sample_type_ttests['pval'], method='fdr
 sample_type_ttests['pval_adj'] = pvals_corrected
 sample_type_ttests['significant'] = sample_type_ttests['pval_adj'] < 0.05  # Boolean
 print(sample_type_ttests)
-sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_old_output/mito/diversity/alpha_sample_ttest_mito.tsv'), sep='\t', index=False)
+sample_type_ttests.to_csv(os.path.join(data_dir, 'spark_methods_output/mito/diversity/alpha_sample_ttest_mito.tsv'), sep='\t', index=False)
 
 plt.figure(figsize=(10, 10))
 g = sns.catplot(data=mito_meta_df,
@@ -705,6 +705,6 @@ annotator.configure(test='t-test_ind', text_format='star', loc='inside', verbose
 annotator.apply_and_annotate()
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/mito/diversity/Alpha_type_mito_boxplot.svg"))
-plt.savefig(os.path.join(data_dir, f"spark_old_output/mito/diversity/Alpha_type_mito_boxplot.pdf"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/Alpha_type_mito_boxplot.svg"))
+plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/Alpha_type_mito_boxplot.pdf"))
 plt.close()

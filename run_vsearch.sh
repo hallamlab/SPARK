@@ -97,7 +97,7 @@ done
 # Define directories
 INPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/fastq_combined"
 REFDB_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db"
-OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/combined_output"
+OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_methods_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
