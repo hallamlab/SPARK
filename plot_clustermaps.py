@@ -34,8 +34,11 @@ sns.set_theme()  # re-applies style with updated rcParams
 sns.set_style("white")
 
 
-
+### MAGIC VALUES ###    
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
+sub_dir = "spark_old_output"
+###  END  MAGIC  ###
+
 
 all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
@@ -62,13 +65,13 @@ kit_pallete = {'HostZERO-DEP': 'black',
 
 type_order = ['Oral Rinse', 'BAL', 'Lung Brush']
 
-metadata_table_path = os.path.join(data_dir, 'spark_methods_output/metadata/metadata_updated.tsv')
+metadata_table_path = os.path.join(data_dir, f"{sub_dir}/metadata/metadata_updated.tsv")
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_methods_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
+asv_meta_df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/metadata/ASV_meta.tsv"), sep='\t', header=0)
 
 # clustermaps
-isa_path = os.path.join(data_dir, 'spark_methods_output/indicspecies/Type_status_ISA_results.tsv')
+isa_path = os.path.join(data_dir, f"{sub_dir}/indicspecies/Type_status_ISA_results.tsv")
 isa_df = pd.read_csv(isa_path, sep='\t')
 sig_isa_df = isa_df.loc[((isa_df['type_significance'] == True) | (isa_df['status_significance'] == True)) &
                         ((isa_df['type_stat'] >= 0.6) | (isa_df['status_stat'] >= 0.6))
@@ -205,8 +208,8 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-    plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"{sub_dir}/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"{sub_dir}/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
     plt.close()
 
     g = sns.clustermap(
@@ -263,17 +266,17 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
 
 
-    plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_methods_output/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"{sub_dir}/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"{sub_dir}/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
     plt.close()
 
-    pivot_df.to_csv(os.path.join(data_dir, f"spark_methods_output/diversity/clustermap_{t}.tsv"), sep='\t')
+    pivot_df.to_csv(os.path.join(data_dir, f"{sub_dir}/diversity/clustermap_{t}.tsv"), sep='\t')
 
 
 
 # Mitochondrial Clustermaps
 
-mito_asv_path = os.path.join(data_dir, 'spark_methods_output/mito/ASVs/ASV_final.mito.tsv')
+mito_asv_path = os.path.join(data_dir, f"{sub_dir}/mito/ASVs/ASV_final.mito.tsv")
 mito_asv_df = pd.read_csv(mito_asv_path, header=0, sep='\t', index_col=0)
 mito_asv_df.columns = [x.rsplit('_', 1)[0] for x in mito_asv_df.columns]
 mito_asv_stack_df = mito_asv_df.stack().reset_index()
@@ -377,8 +380,8 @@ g.ax_heatmap.set_xticklabels(pivot_log.columns, rotation=90, ha='center')
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/clustermap_ASV_code_mito.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/clustermap_ASV_code_mito.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/diversity/clustermap_ASV_code_mito.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/diversity/clustermap_ASV_code_mito.pdf"), bbox_inches='tight')
 plt.close()
 
 g = sns.clustermap(
@@ -434,9 +437,9 @@ colorbar.set_label("ASV Count", rotation=270, labelpad=15)
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/clustermap_ASV_clustered_mito.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_methods_output/mito/diversity/clustermap_ASV_clustered_mito.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/diversity/clustermap_ASV_clustered_mito.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/diversity/clustermap_ASV_clustered_mito.pdf"), bbox_inches='tight')
 plt.close()
 
-pivot_df.to_csv(os.path.join(data_dir, f"spark_methods_output/mito/diversity/clustermap_ASV_mito.tsv"), sep='\t')
+pivot_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/diversity/clustermap_ASV_mito.tsv"), sep='\t')
 

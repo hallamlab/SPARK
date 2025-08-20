@@ -38,6 +38,181 @@ sns.set_theme()  # re-applies style with updated rcParams
 sns.set_style("white")
 
 
+def plot_grouppair_violins_sns(
+    shared_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_id_col: str = "sample_id",
+    group_col: str = "sample_type",
+    include_within: bool = True,
+    group_order: list | None = None,
+    group_colors: dict | None = None,   # {"GroupA":"#1b9e77", "GroupB":"#d95f02", ...}
+    title: str = "Group pair % shared",
+    ylabel: str = "% shared",
+    inner: str = "quartile",            # seaborn violin inner: "box", "quartile", "point", None
+    cut: float = 0,                      # 0 = trim to data range
+    bw: str | float = "scott",
+    scale: str = "width",
+    ax=None,
+):
+    """
+    Seaborn violins of %shared for non-redundant group pairs.
+    - shared_df: square DataFrame (samples x samples) of float percent values.
+    - meta_df:   DataFrame with sample->group mapping.
+    - group_colors: dict group -> color. Missing groups auto-colored; invalid colors warn.
+    - Only samples present in BOTH the square matrix (index & columns) and metadata are used.
+      Duplicate samples in metadata are dropped (first occurrence kept).
+    Returns (ax, tidy_df).
+    """
+
+    # -------- align & sanitize --------
+    # (1) ensure square overlap between index and columns
+    matrix_samples = [s for s in shared_df.index if s in shared_df.columns]
+    if not matrix_samples:
+        raise ValueError("Matrix has no overlapping index/column sample names.")
+
+    # (2) clean metadata & drop duplicate sample rows
+    meta = meta_df.copy()
+    meta[sample_id_col] = meta[sample_id_col].astype(str).str.strip()
+    meta[group_col] = meta[group_col].astype(str).str.strip()
+    meta = meta.drop_duplicates(subset=[sample_id_col], keep="first")
+
+    # (3) intersect with metadata samples
+    meta = meta[meta[sample_id_col].isin(matrix_samples)]
+    if meta.empty:
+        raise ValueError("No overlapping samples between matrix and metadata.")
+
+    # (4) final ordered sample list: preserve matrix row order, ensure in meta
+    samples = [s for s in matrix_samples if s in set(meta[sample_id_col])]
+    shared = shared_df.loc[samples, samples]
+
+    # (5) reorder meta to match 'samples'
+    meta = meta.set_index(sample_id_col).loc[samples].reset_index()
+
+    # -------- groups & ordering --------
+    # appearance order from filtered metadata
+    seen = set(); groups_in_use = []
+    for g in meta[group_col]:
+        if g not in seen:
+            seen.add(g); groups_in_use.append(g)
+
+    if group_order:
+        specified = [str(g).strip() for g in group_order if str(g).strip()]
+        unknown = [g for g in specified if g not in groups_in_use]
+        if unknown:
+            warnings.warn(f"Unknown groups in group_order {unknown}; ignored.")
+        groups = [g for g in specified if g in groups_in_use] + [g for g in groups_in_use if g not in specified]
+    else:
+        groups = groups_in_use
+
+    # map group -> samples (order respects 'samples')
+    group_to_samples = {
+        g: [s for s in samples if meta.loc[meta[sample_id_col]==s, group_col].iloc[0] == g]
+        for g in groups
+    }
+
+    # -------- color resolution (by group) --------
+    def _rgba_or_none(c, g):
+        try:
+            return to_rgba(c)
+        except ValueError:
+            warnings.warn(f"Ignoring invalid color '{c}' for group '{g}'.")
+            return None
+
+    resolved_group_colors = {}
+    user_map = group_colors or {}
+
+    # warn if user passes colors for groups not present
+    extras = [g for g in user_map if g not in groups]
+    if extras:
+        warnings.warn(f"group_colors provided for unknown groups {extras}; ignored.")
+
+    # take valid user colors
+    for g in groups:
+        c = user_map.get(g, None)
+        if c is not None:
+            rgba = _rgba_or_none(c, g)
+            if rgba is not None:
+                resolved_group_colors[g] = rgba
+
+    # auto-assign for missing groups
+    cmap = plt.get_cmap("tab20")
+    auto_i = 0
+    for g in groups:
+        if g not in resolved_group_colors:
+            resolved_group_colors[g] = cmap(auto_i % cmap.N)
+            auto_i += 1
+            warnings.warn(f"No color for group '{g}'; using auto color from 'tab20'.")
+
+    def _blend(a, b):
+        a = np.array(a); b = np.array(b)
+        mix = (a + b) / 2.0
+        mix[3] = max(a[3], b[3])
+        return tuple(mix)
+
+    # -------- collect values per group-pair --------
+    gpairs = combinations_with_replacement(groups, 2) if include_within else combinations(groups, 2)
+
+    rows = []        # build tidy df rows
+    pair_labels = [] # to preserve order for plotting
+    pair_colors = {} # palette for seaborn keyed by pair label
+
+    for g1, g2 in gpairs:
+        s1 = group_to_samples.get(g1, [])
+        s2 = group_to_samples.get(g2, [])
+        if not s1 or not s2:
+            continue
+
+        if g1 == g2:
+            if len(s1) < 2:
+                continue
+            sub = shared.loc[s1, s1].to_numpy()
+            iu = np.triu_indices(len(s1), k=1)
+            vals = sub[iu]
+            col = resolved_group_colors[g1]
+        else:
+            vals = shared.loc[s1, s2].to_numpy().ravel()
+            col = _blend(resolved_group_colors[g1], resolved_group_colors[g2])
+
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            continue
+
+        label = f"{g1} × {g2}"
+        pair_labels.append(label)
+        pair_colors[label] = col
+        rows.append(pd.DataFrame({"pair": label, "value": vals}))
+
+    if not rows:
+        raise ValueError("No pairwise values to plot (after alignment/dedup).")
+
+    tidy = pd.concat(rows, ignore_index=True)
+
+    # -------- plot with seaborn --------
+    if ax is None:
+        _, ax = plt.subplots(figsize=(max(6, 1.3*len(pair_labels)), 4.5), dpi=150)
+
+    sns.violinplot(
+        data=tidy,
+        x="pair",
+        y="value",
+        order=pair_labels,              # keep deterministic pair order
+        palette=pair_colors,            # per-pair colors (within=group color, between=blend)
+        cut=cut,
+        bw=bw,
+        scale=scale,
+        inner=inner,
+        ax=ax,
+    )
+
+    ax.set_xlabel("")                  # x labels already categorical
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.tick_params(axis="x", rotation=45)
+    ax.grid(axis="y", alpha=0.2, linestyle="--", linewidth=0.5)
+
+    return ax, tidy
+
+
 def pad_ids(ids, prefix, pad_width=None):
     # Extract numeric part
     numbers = [int(re.search(r'\d+', i).group()) for i in ids]
@@ -128,8 +303,7 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 ### MAGIC VALUES ###    
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_methods_output"
-samp_col = "lmp_id"
+sub_dir = "spark_old_output"
 ###  END  MAGIC  ###
 
 
@@ -139,7 +313,7 @@ if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
-metadata_table_path = os.path.join(data_dir, 'ref_db/combined_metadata.tsv')
+metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
 patient_set = sorted(list(set(metadata_df['Participant_ID'])))
@@ -161,7 +335,7 @@ metadata_df = metadata_df.sort_values(['patient_int', 'type_code', 'lung_code'])
 metadata_df['sample_code'] = [str(f"S{i+1:03d}") for i in range(len(metadata_df['sample']))]
 col = 'sample_code'
 metadata_df = metadata_df[[col] + [c for c in metadata_df.columns if c != col]]
-#metadata_df.drop_duplicates(subset=['sample'], inplace=True)
+metadata_df.drop_duplicates(subset=['sample'], inplace=True)
 
 keep_types = ['Scope Flush',
               'Skin Brush',
@@ -196,13 +370,13 @@ metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
 
 fastq_stats_path = os.path.join(data_dir, f"{sub_dir}/stats/fastq_stats.tsv")
 fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-fstats_df['sample'] = [str(x.split('/')[-1].split('_', 1)[0]) for x in fstats_df['file']]
-fstats_df['lmp_id'] = fstats_df['sample'].copy()
-fstats_df['sample'] = fstats_df['sample'].map(
-    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-).fillna(fstats_df['sample'])
-fstats_df = fstats_df.loc[fstats_df['lmp_id'].isin(metadata_df['lmp_id'])]
-metadata_df = metadata_df.loc[metadata_df['lmp_id'].isin(list(fstats_df['lmp_id']))]
+fstats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
+#fstats_df['lmp_id'] = fstats_df['sample'].copy()
+#fstats_df['sample'] = fstats_df['sample'].map(
+#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
+#).fillna(fstats_df['sample'])
+#fstats_df = fstats_df.loc[fstats_df['lmp_id'].isin(metadata_df['lmp_id'])]
+#metadata_df = metadata_df.loc[metadata_df['lmp_id'].isin(list(fstats_df['lmp_id']))]
 
 reads_df = fstats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
 reads_df['raw_count'] = reads_df['num_seqs'] / 2
@@ -214,14 +388,15 @@ tax_df.set_index('Feature ID', inplace=True)
 
 asv_path = os.path.join(data_dir, f"{sub_dir}/ASVs/ASV_target.micro.tsv")
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
-asv_df.columns = [str(x.split('/')[-1].split('_', 1)[0]) for x in asv_df.columns]
+asv_df.columns = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_df.columns]
 asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
 asv_stack_df = asv_df.stack().reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
-asv_stack_df['sample'] = asv_stack_df['sample'].map(
-    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-).fillna(asv_stack_df['sample'])
-asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
+#asv_stack_df['sample'] = asv_stack_df['sample'].map(
+#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
+#).fillna(asv_stack_df['sample'])
+#asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
+
 asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
 asv_stack_df.set_index('ASV_ID', inplace=True)
 
@@ -416,188 +591,6 @@ plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/clustermap_ASVpercent.pd
 plt.close()
 
 # Violins
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import warnings
-from itertools import combinations, combinations_with_replacement
-from matplotlib.colors import to_rgba
-
-def plot_grouppair_violins_sns(
-    shared_df: pd.DataFrame,
-    meta_df: pd.DataFrame,
-    sample_id_col: str = "sample_id",
-    group_col: str = "sample_type",
-    include_within: bool = True,
-    group_order: list | None = None,
-    group_colors: dict | None = None,   # {"GroupA":"#1b9e77", "GroupB":"#d95f02", ...}
-    title: str = "Group pair % shared",
-    ylabel: str = "% shared",
-    inner: str = "quartile",            # seaborn violin inner: "box", "quartile", "point", None
-    cut: float = 0,                      # 0 = trim to data range
-    bw: str | float = "scott",
-    scale: str = "width",
-    ax=None,
-):
-    """
-    Seaborn violins of %shared for non-redundant group pairs.
-    - shared_df: square DataFrame (samples x samples) of float percent values.
-    - meta_df:   DataFrame with sample->group mapping.
-    - group_colors: dict group -> color. Missing groups auto-colored; invalid colors warn.
-    - Only samples present in BOTH the square matrix (index & columns) and metadata are used.
-      Duplicate samples in metadata are dropped (first occurrence kept).
-    Returns (ax, tidy_df).
-    """
-
-    # -------- align & sanitize --------
-    # (1) ensure square overlap between index and columns
-    matrix_samples = [s for s in shared_df.index if s in shared_df.columns]
-    if not matrix_samples:
-        raise ValueError("Matrix has no overlapping index/column sample names.")
-
-    # (2) clean metadata & drop duplicate sample rows
-    meta = meta_df.copy()
-    meta[sample_id_col] = meta[sample_id_col].astype(str).str.strip()
-    meta[group_col] = meta[group_col].astype(str).str.strip()
-    meta = meta.drop_duplicates(subset=[sample_id_col], keep="first")
-
-    # (3) intersect with metadata samples
-    meta = meta[meta[sample_id_col].isin(matrix_samples)]
-    if meta.empty:
-        raise ValueError("No overlapping samples between matrix and metadata.")
-
-    # (4) final ordered sample list: preserve matrix row order, ensure in meta
-    samples = [s for s in matrix_samples if s in set(meta[sample_id_col])]
-    shared = shared_df.loc[samples, samples]
-
-    # (5) reorder meta to match 'samples'
-    meta = meta.set_index(sample_id_col).loc[samples].reset_index()
-
-    # -------- groups & ordering --------
-    # appearance order from filtered metadata
-    seen = set(); groups_in_use = []
-    for g in meta[group_col]:
-        if g not in seen:
-            seen.add(g); groups_in_use.append(g)
-
-    if group_order:
-        specified = [str(g).strip() for g in group_order if str(g).strip()]
-        unknown = [g for g in specified if g not in groups_in_use]
-        if unknown:
-            warnings.warn(f"Unknown groups in group_order {unknown}; ignored.")
-        groups = [g for g in specified if g in groups_in_use] + [g for g in groups_in_use if g not in specified]
-    else:
-        groups = groups_in_use
-
-    # map group -> samples (order respects 'samples')
-    group_to_samples = {
-        g: [s for s in samples if meta.loc[meta[sample_id_col]==s, group_col].iloc[0] == g]
-        for g in groups
-    }
-
-    # -------- color resolution (by group) --------
-    def _rgba_or_none(c, g):
-        try:
-            return to_rgba(c)
-        except ValueError:
-            warnings.warn(f"Ignoring invalid color '{c}' for group '{g}'.")
-            return None
-
-    resolved_group_colors = {}
-    user_map = group_colors or {}
-
-    # warn if user passes colors for groups not present
-    extras = [g for g in user_map if g not in groups]
-    if extras:
-        warnings.warn(f"group_colors provided for unknown groups {extras}; ignored.")
-
-    # take valid user colors
-    for g in groups:
-        c = user_map.get(g, None)
-        if c is not None:
-            rgba = _rgba_or_none(c, g)
-            if rgba is not None:
-                resolved_group_colors[g] = rgba
-
-    # auto-assign for missing groups
-    cmap = plt.get_cmap("tab20")
-    auto_i = 0
-    for g in groups:
-        if g not in resolved_group_colors:
-            resolved_group_colors[g] = cmap(auto_i % cmap.N)
-            auto_i += 1
-            warnings.warn(f"No color for group '{g}'; using auto color from 'tab20'.")
-
-    def _blend(a, b):
-        a = np.array(a); b = np.array(b)
-        mix = (a + b) / 2.0
-        mix[3] = max(a[3], b[3])
-        return tuple(mix)
-
-    # -------- collect values per group-pair --------
-    gpairs = combinations_with_replacement(groups, 2) if include_within else combinations(groups, 2)
-
-    rows = []        # build tidy df rows
-    pair_labels = [] # to preserve order for plotting
-    pair_colors = {} # palette for seaborn keyed by pair label
-
-    for g1, g2 in gpairs:
-        s1 = group_to_samples.get(g1, [])
-        s2 = group_to_samples.get(g2, [])
-        if not s1 or not s2:
-            continue
-
-        if g1 == g2:
-            if len(s1) < 2:
-                continue
-            sub = shared.loc[s1, s1].to_numpy()
-            iu = np.triu_indices(len(s1), k=1)
-            vals = sub[iu]
-            col = resolved_group_colors[g1]
-        else:
-            vals = shared.loc[s1, s2].to_numpy().ravel()
-            col = _blend(resolved_group_colors[g1], resolved_group_colors[g2])
-
-        vals = vals[np.isfinite(vals)]
-        if vals.size == 0:
-            continue
-
-        label = f"{g1} × {g2}"
-        pair_labels.append(label)
-        pair_colors[label] = col
-        rows.append(pd.DataFrame({"pair": label, "value": vals}))
-
-    if not rows:
-        raise ValueError("No pairwise values to plot (after alignment/dedup).")
-
-    tidy = pd.concat(rows, ignore_index=True)
-
-    # -------- plot with seaborn --------
-    if ax is None:
-        _, ax = plt.subplots(figsize=(max(6, 1.3*len(pair_labels)), 4.5), dpi=150)
-
-    sns.violinplot(
-        data=tidy,
-        x="pair",
-        y="value",
-        order=pair_labels,              # keep deterministic pair order
-        palette=pair_colors,            # per-pair colors (within=group color, between=blend)
-        cut=cut,
-        bw=bw,
-        scale=scale,
-        inner=inner,
-        ax=ax,
-    )
-
-    ax.set_xlabel("")                  # x labels already categorical
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.tick_params(axis="x", rotation=45)
-    ax.grid(axis="y", alpha=0.2, linestyle="--", linewidth=0.5)
-
-    return ax, tidy
-
 fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
 ax, tidy = plot_grouppair_violins_sns(
     shared_percent, metadata_df,
@@ -627,10 +620,10 @@ asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.va
 
 asv_stack_df = asv_df.stack().reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
-asv_stack_df['sample'] = asv_stack_df['sample'].map(
-    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-).fillna(asv_stack_df['sample'])
-asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
+#asv_stack_df['sample'] = asv_stack_df['sample'].map(
+#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
+#).fillna(asv_stack_df['sample'])
+#asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
 asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
 asv_stack_df.set_index('ASV_ID', inplace=True)
 
@@ -719,9 +712,6 @@ asv_keep_list = list(asv_meta_df.loc[asv_meta_df['Domain'] != 'Unassigned']['ASV
 final_asv_df = cleaned_asv_df[[x for x in cleaned_asv_df.columns if x in list(sub_df['sample'])]]
 final_asv_df = final_asv_df.loc[asv_keep_list]
 final_asv_df = final_asv_df.loc[~(final_asv_df == 0).all(axis=1)]
-
-#asv_meta_df['ASV_ID'] = pad_asv_ids(asv_meta_df['ASV_ID'].tolist(), pad_width=pad_width)  
-#final_asv_df.index = pad_asv_ids(final_asv_df.index.tolist(), pad_width=pad_width) 
 
 asv_meta_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/metadata/ASV_meta_mito.tsv"), sep='\t', index=False)
 final_asv_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/ASVs/ASV_final.mito.tsv"), sep='\t', index=True)

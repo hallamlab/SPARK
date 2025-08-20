@@ -11,11 +11,14 @@ def calc_shannon(counts):
     return shannon(counts)
 
 def main():
+    ### MAGIC VALUES ###    
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
+    sub_dir = "spark_old_output"
+    ###  END  MAGIC  ###
 
     # Create output directory if it doesn't exist
-    output_dir = os.path.join(data_dir, "spark_methods_output/diversity")
-    mito_output_dir = os.path.join(data_dir, "spark_methods_output/mito/diversity")
+    output_dir = os.path.join(data_dir, f"{sub_dir}/diversity")
+    mito_output_dir = os.path.join(data_dir, f"{sub_dir}/mito/diversity")
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
@@ -23,13 +26,13 @@ def main():
         os.makedirs(mito_output_dir)
         print(f"Created output directory: {mito_output_dir}")
 
-    asv_table = os.path.join(data_dir, 'spark_methods_output/ASVs/ASV_final.micro.tsv')
-    mito_table = os.path.join(data_dir, 'spark_methods_output/mito/ASVs/ASV_final.mito.tsv')
+    asv_table = os.path.join(data_dir, f"{sub_dir}/ASVs/ASV_final.micro.tsv")
+    mito_table = os.path.join(data_dir, f"{sub_dir}/mito/ASVs/ASV_final.mito.tsv")
 
-    output_shannon = os.path.join(data_dir, 'spark_methods_output/diversity/shannon.tsv')
-    output_shan_mito = os.path.join(data_dir, 'spark_methods_output/mito/diversity/shannon.mito.tsv')
-    output_bray = os.path.join(data_dir, 'spark_methods_output/diversity/bray.tsv')
-    output_br_mito = os.path.join(data_dir, 'spark_methods_output/mito/diversity/bray.mito.tsv')
+    output_shannon = os.path.join(data_dir, f"{sub_dir}/diversity/shannon.tsv")
+    output_shan_mito = os.path.join(data_dir, f"{sub_dir}/mito/diversity/shannon.mito.tsv")
+    output_bray = os.path.join(data_dir, f"{sub_dir}/diversity/bray.tsv")
+    output_br_mito = os.path.join(data_dir, f"{sub_dir}/mito/diversity/bray.mito.tsv")
 
     # Load input tables
     asv_df = pd.read_csv(asv_table, sep="\t", index_col=0).T
@@ -76,7 +79,7 @@ def main():
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
 
     # Compute pairwise Jaccard distances between sample
-    jaccard_output = os.path.join(data_dir, 'spark_methods_output/diversity/jaccard.tsv')
+    jaccard_output = os.path.join(data_dir, f"{sub_dir}/diversity/jaccard.tsv")
 
     asv_binary = (asv_df > 0).astype(int).values  # Convert counts to presence/absence
     distances = pdist(asv_binary, metric="jaccard")
@@ -85,7 +88,7 @@ def main():
     jaccard_df.index.name = "sample"
     jaccard_df.to_csv(jaccard_output, sep="\t")
 
-    jaccard_mito_output = os.path.join(data_dir, 'spark_methods_output/mito/diversity/jaccard.mito.tsv')
+    jaccard_mito_output = os.path.join(data_dir, f"{sub_dir}/mito/diversity/jaccard.mito.tsv")
 
     mito_binary = (mito_df > 0).astype(int).values
     distances = pdist(mito_binary, metric="jaccard")

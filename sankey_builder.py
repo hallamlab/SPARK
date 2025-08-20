@@ -319,8 +319,8 @@ def main():
     
     ### MAGIC VALUES ###    
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-    sub_dir = "spark_methods_output"
-    samp_col = "lmp_id"
+    sub_dir = "spark_old_output"
+    samp_col = "sample"
     ###  END  MAGIC  ###
     
     metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
@@ -350,13 +350,13 @@ def main():
    
     fastq_stats_path = os.path.join(data_dir, f"{sub_dir}/stats/fastq_stats.tsv")
     fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-    fstats_df[samp_col] = [str(x.split('/')[-1].split('_', 1)[0]) for x in fstats_df['file']]
+    fstats_df[samp_col] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby([samp_col])['num_seqs'].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on=samp_col)
 
     filter_stats_path = os.path.join(data_dir, f"{sub_dir}/stats/filtered_fastqs.tsv")
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
-    filter_stats_df[samp_col] = [str(x.split('/')[-1].split('.', 1)[0]) for x in filter_stats_df['file']]
+    filter_stats_df[samp_col] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in filter_stats_df['file']]
     filter_reads_df = filter_stats_df.groupby([samp_col])['num_seqs'].sum().reset_index()
     filter_meta_df = filter_reads_df.merge(metadata_df, on=samp_col)
 
@@ -364,7 +364,7 @@ def main():
     asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
     asv_raw_stack_df = asv_raw_df.stack().reset_index()
     asv_raw_stack_df.columns = ['ASV_ID', samp_col, 'count']
-    asv_raw_stack_df[samp_col] = [str(x.split('/')[-1].split('_', 1)[0]) for x in asv_raw_stack_df[samp_col]]
+    asv_raw_stack_df[samp_col] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_raw_stack_df[samp_col]]
     asv_raw_stack_df = asv_raw_stack_df.loc[asv_raw_stack_df['count'] > 0]
     asv_raw_stack_df.set_index('ASV_ID', inplace=True)
     asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on=samp_col)
@@ -374,7 +374,7 @@ def main():
     asv_decon_df = pd.read_csv(asv_decon_path, header=0, sep='\t', index_col=0)
     asv_decon_stack_df = asv_decon_df.stack().reset_index()
     asv_decon_stack_df.columns = ['ASV_ID', samp_col, 'count']
-    asv_decon_stack_df[samp_col] = [str(x.split('/')[-1].split('_', 1)[0]) for x in asv_decon_stack_df[samp_col]]
+    asv_decon_stack_df[samp_col] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_decon_stack_df[samp_col]]
     asv_decon_stack_df = asv_decon_stack_df.loc[asv_decon_stack_df['count'] > 0]
     asv_decon_stack_df.set_index('ASV_ID', inplace=True)
     asv_decon_meta_df = asv_decon_stack_df.merge(metadata_df, on=samp_col)
@@ -384,7 +384,7 @@ def main():
     asv_micro_df = pd.read_csv(asv_micro_path, header=0, sep='\t', index_col=0)
     asv_micro_stack_df = asv_micro_df.stack().reset_index()
     asv_micro_stack_df.columns = ['ASV_ID', samp_col, 'count']
-    asv_micro_stack_df[samp_col] = [str(x.split('/')[-1].split('_', 1)[0]) for x in asv_micro_stack_df[samp_col]]
+    asv_micro_stack_df[samp_col] = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_micro_stack_df[samp_col]]
     asv_micro_stack_df = asv_micro_stack_df.loc[asv_micro_stack_df['count'] > 0]
     asv_micro_stack_df.set_index('ASV_ID', inplace=True)
     asv_micro_meta_df = asv_micro_stack_df.merge(metadata_df, on=samp_col)
