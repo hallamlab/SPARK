@@ -97,7 +97,7 @@ done
 # Define directories
 INPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/fastq_combined"
 REFDB_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db"
-OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_methods_output"
+OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -175,7 +175,7 @@ filter_reads() {
         SAMPLE=$(basename ${M} .merged.fastq)
         vsearch --fastx_filter ${M} \
             --fastq_maxee 1.0 \
-            --fastq_minlen 230 \
+            --fastq_minlen 245 \
             --fastaout ${FILTERED_DIR}/${SAMPLE}.filtered.fasta
     done 2>&1 | tee -a "${LOG_DIR}/filtering_log.txt"
     echo "Step 3: Filtering completed."

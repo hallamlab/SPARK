@@ -319,7 +319,7 @@ def main():
     
     ### MAGIC VALUES ###    
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-    sub_dir = "spark_methods_output"
+    sub_dir = "spark_combined_output"
     samp_col = "lmp_id"
     ###  END  MAGIC  ###
     
