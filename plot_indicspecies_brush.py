@@ -352,11 +352,9 @@ def split_taxa_string(taxa_str, delimiter=';'):
     return tax_dict
 
 
+
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_combined_output/brush"
-
-
-taxonomy_path = os.path.join(data_dir, f"{sub_dir}/metadata/taxonomy_updated.tsv")
+taxonomy_path = os.path.join(data_dir, 'spark_combined_output/brush/metadata/taxonomy_updated.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['ASV_ID'] = [x.rsplit(';', 1)[0] for x in tax_df['ASV_ID']]
 tax_df.set_index('ASV_ID', inplace=True)
@@ -372,10 +370,10 @@ for t in tax_df['Taxon']:
 for t in taxonomy_dict:
     tax_df[t] = taxonomy_dict[t]
 
-df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/indicspecies/subclass2_indicator_species_results.tsv"), sep='\t')
+df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/subclass2_indicator_species_results.tsv'), sep='\t')
 df.rename(columns={df.columns[0]: 'ASV_ID'}, inplace=True)
 
-v_df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/metadata/Three_types_venn_presence_table.tsv"), sep='\t')
+v_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/Three_types_venn_presence_table.tsv'), sep='\t')
 venn_dict = {a:g for a,g in zip(v_df['ASV_ID'], v_df['grouping'])}
 
 type_index = {1: 'ca-contra',
@@ -384,7 +382,7 @@ type_index = {1: 'ca-contra',
               4: 'ca-contra+ca-lung',
               5: 'ca-contra+ctrl-brush',
               6: 'ca-lung+ctrl-brush',
-              7: 'not_indicator'
+              7: 'ctrl-brush+ca-contra+ca-lung'
               }
 
 type2_ind = {v: k for k, v in type_index.items()}
@@ -395,7 +393,7 @@ type_palette = {'ctrl-brush': '#6A3D9A',
                 'ca-contra+ca-lung': '#00FFFF',
                 'ca-lung': '#009E73',
                 'ca-lung+ctrl-brush': '#C1EAAD',
-                'not_indicator': 'lightgray'
+                'ctrl-brush+ca-contra+ca-lung': 'black'
                 }
 
 venn2palette = {'ctrl-brush':'ctrl-brush',
@@ -404,7 +402,7 @@ venn2palette = {'ctrl-brush':'ctrl-brush',
                 'ctrl-brush + ca-contra':'ca-contra+ctrl-brush',
                 'ctrl-brush + ca-lung':'ca-lung+ctrl-brush',
                 'ca-contra + ca-lung':'ca-contra+ca-lung',
-                'ctrl-brush + ca-contra + ca-lung': 'not_indicator'
+                'ctrl-brush + ca-contra + ca-lung': 'ctrl-brush+ca-contra+ca-lung'
                 }
 
 sub_df = df.loc[df['index'].isin(type_index.keys())]
@@ -417,7 +415,7 @@ type_isa_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_color', 'type_label'
                       ]
 plot_p_vs_stat_no_overlap(type_isa_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/subclass2_ISA_plot.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/subclass2_ISA_plot.svg'),
                           type_palette=type_palette,
                           x_col="type_stat",
                           y_col="type_log_p",
@@ -430,7 +428,7 @@ type_venn_df.columns = ['ASV_ID', 'ca-contra', 'ca-lung', 'ctrl-brush',
                       'type_color', 'type_label'
                       ]
 plot_p_vs_stat_no_overlap(type_venn_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/subclass2_Venn_plot.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/subclass2_Venn_plot.svg'),
                           type_palette=type_palette,
                           x_col="type_stat",
                           y_col="type_log_p",
@@ -444,28 +442,27 @@ phyla = sub_tax_df['Phylum'].unique()
 palette = sns.color_palette('tab20', len(phyla))  # or 'Set3', 'Paired', etc.
 # Map phylum to color
 phylum_color_dict = dict(zip(phyla, palette))
-phylum_color_dict['not_indicator'] = "lightgray"
 plot_p_vs_stat_no_overlap(sub_tax_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/subclass2_ISA_plot_Phylum.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/subclass2_ISA_plot_Phylum.svg'),
                           type_palette=phylum_color_dict,
                           x_col="type_stat",
                           y_col="type_log_p",
                           hue_col="Phylum",
                           )
 
-df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/indicspecies/status_indicator_species_results.tsv"), sep='\t')
+df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/status_indicator_species_results.tsv'), sep='\t')
 df.rename(columns={df.columns[0]: 'ASV_ID'}, inplace=True)
 
-index_dict = {1: 'Cancer', 2: 'Non-Cancer', 3: 'not_indicator'}
-status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026', 'not_indicator': 'lightgray'}
-marker_dict = {'Non-Cancer':'D', 'Cancer':'X', 'not_indicator':'o'}
+index_dict = {1: 'Cancer', 2: 'Non-Cancer', 3: 'Cancer+Non-Cancer'}
+status_palette = {'Non-Cancer':'white', 'Cancer':'#A50026', 'Cancer+Non-Cancer': 'black'}
+marker_dict = {'Non-Cancer':'D', 'Cancer':'X', 'Cancer+Non-Cancer':'o'}
 status_isa_df = sig_table(df, index_dict, status_palette)
 status_isa_df.columns = ['ASV_ID', 'Cancer', 'Non-Cancer', 'status_index', 'status_stat',
                          'status_p_value', 'status_log_p', 'status_significance', 'status_color',
                          'status_label'
                          ]
 plot_p_vs_stat_no_overlap(status_isa_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/status_ISA_plot.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/status_ISA_plot.svg'),
                           type_palette=status_palette,
                           x_col="status_stat",
                           y_col="status_log_p",
@@ -473,9 +470,9 @@ plot_p_vs_stat_no_overlap(status_isa_df,
                           )
 
 type_status_df = pd.merge(type_isa_df, status_isa_df, on='ASV_ID', how='right')
-type_status_df.to_csv(os.path.join(data_dir, f"{sub_dir}/indicspecies/Type_status_ISA_results.tsv"), sep='\t')
+type_status_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Type_status_ISA_results.tsv'), sep='\t')
 plot_p_vs_stat_no_overlap(type_status_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/Combined_ISA_plot.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Combined_ISA_plot.svg'),
                           type_palette=type_palette,
                           marker_dict=marker_dict,
                           x_col="status_stat",
@@ -486,34 +483,30 @@ plot_p_vs_stat_no_overlap(type_status_df,
 
 ts_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_p_vs_stat_no_overlap(ts_tax_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/Combined_ISA_plot_Phylum.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Combined_ISA_plot_Phylum.svg'),
                           type_palette=phylum_color_dict,
-                          marker_dict=marker_dict,
                           x_col="status_stat",
                           y_col="status_log_p",
                           hue_col="Phylum",
-                          style_col="status_label"
                           )
 
 type_status_df = pd.merge(type_venn_df, status_isa_df, on='ASV_ID', how='right')
-type_status_df.to_csv(os.path.join(data_dir, f"{sub_dir}/indicspecies/Type_status_Venn_results.tsv"), sep='\t')
+type_status_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Type_status_Venn_results.tsv'), sep='\t')
 plot_p_vs_stat_no_overlap(type_status_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/Combined_Venn_plot.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Combined_Venn_plot.svg'),
                           type_palette=type_palette,
                           marker_dict=marker_dict,
                           x_col="status_stat",
                           y_col="status_log_p",
                           hue_col="type_color",
-                          style_col="status_label"
+                          style_col="status_color"
                           )
 
 ts_tax_df = type_status_df.merge(tax_df, left_on='ASV_ID', right_index=True)
 plot_p_vs_stat_no_overlap(ts_tax_df,
-                          os.path.join(data_dir, f"{sub_dir}/indicspecies/Combined_Venn_plot_Phylum.svg"),
+                          os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Combined_Venn_plot_Phylum.svg'),
                           type_palette=phylum_color_dict,
-                          marker_dict=marker_dict,
-                          x_col="status_stat",
-                          y_col="status_log_p",
+                          x_col="type_stat",
+                          y_col="type_log_p",
                           hue_col="Phylum",
-                          style_col="status_label"
                           )
