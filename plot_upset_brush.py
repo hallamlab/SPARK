@@ -88,8 +88,8 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
-asv_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
-metadata_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/metadata_updated.tsv'), sep='\t')
+asv_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/ASVs/ASV_final.micro.tsv'), sep='\t', index_col=0)
+metadata_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/metadata_updated.tsv'), sep='\t')
 
 asv_stack_df = asv_df.stack(future_stack=True).reset_index()
 asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
@@ -97,7 +97,7 @@ merge_df = asv_stack_df.merge(metadata_df, how='left', on='sample')
 
 filter_df = merge_df.loc[merge_df['count'] > 0]
 
-taxonomy_path = os.path.join(data_dir, 'spark_old_output/brush/metadata/taxonomy_updated.tsv')
+taxonomy_path = os.path.join(data_dir, 'spark_combined_output/brush/metadata/taxonomy_updated.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['ASV_ID'] = [x.split(';', 1)[0] for x in tax_df['ASV_ID']]
 tax_df.set_index('ASV_ID', inplace=True)
@@ -171,9 +171,9 @@ handles = [mpatches.Patch(facecolor=brush_palette[t], edgecolor="black", label=t
 fig.legend(handles=handles, title='Type', bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
 
 plt.title("ASV Membership by subclass2", y=1.05)
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_upset_plot.svg"),
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_upset_plot.svg"),
             format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_upset_plot.pdf"),
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_upset_plot.pdf"),
             format="pdf", bbox_inches="tight")
 
 sub_df = asv_tax_df.loc[asv_tax_df['subclass2'].isin(sub_list)]
@@ -224,8 +224,8 @@ labels = order
 ax.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
 
 plt.title("ASV Membership by Type", y=1.05)
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_upset_plot_sum.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_upset_plot_sum.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_upset_plot_sum.pdf"), format="pdf", bbox_inches="tight")
 
 # Venns
 venn = partial(custom_venn_dispatch, func=draw_venn, hint_hidden=False)
@@ -253,8 +253,8 @@ venn3([oral_set, bal_set, lung_set], ("ctrl-brush", "ca-contra", "ca-lung"),
 #         alpha=0.45
 #         )
 
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_diagram.svg"), format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_diagram.pdf"), format="pdf", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_diagram.svg"), format="svg", bbox_inches="tight")
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_diagram.pdf"), format="pdf", bbox_inches="tight")
 
 all_names = sub_list
 columns = {}
@@ -284,7 +284,7 @@ venn_list = [[label, asv] for label, ids in columns.items() for asv in ids]
 # Make DataFrame and save
 venn_table = pd.DataFrame(venn_list, columns=["grouping", "ASV_ID"])
 venn_table.to_csv(
-    os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_presence_table.tsv"),
+    os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_presence_table.tsv"),
     sep="\t",
     index=False
 )
@@ -324,7 +324,7 @@ venn_list = [[label, int(sum(asv_sum_dict.get(asv, 0) for asv in ids))]
              ]
 venn_table = pd.DataFrame(venn_list, columns=["grouping", "Sum_count"])
 venn_table.to_csv(
-    os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_sum_table.tsv"),
+    os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_sum_table.tsv"),
     sep="\t",
     index=False
 )
@@ -340,7 +340,7 @@ venn3(subsets=pedal_sums, set_labels=("ctrl-brush", "ca-contra", "ca-lung"),
 #         alpha=0.45)
 
 # Save diagram with sums
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_sum_diagram.svg"),
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_sum_diagram.svg"),
             format="svg", bbox_inches="tight")
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/Three_types_venn_sum_diagram.pdf"),
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/Three_types_venn_sum_diagram.pdf"),
             format="pdf", bbox_inches="tight")

@@ -301,18 +301,18 @@ def plot_grouppair_violins_sns(
 
 # Create output directory if it doesn't exist
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-output_dir = os.path.join(data_dir, "spark_old_output/brush/metadata")
+output_dir = os.path.join(data_dir, "spark_combined_output/brush/metadata")
 if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
-output_dir = os.path.join(data_dir, "spark_old_output/brush/ASVs")
+output_dir = os.path.join(data_dir, "spark_combined_output/brush/ASVs")
 if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
 metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df = metadata_df[['sample', 'kit', 'Participant_ID',
+metadata_df = metadata_df[['sample', 'lmp_id', 'kit', 'Participant_ID',
                             'Case', 'Cancer_Site', 'Type', 'Barcode',
                             'Set', 'experiment', 'type_group', 'DNA_conc',
                             'DNA_plate', 'DNA_well', 'patient_samples',
@@ -350,7 +350,6 @@ metadata_df = metadata_df.sort_values(['patient_int', 'type_code', 'lung_code'])
 metadata_df['sample_code'] = [str(f"S{i+1:03d}") for i in range(len(metadata_df['sample']))]
 col = 'sample_code'
 metadata_df = metadata_df[[col] + [c for c in metadata_df.columns if c != col]]
-metadata_df.drop_duplicates(subset=['sample'], inplace=True)
 
 keep_types = ['Scope Flush',
               'Skin Brush',
@@ -391,35 +390,36 @@ brush_palette = {'ca-lung': '#009E73',
 brush_list = ['ctrl-brush', 'ca-contra', 'ca-lung', 'No VOCs']
 
 metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
-
-fastq_stats_path = os.path.join(data_dir, 'spark_old_output/stats/fastq_stats.tsv')
+fastq_stats_path = os.path.join(data_dir, 'spark_combined_output/stats/fastq_stats.tsv')
 fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-fstats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
-reads_df = fstats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
+fstats_df['lmp_id'] = [str(x.split('/')[-1].split('_', 1)[0]) for x in fstats_df['file']]
+metadata_df = metadata_df.loc[metadata_df['lmp_id']. isin(fstats_df['lmp_id'])]
 
-taxonomy_path = os.path.join(data_dir, 'spark_old_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+reads_df = fstats_df.groupby(['lmp_id'])['num_seqs'].sum().reset_index()
+
+taxonomy_path = os.path.join(data_dir, 'spark_combined_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
 tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
 tax_df['Feature ID'] = [x.split(';', 1)[0] for x in tax_df['Feature ID']]
 tax_df.set_index('Feature ID', inplace=True)
 
-asv_raw_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_counts.tsv')
+asv_raw_path = os.path.join(data_dir, 'spark_combined_output/ASVs/ASV_counts.tsv')
 asv_raw_df = pd.read_csv(asv_raw_path, header=0, sep='\t', index_col=0)
 asv_raw_df.columns = [str(x.rsplit('_', 2)[0]) for x in asv_raw_df.columns]
 asv_raw_stack_df = asv_raw_df.stack().reset_index()
-asv_raw_stack_df.columns = ['ASV_ID', 'sample', 'raw_count']
+asv_raw_stack_df.columns = ['ASV_ID', 'lmp_id', 'raw_count']
 asv_raw_stack_df.set_index('ASV_ID', inplace=True)
-asv_raw_stack_df['sample'] = asv_raw_stack_df['sample'].astype(str)
+asv_raw_stack_df['lmp_id'] = asv_raw_stack_df['lmp_id'].astype(str)
 metadata_df['sample'] = metadata_df['sample'].astype(str)
-asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='sample', how='inner')
+asv_raw_meta_df = asv_raw_stack_df.merge(metadata_df, on='lmp_id', how='inner')
 asv_raw_meta_df = asv_raw_meta_df.loc[asv_raw_meta_df['raw_count'] > 0]
 asv_raw_cnt_df = asv_raw_meta_df.groupby(['sample'])['raw_count'].sum().reset_index()
 
-asv_path = os.path.join(data_dir, 'spark_old_output/ASVs/ASV_target.micro.tsv')
+asv_path = os.path.join(data_dir, 'spark_combined_output/ASVs/ASV_target.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
 asv_df.columns = [str(x.rsplit('_', 2)[0]) for x in asv_df.columns]
 asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
 asv_stack_df = asv_df.stack().reset_index()
-asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
+asv_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
 asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
 asv_stack_df.set_index('ASV_ID', inplace=True)
 
@@ -436,10 +436,11 @@ for t in asv_tax_df['Taxon']:
 for t in taxonomy_dict:
     asv_tax_df[t] = taxonomy_dict[t]
 
-asv_meta_df = asv_tax_df.reset_index().merge(metadata_df, on='sample', how='inner')
+asv_meta_df = asv_tax_df.reset_index().merge(metadata_df, on='lmp_id', how='inner')
+
 cnt_df = asv_meta_df.groupby(['sample'])['count'].sum().reset_index()
 
-metastat_df = metadata_df.merge(reads_df, how='left', on='sample')
+metastat_df = metadata_df.merge(reads_df, how='left', on='lmp_id')
 metastat_df = metastat_df.merge(cnt_df, how='left', on='sample')
 metastat_df = metastat_df.merge(asv_raw_cnt_df, how='left', on='sample')
 metavoc_df = metastat_df.merge(voc_metadata_df[['sample', 'subclass2']], how='left', on='sample')
@@ -482,8 +483,8 @@ sns.stripplot(data=long_df, x='subclass2', y='raw_count',
 plt.title("Sample Type")
 plt.xticks(rotation=45)
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/subclass2_swarmplot.svg"))
-plt.savefig(os.path.join(data_dir, "spark_old_output/brush/metadata/subclass2_swarmplot.pdf"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/subclass2_swarmplot.svg"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/brush/metadata/subclass2_swarmplot.pdf"))
 plt.close()
 
 metastat_df['pass_filter'] = [t if s in list(asv_meta_df['sample']) else 'Failed-QC'
@@ -543,11 +544,11 @@ new_tax_df.columns = ['ASV_ID', 'Taxon', 'Concensus']
 
 new_metadata_df = metadata_df.merge(voc_metadata_df, on='sample', how='right')
 
-new_tax_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/taxonomy_updated.tsv'), sep='\t', index=False)
-new_asv_meta_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/ASV_meta.tsv'), sep='\t', index=False)
-final_asv_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/ASVs/ASV_final.micro.tsv'), sep='\t', index=True)
-metavoc_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/master_table.tsv'), sep='\t', index=False)
-new_metadata_df.to_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/metadata_updated.tsv'), sep='\t', index=False)
+new_tax_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/taxonomy_updated.tsv'), sep='\t', index=False)
+new_asv_meta_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/ASV_meta.tsv'), sep='\t', index=False)
+final_asv_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/ASVs/ASV_final.micro.tsv'), sep='\t', index=True)
+metavoc_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/master_table.tsv'), sep='\t', index=False)
+new_metadata_df.to_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/metadata_updated.tsv'), sep='\t', index=False)
 
 # Map to colors
 m_df = metavoc_df.loc[metavoc_df['sample'].isin(final_asv_df.columns)].set_index('sample')
@@ -631,8 +632,8 @@ colorbar = g.ax_heatmap.collections[0].colorbar
 colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)
-plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/metadata/clustermap_ASVpercent.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/metadata/clustermap_ASVpercent.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/metadata/clustermap_ASVpercent.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/metadata/clustermap_ASVpercent.pdf"), bbox_inches='tight')
 plt.close()
 
 # Violins
@@ -652,6 +653,6 @@ ax, tidy = plot_grouppair_violins_sns(
 )
 
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/metadata/violin_ASVpercent.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/metadata/violin_ASVpercent.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/metadata/violin_ASVpercent.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/metadata/violin_ASVpercent.pdf"), bbox_inches='tight')
 plt.close()

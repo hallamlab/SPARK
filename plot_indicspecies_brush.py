@@ -353,7 +353,7 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_old_output/brush"
+sub_dir = "spark_combined_output/brush"
 
 
 taxonomy_path = os.path.join(data_dir, f"{sub_dir}/metadata/taxonomy_updated.tsv")

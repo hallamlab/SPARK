@@ -54,13 +54,13 @@ kit_pallete = {'HostZERO-DEP': 'black',
 
 ordered_type = ['ctrl-brush', 'ca-contra', 'ca-lung']
 
-metadata_table_path = os.path.join(data_dir, 'spark_old_output/brush/metadata/metadata_updated.tsv')
+metadata_table_path = os.path.join(data_dir, 'spark_combined_output/brush/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_old_output/brush/metadata/ASV_meta.tsv'), sep='\t', header=0)
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/brush/metadata/ASV_meta.tsv'), sep='\t', header=0)
 
 # clustermaps
-isa_path = os.path.join(data_dir, 'spark_old_output/brush/indicspecies/Type_status_ISA_results.tsv')
+isa_path = os.path.join(data_dir, 'spark_combined_output/brush/indicspecies/Type_status_ISA_results.tsv')
 isa_df = pd.read_csv(isa_path, sep='\t')
 sig_isa_df = isa_df.loc[((isa_df['type_significance'] == True) | (isa_df['status_significance'] == True)) &
                         ((isa_df['type_stat'] >= 0.6) | (isa_df['status_stat'] >= 0.6))
@@ -75,7 +75,7 @@ for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']
     rank_type_dict[rank] = {}
     rank_dict[rank] = []
     if rank == 'ASV_ID':
-        N = 30
+        N = 6000
     else:
         N = 30
     for group in asv_meta_df['subclass2'].unique():
@@ -127,7 +127,7 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     #if t == 'ASV_ID_plot':
     #    height = 120
     #else:
-    height = max(8, min(0.4 * num_rows, 50))  # auto-scale with sane bounds
+    height = max(8, min(0.4 * num_rows, 6000))  # auto-scale with sane bounds
     
     # Define your desired tick values (original scale)
     tick_vals_orig = [5, 50, 500, 5000, 50000]
@@ -195,8 +195,8 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-    plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
     plt.close()
 
     g = sns.clustermap(
@@ -252,8 +252,8 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
 
-    plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_old_output/brush/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
     plt.close()
 
-    pivot_df.to_csv(os.path.join(data_dir, f"spark_old_output/brush/diversity/clustermap_{t}.tsv"), sep='\t')
+    pivot_df.to_csv(os.path.join(data_dir, f"spark_combined_output/brush/diversity/clustermap_{t}.tsv"), sep='\t')

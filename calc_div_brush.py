@@ -14,15 +14,15 @@ def main():
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
 
     # Create output directory if it doesn't exist
-    output_dir = os.path.join(data_dir, "spark_old_output/brush/diversity")
+    output_dir = os.path.join(data_dir, "spark_combined_output/brush/diversity")
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
 
-    asv_table = os.path.join(data_dir, 'spark_old_output/brush/ASVs/ASV_final.micro.tsv')
+    asv_table = os.path.join(data_dir, 'spark_combined_output/brush/ASVs/ASV_final.micro.tsv')
 
-    output_shannon = os.path.join(data_dir, 'spark_old_output/brush/diversity/shannon.tsv')
-    output_bray = os.path.join(data_dir, 'spark_old_output/brush/diversity/bray.tsv')
+    output_shannon = os.path.join(data_dir, 'spark_combined_output/brush/diversity/shannon.tsv')
+    output_bray = os.path.join(data_dir, 'spark_combined_output/brush/diversity/bray.tsv')
 
     # Load input tables
     asv_df = pd.read_csv(asv_table, sep="\t", index_col=0).T
@@ -51,7 +51,7 @@ def main():
     print(f"Bray-Curtis beta diversity saved to {output_bray}")
 
     # Compute pairwise Jaccard distances between sample
-    jaccard_output = os.path.join(data_dir, 'spark_old_output/brush/diversity/jaccard.tsv')
+    jaccard_output = os.path.join(data_dir, 'spark_combined_output/brush/diversity/jaccard.tsv')
 
     asv_binary = (asv_df > 0).astype(int).values  # Convert counts to presence/absence
     distances = pdist(asv_binary, metric="jaccard")
