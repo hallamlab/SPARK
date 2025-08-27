@@ -640,7 +640,6 @@ plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_plot.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_plot.pdf"), bbox_inches='tight')
 
-'''
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -733,8 +732,7 @@ plt.axis('off')
 plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_plot_LABELED.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_plot_LABELED.pdf"), bbox_inches='tight')
-'''
-'''
+
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -827,7 +825,6 @@ plt.axis('off')
 plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_venn_plot_LABELED.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_venn_plot_LABELED.pdf"), bbox_inches='tight')
-'''
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
@@ -898,7 +895,6 @@ plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_venn_plot.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_type_venn_plot.pdf"), bbox_inches='tight')
 
-'''
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
 for node in G.nodes:
@@ -1001,7 +997,6 @@ plt.axis('off')
 plt.tight_layout()
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_status_plot_LABELED.svg"), bbox_inches='tight')
 plt.savefig(os.path.join(data_dir, f"spark_combined_output/brush/spieceasi/network_status_plot_LABELED.pdf"), bbox_inches='tight')
-'''
 
 G = nx.read_graphml(network_file)
 # Add metadata to graph nodes
