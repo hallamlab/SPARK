@@ -9,10 +9,10 @@ import seaborn as sns
 
 
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-mitomaster_full_file = os.path.join(data_dir, 'spark_methods_output/mito/mitomap/mitomaster_combined.tsv')
-mito_blast_file = os.path.join(data_dir, 'spark_methods_output/mito/mitomap/mito_ncbi.blast6.tsv')
-gg2_full_file = os.path.join(data_dir, 'spark_methods_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
-biof_file = os.path.join(data_dir, 'spark_methods_output/mito/mitomap/ssu_pipeline_contaminants.blast6.tsv')
+mitomaster_full_file = os.path.join(data_dir, 'spark_combined_output/mito/mitomap/mitomaster_combined.tsv')
+mito_blast_file = os.path.join(data_dir, 'spark_combined_output/mito/mitomap/mito_ncbi.blast6.tsv')
+gg2_full_file = os.path.join(data_dir, 'spark_combined_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv')
+biof_file = os.path.join(data_dir, 'spark_combined_output/mito/mitomap/ssu_pipeline_contaminants.blast6.tsv')
 
 columns = [
     'qseqid', 'sseqid', 'pident', 'length', 'qlen', 'mismatch',
@@ -60,7 +60,7 @@ master_df = master_df.merge(sub_biof_df, on='Sequence_ID', how='left')
 master_df = master_df.merge(ggfl_df, on='Sequence_ID', how='left')
 master_df = master_df.merge(sub_mibl_df, on='Sequence_ID', how='left')
 master_df.drop_duplicates(subset='Sequence_ID', inplace=True)
-master_df.to_csv(os.path.join(data_dir, 'spark_methods_output/mito/mitomap/nontarget.master.tsv'), sep='\t', index=False)
+master_df.to_csv(os.path.join(data_dir, 'spark_combined_output/mito/mitomap/nontarget.master.tsv'), sep='\t', index=False)
 
 # Step order
 steps = ['BioFactorial', 'Qiime_NB_FULL', 'MITOMASTER', 'BLAST_mito'] #, 'BLAST_human']
@@ -101,8 +101,8 @@ plt.ylabel("Number of ASVs")
 plt.xlabel("Method")
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/non-target_plot.svg"))
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/non-target_plot.pdf"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/non-target_plot.svg"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/non-target_plot.pdf"))
 plt.close()
 
 
@@ -150,8 +150,8 @@ plt.ylabel("Number of ASVs")
 plt.xlabel("Method")
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/Microbial_Host_plot.svg"))
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/Microbial_Host_plot.pdf"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/Microbial_Host_plot.svg"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/Microbial_Host_plot.pdf"))
 plt.close()
 
 
@@ -200,6 +200,6 @@ plt.ylabel("Number of ASVs")
 plt.xlabel("Method")
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/Non-Target_barplot.svg"))
-plt.savefig(os.path.join(data_dir, "spark_methods_output/mito/mitomap/Non-Target_barplot.pdf"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/Non-Target_barplot.svg"))
+plt.savefig(os.path.join(data_dir, "spark_combined_output/mito/mitomap/Non-Target_barplot.pdf"))
 plt.close()

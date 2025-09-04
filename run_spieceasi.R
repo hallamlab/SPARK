@@ -14,19 +14,19 @@ library(tidyverse)
 
 
 # Create a directory for outputs if it doesn't exist
-if (!dir.exists("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi")) {
-  dir.create("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi")
+if (!dir.exists("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi")) {
+  dir.create("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi")
 }
 
 # Parse command-line arguments
 args <- commandArgs(trailingOnly = TRUE)
-count_data_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/ASVs/ASV_final.micro.tsv"
+count_data_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/ASVs/ASV_final.micro.tsv"
 
 # Define file paths for saving intermediate objects
-filtered_count_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/count_data_filtered.RDS"
-spiec_easi_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/se_gl_cnt.RDS"
-igraph_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/ig_gl.RDS"
-layout_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/am_coord.RDS"
+filtered_count_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/count_data_filtered.RDS"
+spiec_easi_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/se_gl_cnt.RDS"
+igraph_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/ig_gl.RDS"
+layout_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/am_coord.RDS"
 
 # Function to check if a file exists and load it, else return FALSE
 load_if_exists <- function(path) {
@@ -122,7 +122,7 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   precision_matrix <- as.matrix(se.gl.cnt$est$icov[[opt_index]])
   precision_df <- as.data.frame(precision_matrix)
   precision_df <- tibble::rownames_to_column(precision_df, var = "ASV_ID")
-  write.csv(precision_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/precision_matrix.csv", row.names = FALSE)
+  write.csv(precision_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/precision_matrix.csv", row.names = FALSE)
 
   # Step 2: Compute the partial correlation matrix
   D_inv_sqrt <- diag(1 / sqrt(diag(precision_matrix)))
@@ -130,13 +130,13 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   diag(partial_cor_matrix) <- 0  # Remove self-loops
   partial_cor_df <- as.data.frame(partial_cor_matrix)
   partial_cor_df <- tibble::rownames_to_column(partial_cor_df, var = "ASV_ID")
-  write.csv(partial_cor_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/partial_correlation_matrix.csv", row.names = FALSE)
+  write.csv(partial_cor_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/partial_correlation_matrix.csv", row.names = FALSE)
 
   # Step 3: Take absolute values and symmetrize
   adj_bin <- as.matrix(se.gl.cnt$refit$stars)
   adj_df <- as.data.frame(adj_bin)
   adj_df <- tibble::rownames_to_column(adj_df, var = "ASV_ID")
-  write.csv(adj_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/adj_STARS_matrix.csv", row.names = FALSE)
+  write.csv(adj_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/adj_STARS_matrix.csv", row.names = FALSE)
 
 
   threshold <- 0.1 #.001  # Adjust based on the distribution of edge weights
@@ -144,7 +144,7 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   adj_weighted <- partial_cor_matrix
   adj_weighted[ abs(adj_weighted) < threshold ] <- 0
   adj_weighted[ adj_weighted < 0 ] <- 0
-  write.csv(adj_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
+  write.csv(adj_df, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/adj_weighted_matrix.csv", row.names = FALSE)
 
   # Force symmetry on the weighted adjacency matrix
   adj_weighted <- (adj_weighted + t(adj_weighted)) / 2
@@ -236,7 +236,7 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
   print(paste("Layout coordinates saved to", layout_path))
 
   # Open a multipage PDF to save all layouts in one file
-  pdf("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/multipage_layouts.pdf", width = 10, height = 10)
+  pdf("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/multipage_layouts.pdf", width = 10, height = 10)
 
   # Page 1: Default layout_nicely
   plot(ig.gl, layout = layout_nicely_coords, vertex.size = vsize, vertex.label = NA, 
@@ -256,12 +256,12 @@ if (identical(ig.gl, FALSE) || identical(am.coord, FALSE)) {
 
   # Close the PDF device to write the file
   dev.off()
-  write_graph(ig.gl, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_pos_sub.graphml", format = "graphml")
-  write_graph(ig.gl, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_pos_sub.gml", format = "gml")
-  write_graph(ig_signed, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_signed.graphml", format = "graphml")
-  write_graph(ig_signed, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_signed.gml", format = "gml")
-  write_graph(ig.gl.all, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_pos_all.graphml", format = "graphml")
-  write_graph(ig.gl.all, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/network_pos_all.gml", format = "gml")
+  write_graph(ig.gl, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_pos_sub.graphml", format = "graphml")
+  write_graph(ig.gl, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_pos_sub.gml", format = "gml")
+  write_graph(ig_signed, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_signed.graphml", format = "graphml")
+  write_graph(ig_signed, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_signed.gml", format = "gml")
+  write_graph(ig.gl.all, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_pos_all.graphml", format = "graphml")
+  write_graph(ig.gl.all, file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/network_pos_all.gml", format = "gml")
 
 } else {
   print(paste("Loaded igraph object from", igraph_path))
@@ -281,7 +281,7 @@ edge_list$weight <- E(ig.gl)$weight
 colnames(edge_list) <- c("Taxon1", "Taxon2", "Weight")
 
 # Save the edge list as a CSV file
-edge_list_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/edge_list.csv"
+edge_list_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/edge_list.csv"
 write.csv(edge_list, edge_list_path, row.names = FALSE)
 
 print(paste("Edge list saved to", edge_list_path))
@@ -319,7 +319,7 @@ edge_list$Weight <- E(ig.gl)$weight
 edge_list <- edge_list[, c("Taxon1", "Taxon2", "Weight")]
 
 # Save the edge list as a CSV file
-edge_list_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/edge_list_with_asv_ids.csv"
+edge_list_path <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/edge_list_with_asv_ids.csv"
 write.csv(edge_list, edge_list_path, row.names = FALSE)
 
 print(paste("Edge list with ASV IDs saved to", edge_list_path))
@@ -339,6 +339,6 @@ node_features <- data.frame(
   Closeness    = node_closeness,
   EigenCentral = node_eigen
 )
-write.csv(node_features, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/spieceasi/node_features.csv", row.names = FALSE)
+write.csv(node_features, "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/spieceasi/node_features.csv", row.names = FALSE)
 
 # **End of Script**

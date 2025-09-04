@@ -32,8 +32,8 @@ def process_fasta(fasta_path, first=False):
     except Exception as e:
         print(f"❌ Error: {fasta_path.name}: {e}")
 
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_methods_output/ASVs/chunks'
-output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_methods_output/mito/mitomap/mitomaster_combined.tsv'
+data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/ASVs/chunks'
+output_file = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/mito/mitomap/mitomaster_combined.tsv'
 checkpoint_file = output_file + '.done'
 
 fasta_files = sorted(Path(data_dir).glob("*.fasta"))

@@ -212,7 +212,6 @@ def plot_grouppair_violins_sns(
 
     return ax, tidy
 
-
 def pad_ids(ids, prefix, pad_width=None):
     # Extract numeric part
     numbers = [int(re.search(r'\d+', i).group()) for i in ids]
@@ -303,7 +302,8 @@ def split_taxa_string(taxa_str, delimiter=';'):
 
 ### MAGIC VALUES ###    
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_old_output"
+sub_dir = "spark_combined_output"
+samp_col = "lmp_id"
 ###  END  MAGIC  ###
 
 
@@ -337,15 +337,15 @@ col = 'sample_code'
 metadata_df = metadata_df[[col] + [c for c in metadata_df.columns if c != col]]
 metadata_df.drop_duplicates(subset=['sample'], inplace=True)
 
-keep_types = ['Scope Flush',
-              'Skin Brush',
+keep_types = ['Skin Brush',
+              'Scope Flush',
               'Oral Rinse',
               'BAL',
               'Lung Brush'
               ]
 
-all_type_palette = {'Scope Flush': '#E69F00',
-           'Skin Brush': '#CC79A7',
+all_type_palette = {'Skin Brush': '#CC79A7',
+           'Scope Flush': '#E69F00',
            'Lung Brush': '#009E73',
            'BAL': '#0072B2',
            'Oral Rinse': '#6A3D9A',
@@ -566,7 +566,7 @@ handles = []
 for group in ['Oral Rinse', 'BAL', 'Lung Brush']:
     color = type_palette[group]
     handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-for group in ['Non-Cancer', 'Cancer', 'methods']:
+for group in ['Non-Cancer', 'Cancer']:
     color = status_palette[group]
     handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
 #for group in ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']:

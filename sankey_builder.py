@@ -319,8 +319,8 @@ def main():
     
     ### MAGIC VALUES ###    
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-    sub_dir = "spark_old_output"
-    samp_col = "sample"
+    sub_dir = "spark_combined_output"
+    samp_col = "lmp_id"
     ###  END  MAGIC  ###
     
     metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')

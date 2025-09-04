@@ -65,20 +65,17 @@ def ensemble_outlier_detection(asv_table, sample_metadata, group_col):
 
 ### MAGIC VALUES ###    
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_old_output"
-###  END  MAGIC  ###
-
-output_dir = os.path.join(data_dir, f"{sub_dir}/metadata")
+output_dir = os.path.join(data_dir, "spark_combined_output/metadata")
 if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
-metadata_table_path = os.path.join(data_dir, f"{sub_dir}/metadata/metadata_updated.tsv")
+metadata_table_path = os.path.join(data_dir, 'spark_combined_output/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 metadata_df.set_index('sample', inplace=True)
 metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
 
-asv_path = os.path.join(data_dir, f"{sub_dir}/ASVs/ASV_final.micro.tsv")
+asv_path = os.path.join(data_dir, 'spark_combined_output/ASVs/ASV_final.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0).T
 
 # Subset and align both tables
@@ -98,7 +95,7 @@ clr_df = pd.DataFrame(clr_transformed, index=asv_table_nonzero.index, columns=as
 sample_metadata = metadata_df.loc[shared_samples]
 
 outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col=None).reset_index()
-outliers_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/outliers_table.tsv"), sep='\t', index=False)
+outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_table.tsv'), sep='\t', index=False)
 
 outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col='type_group').reset_index()
-outliers_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/outliers_type_group.tsv"), sep='\t', index=False)
+outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_type_group.tsv'), sep='\t', index=False)

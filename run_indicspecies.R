@@ -3,12 +3,12 @@ library(tidyverse)
 library(readr)
 
 
-if (!dir.exists("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies")) {
-  dir.create("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies")
+if (!dir.exists("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies")) {
+  dir.create("/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies")
 }
 
-asv_file <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/ASVs/ASV_final.micro.tsv"
-metadata_file <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/metadata/metadata_updated.tsv"
+asv_file <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/ASVs/ASV_final.micro.tsv"
+metadata_file <- "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/metadata/metadata_updated.tsv"
 asv_table <- read.table(asv_file,
                         header = TRUE,
                         row.names = 1,
@@ -41,7 +41,7 @@ results_df <- as.data.frame(indval_results$sign)
 
 write.table(
   results_df,
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/status_indicator_species_results.tsv",
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/status_indicator_species_results.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -57,7 +57,7 @@ indval_df <- cbind(
 
 write.table(
   indval_df, 
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/status_indicator_species_summary.tsv", 
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/status_indicator_species_summary.tsv", 
   sep = "\t", 
   quote = FALSE, 
   row.names = FALSE
@@ -72,7 +72,7 @@ results_df <- as.data.frame(indval_results$sign)
 
 write.table(
   results_df,
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/status_indicator_species_results_DULEG.tsv",
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/status_indicator_species_results_DULEG.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -88,7 +88,7 @@ indval_df <- cbind(
 
 write.table(
   indval_df, 
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/status_indicator_species_summary_DULEG.tsv", 
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/status_indicator_species_summary_DULEG.tsv", 
   sep = "\t", 
   quote = FALSE, 
   row.names = FALSE
@@ -107,7 +107,7 @@ results_df <- as.data.frame(indval_results$sign)
 
 write.table(
   results_df,
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/type_group_indicator_species_results.tsv",
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/type_group_indicator_species_results.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -123,7 +123,7 @@ indval_df <- cbind(
 
 write.table(
   indval_df, 
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/type_group_indicator_species_summary.tsv", 
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/type_group_indicator_species_summary.tsv", 
   sep = "\t", 
   quote = FALSE, 
   row.names = FALSE
@@ -139,7 +139,7 @@ results_df <- as.data.frame(indval_results$sign)
 
 write.table(
   results_df,
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/type_group_indicator_species_results_DULEG.tsv",
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/type_group_indicator_species_results_DULEG.tsv",
   sep = "\t",
   quote = FALSE,
   col.names = NA
@@ -155,7 +155,7 @@ indval_df <- cbind(
 
 write.table(
   indval_df, 
-  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_old_output/indicspecies/type_group_indicator_species_summary_DULEG.tsv", 
+  file = "/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output/indicspecies/type_group_indicator_species_summary_DULEG.tsv", 
   sep = "\t", 
   quote = FALSE, 
   row.names = FALSE

@@ -42,11 +42,11 @@ sub_dir = "spark_old_output"
 
 
 # Load ASV metadata
-metastat_df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/metadata/master_table.tsv"), sep='\t')
-asv_meta_df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/metadata/ASV_meta.tsv"), sep='\t', header=0)
+metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/metadata/master_table.tsv'), sep='\t')
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
 # Load venn diagram data
-venn_df = pd.read_csv(os.path.join(data_dir, f"{sub_dir}/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
-#venn_kit_df = pd.read_csv(os.path.join(data_dir, "spark_methods_output/metadata/venn3_presence_table_kit.tsv"), sep="\t", header=0)
+venn_df = pd.read_csv(os.path.join(data_dir, "spark_combined_output/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
+#venn_kit_df = pd.read_csv(os.path.join(data_dir, "spark_combined_output/metadata/venn3_presence_table_kit.tsv"), sep="\t", header=0)
 all_type_palette = {'Scope Flush': '#E69F00',
            'Skin Brush': '#CC79A7',
            'Lung Brush': '#009E73',
@@ -112,11 +112,11 @@ for vgrp in venn_df['grouping'].unique():
     )
     plt.xticks(rotation=45)
 
-    plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/{vgrp_str}_Genus_bubbleplot.svg"))
-    plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/{vgrp_str}_Genus_bubbleplot.pdf"))
+    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot.svg'))
+    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot.pdf'))
     plt.close()
 venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/Three_types_venn_presence_tax.tsv"), sep='\t')
+venn_tax_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/Three_types_venn_presence_tax.tsv'), sep='\t')
 
 
 
@@ -161,11 +161,11 @@ for vgrp in venn_kit_df['grouping'].unique():
     )
     plt.xticks(rotation=45)
 
-    plt.savefig(os.path.join(data_dir, f'spark_methods_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.svg'))
-    plt.savefig(os.path.join(data_dir, f'spark_methods_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.pdf'))
+    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.svg'))
+    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.pdf'))
     plt.close()
 venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, 'spark_methods_output/metadata/venn3_presence_table_kit_tax.tsv'), sep='\t')
+venn_tax_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/venn3_presence_table_kit_tax.tsv'), sep='\t')
 
 
 
