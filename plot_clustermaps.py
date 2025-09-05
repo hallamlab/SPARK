@@ -60,18 +60,18 @@ kit_pallete = {'HostZERO-DEP': 'black',
                'SPARK-ZYMO': 'skyblue',
                }
 
-type_order = ['Oral Rinse', 'BAL', 'Lung Brush']
+type_order = ['SPARK-ZYMO', 'HostZERO-NODEP', 'HostZERO-DEP']
 
-metadata_table_path = os.path.join(data_dir, 'spark_combined_output/metadata/metadata_updated.tsv')
+metadata_table_path = os.path.join(data_dir, 'spark_methods_output_tester/metadata/metadata_updated.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
+asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_methods_output_tester/metadata/ASV_meta.tsv'), sep='\t', header=0)
 
 # clustermaps
-isa_path = os.path.join(data_dir, 'spark_combined_output/indicspecies/Type_status_ISA_results.tsv')
+isa_path = os.path.join(data_dir, 'spark_methods_output_tester/indicspecies/Type_status_ISA_results.tsv')
 isa_df = pd.read_csv(isa_path, sep='\t')
-sig_isa_df = isa_df.loc[((isa_df['type_significance'] == True) | (isa_df['status_significance'] == True)) &
-                        ((isa_df['type_stat'] >= 0.6) | (isa_df['status_stat'] >= 0.6))
+sig_isa_df = isa_df.loc[((isa_df['type_significance'] == True)) &
+                        ((isa_df['type_stat'] >= 0.6))
                         ]
 sig_isa_asvs = list(sig_isa_df['ASV_ID'])
 
@@ -80,15 +80,15 @@ asv_meta_df = asv_meta_df.loc[~asv_meta_df['type_group'].isin(['Skin Brush', 'Sc
 rank_type_dict = {}
 rank_dict = {}
 for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']:
-    asv_rank_df = asv_meta_df.groupby(['type_group', rank, 'sample_code', 'sample'])['corr_count'].sum().reset_index()
+    asv_rank_df = asv_meta_df.groupby(['kit', rank, 'sample_code', 'lmp_id'])['corr_count'].sum().reset_index()
     rank_type_dict[rank] = {}
     rank_dict[rank] = []
     if rank == 'ASV_ID':
         N = 6000
     else:
         N = 30
-    for group in asv_meta_df['type_group'].unique():
-        df_group = asv_rank_df[asv_rank_df['type_group'] == group]
+    for group in asv_meta_df['kit'].unique():
+        df_group = asv_rank_df[asv_rank_df['kit'] == group]
         total_rank = df_group.groupby(rank)['corr_count'].sum()
         topN = total_rank.sort_values(ascending=False).head(N).index.tolist()
         sig = asv_meta_df[asv_meta_df['ASV_ID'].isin(sig_isa_asvs)][rank].unique().tolist()
@@ -104,17 +104,17 @@ for rank in ['Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species', 'ASV_ID']
 for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
           'Genus_plot', 'Species_plot', 'ASV_ID_plot'
           ]:
-    bubble_df = asv_meta_df.groupby(['sample_code', t, 'type_group', 'status', 'kit'])['corr_count'].sum().reset_index()
+    bubble_df = asv_meta_df.groupby(['sample_code', t, 'type_group', 'kit', 'status'])['corr_count'].sum().reset_index()
     pivot_df = bubble_df.pivot(index='sample_code', columns=t, values='corr_count').fillna(0)
 
     # Map sample_code to sample_type
-    col_meta = bubble_df.drop_duplicates('sample_code')[['sample_code', 'type_group', 'status', 'kit']].set_index('sample_code')
+    col_meta = bubble_df.drop_duplicates('sample_code')[['sample_code', 'type_group', 'kit', 'status']].set_index('sample_code')
 
     # Map to colors
     col_colors_df = pd.DataFrame({
-        'type_group': col_meta['type_group'].map(all_type_palette),
+        'kit': col_meta['kit'].map(kit_pallete),
         'status': col_meta['status'].map(status_palette),
-        #'kit': col_meta['kit'].map(kit_pallete)
+        'type': col_meta['type_group'].map(three_palette)
         })
 
     pivot_df = asv_meta_df.groupby(['sample_code', t])['corr_count'
@@ -172,16 +172,16 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
 
     # For type_group
     for group in type_order:
-        color = three_palette[group]
-        handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
+        color = kit_pallete[group]
+        handles.append(Patch(facecolor=color, label=f"Kit: {group}", alpha=0.75))
 
     # For status
     for status, color in status_palette.items():
-        handles.append(Patch(facecolor=color, label=f"status: {status}", alpha=0.75))
+        handles.append(Patch(facecolor=color, label=f"Status: {status}", alpha=0.75))
 
     # For kit
-    #for kit, color in kit_pallete.items():
-    #    handles.append(Patch(facecolor=color, label=f"kit: {kit}", alpha=0.75))
+    for type_group, color in three_palette.items():
+        handles.append(Patch(facecolor=color, label=f"Type: {type_group}", alpha=0.75))
 
     # Add legend outside the clustermap
     plt.legend(
@@ -205,8 +205,8 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-    plt.savefig(os.path.join(data_dir, f"spark_combined_output/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_combined_output/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/diversity/clustermap_{t}_code.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/diversity/clustermap_{t}_code.pdf"), bbox_inches='tight')
     plt.close()
 
     g = sns.clustermap(
@@ -232,16 +232,16 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
 
     # For type_group
     for group in type_order:
-        color = three_palette[group]
-        handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
+        color = kit_pallete[group]
+        handles.append(Patch(facecolor=color, label=f"Kit: {group}", alpha=0.75))
 
     # For status
     for status, color in status_palette.items():
-        handles.append(Patch(facecolor=color, label=f"status: {status}", alpha=0.75))
+        handles.append(Patch(facecolor=color, label=f"Status: {status}", alpha=0.75))
 
     # For kit
-    #for kit, color in kit_pallete.items():
-    #    handles.append(Patch(facecolor=color, label=f"kit: {kit}", alpha=0.75))
+    for type_group, color in three_palette.items():
+        handles.append(Patch(facecolor=color, label=f"Type: {type_group}", alpha=0.75))
 
     # Add legend outside the clustermap
     plt.legend(
@@ -263,37 +263,37 @@ for t in ['Phylum_plot', 'Class_plot', 'Order_plot', 'Family_plot',
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
 
 
-    plt.savefig(os.path.join(data_dir, f"spark_combined_output/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
-    plt.savefig(os.path.join(data_dir, f"spark_combined_output/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/diversity/clustermap_{t}_clustered.svg"), bbox_inches='tight')
+    plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/diversity/clustermap_{t}_clustered.pdf"), bbox_inches='tight')
     plt.close()
 
-    pivot_df.to_csv(os.path.join(data_dir, f"spark_combined_output/diversity/clustermap_{t}.tsv"), sep='\t')
+    pivot_df.to_csv(os.path.join(data_dir, f"spark_methods_output_tester/diversity/clustermap_{t}.tsv"), sep='\t')
 
 
 
 # Mitochondrial Clustermaps
 
-mito_asv_path = os.path.join(data_dir, 'spark_combined_output/mito/ASVs/ASV_final.mito.tsv')
+mito_asv_path = os.path.join(data_dir, 'spark_methods_output_tester/mito/ASVs/ASV_final.mito.tsv')
 mito_asv_df = pd.read_csv(mito_asv_path, header=0, sep='\t', index_col=0)
 mito_asv_df.columns = [x.rsplit('_', 1)[0] for x in mito_asv_df.columns]
 mito_asv_stack_df = mito_asv_df.stack().reset_index()
-mito_asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
+mito_asv_stack_df.columns = ['ASV_ID', 'lmp_id', 'count']
 mito_asv_stack_df = mito_asv_stack_df.loc[mito_asv_stack_df['count'] > 0]
 mito_asv_stack_df.set_index('ASV_ID', inplace=True)
-asv_mito_meta_df = mito_asv_stack_df.reset_index().merge(metadata_df, how='left', on='sample')
+asv_mito_meta_df = mito_asv_stack_df.reset_index().merge(metadata_df, how='left', on='lmp_id')
 
 asv_mito_meta_df = asv_mito_meta_df.loc[~asv_mito_meta_df['type_group'].isin(['Skin Brush', 'Scope Flush'])]
-bubble_df = asv_mito_meta_df.groupby(['sample_code', 'ASV_ID', 'type_group', 'status', 'kit'])['count'].sum().reset_index()
+bubble_df = asv_mito_meta_df.groupby(['sample_code', 'ASV_ID', 'type_group', 'kit', 'status'])['count'].sum().reset_index()
 pivot_df = bubble_df.pivot(index='sample_code', columns='ASV_ID', values='count').fillna(0)
 
 # Map sample to sample_type
-col_meta = bubble_df.drop_duplicates('sample_code')[['sample_code', 'type_group', 'status', 'kit']].set_index('sample_code')
+col_meta = bubble_df.drop_duplicates('sample_code')[['sample_code', 'type_group', 'kit', 'status']].set_index('sample_code')
 
 # Map to colors
 col_colors_df = pd.DataFrame({
-    'type_group': col_meta['type_group'].map(all_type_palette),
+    'kit': col_meta['kit'].map(kit_pallete),
     'status': col_meta['status'].map(status_palette),
-    #'kit': col_meta['kit'].map(kit_pallete)
+    'type': col_meta['type_group'].map(three_palette)
 
     })
 
@@ -344,16 +344,16 @@ handles = []
 
 # For type_group
 for group in type_order:
-    color = three_palette[group]
-    handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
+    color = kit_pallete[group]
+    handles.append(Patch(facecolor=color, label=f"Kit: {group}", alpha=0.75))
 
 # For status
 for status, color in status_palette.items():
     handles.append(Patch(facecolor=color, label=f"status: {status}", alpha=0.75))
 
 # For kit
-#for kit, color in kit_pallete.items():
-#    handles.append(Patch(facecolor=color, label=f"kit: {kit}", alpha=0.75))
+for type_group, color in three_palette.items():
+    handles.append(Patch(facecolor=color, label=f"Type: {type_group}", alpha=0.75))
 
 # Add legend outside the clustermap
 plt.legend(
@@ -377,8 +377,8 @@ g.ax_heatmap.set_xticklabels(pivot_log.columns, rotation=90, ha='center')
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-plt.savefig(os.path.join(data_dir, f"spark_combined_output/mito/diversity/clustermap_ASV_code_mito.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_combined_output/mito/diversity/clustermap_ASV_code_mito.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/mito/diversity/clustermap_ASV_code_mito.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/mito/diversity/clustermap_ASV_code_mito.pdf"), bbox_inches='tight')
 plt.close()
 
 g = sns.clustermap(
@@ -404,16 +404,16 @@ handles = []
 
 # For type_group
 for group in type_order:
-    color = three_palette[group]
-    handles.append(Patch(facecolor=color, label=f"Type: {group}", alpha=0.75))
+    color = kit_pallete[group]
+    handles.append(Patch(facecolor=color, label=f"Kit: {group}", alpha=0.75))
 
 # For status
 for status, color in status_palette.items():
     handles.append(Patch(facecolor=color, label=f"status: {status}", alpha=0.75))
 
 # For kit
-#for kit, color in kit_pallete.items():
-#    handles.append(Patch(facecolor=color, label=f"kit: {kit}", alpha=0.75))
+for type_group, color in three_palette.items():
+    handles.append(Patch(facecolor=color, label=f"Type: {type_group}", alpha=0.75))
 
 # Add legend outside the clustermap
 plt.legend(
@@ -434,9 +434,9 @@ colorbar.set_label("ASV Count", rotation=270, labelpad=15)
 g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
 g.ax_heatmap.tick_params(axis='x', which='both', length=5)  # <-- this restores the tick *marks*
 
-plt.savefig(os.path.join(data_dir, f"spark_combined_output/mito/diversity/clustermap_ASV_clustered_mito.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"spark_combined_output/mito/diversity/clustermap_ASV_clustered_mito.pdf"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/mito/diversity/clustermap_ASV_clustered_mito.svg"), bbox_inches='tight')
+plt.savefig(os.path.join(data_dir, f"spark_methods_output_tester/mito/diversity/clustermap_ASV_clustered_mito.pdf"), bbox_inches='tight')
 plt.close()
 
-pivot_df.to_csv(os.path.join(data_dir, f"spark_combined_output/mito/diversity/clustermap_ASV_mito.tsv"), sep='\t')
+pivot_df.to_csv(os.path.join(data_dir, f"spark_methods_output_tester/mito/diversity/clustermap_ASV_mito.tsv"), sep='\t')
 

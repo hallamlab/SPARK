@@ -16,16 +16,8 @@ def ensemble_outlier_detection(asv_table, sample_metadata, group_col):
     for group in sample_metadata[group_col].unique():
         # Subset samples for this group
         group_samples = list(sample_metadata[sample_metadata[group_col] == group].index)
-        spark_samples = list(sample_metadata[((sample_metadata[group_col] == group) &
-                                              (sample_metadata['kit'] == 'SPARK-ZYMO'))
-                                              ].index)
-        methods_samples = list(sample_metadata[((sample_metadata[group_col] == group) &
-                                                (sample_metadata['kit'] != 'SPARK-ZYMO'))
-                                                ].index)
         train_samples = asv_table.loc[group_samples]
         test_samples = asv_table.loc[group_samples]
-        #train_samples = asv_table.loc[spark_samples]
-        #test_samples = asv_table.loc[methods_samples]
         
         X_train = train_samples.values
         X_test = test_samples.values
@@ -48,12 +40,12 @@ def ensemble_outlier_detection(asv_table, sample_metadata, group_col):
 
         # Combine results
         df = pd.DataFrame({
-            'sample': test_samples.index,  # assuming it's a DataFrame
+            'lmp_id': test_samples.index,  # assuming it's a DataFrame
             'group': group,
             'IsolationForest': iso_out,
             'OneClassSVM': svm_out,
             'HDBSCAN': hdb_out
-        }).set_index('sample')
+        }).set_index('lmp_id')
 
         # Consensus voting
         df['outlier_votes'] = (df == -1).sum(axis=1)
@@ -65,17 +57,17 @@ def ensemble_outlier_detection(asv_table, sample_metadata, group_col):
 
 # Create output directory if it doesn't exist
 data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-output_dir = os.path.join(data_dir, "spark_combined_output/metadata")
+output_dir = os.path.join(data_dir, "spark_methods_output_tester/metadata")
 if output_dir and not os.path.exists(output_dir):
     os.makedirs(output_dir)
     print(f"Created output directory: {output_dir}")
 
-metadata_table_path = os.path.join(data_dir, 'spark_combined_output/metadata/metadata_updated.tsv')
+metadata_table_path = os.path.join(data_dir, 'spark_methods_output_tester/metadata/metadata_updated_TYPE.tsv')
 metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df.set_index('sample', inplace=True)
+metadata_df.set_index('lmp_id', inplace=True)
 metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
 
-asv_path = os.path.join(data_dir, 'spark_combined_output/ASVs/ASV_final.micro.tsv')
+asv_path = os.path.join(data_dir, 'spark_methods_output_tester/ASVs/ASV_final.micro.tsv')
 asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0).T
 
 # Subset and align both tables
@@ -95,7 +87,7 @@ clr_df = pd.DataFrame(clr_transformed, index=asv_table_nonzero.index, columns=as
 sample_metadata = metadata_df.loc[shared_samples]
 
 outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col=None).reset_index()
-outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_table.tsv'), sep='\t', index=False)
-
+outliers_df.to_csv(os.path.join(data_dir, 'spark_methods_output_tester/metadata/outliers_table_TYPE.tsv'), sep='\t', index=False)
+flurp
 outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col='type_group').reset_index()
-outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_type_group.tsv'), sep='\t', index=False)
+outliers_df.to_csv(os.path.join(data_dir, 'spark_methods_output_tester/metadata/outliers_TYPE.tsv'), sep='\t', index=False)

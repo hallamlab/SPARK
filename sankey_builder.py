@@ -319,11 +319,11 @@ def main():
     
     ### MAGIC VALUES ###    
     data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-    sub_dir = "spark_combined_output"
+    sub_dir = "spark_methods_output_tester"
     samp_col = "lmp_id"
     ###  END  MAGIC  ###
     
-    metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
+    metadata_table_path = os.path.join(data_dir, 'ref_db/methods_metadata.tsv')
     metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
 
     keep_types = [
@@ -333,6 +333,12 @@ def main():
                 'Skin Brush',
                 'Scope Flush'
                 ]
+    #keep_types = [
+    #              'HostZERO-DEP',
+    #              'HostZERO-NODEP',
+    #              'SPARK-ZYMO'
+    #              ]
+
     kit_pallete = {'HostZERO-DEP': 'black',
                'HostZERO-NODEP': 'gray',
                'SPARK-ZYMO': 'skyblue',
@@ -353,7 +359,7 @@ def main():
     fstats_df[samp_col] = [str(x.split('/')[-1].split('_', 1)[0]) for x in fstats_df['file']]
     raw_reads_df = fstats_df.groupby([samp_col])['num_seqs'].sum().reset_index()
     read_meta_df = raw_reads_df.merge(metadata_df, on=samp_col)
-
+    
     filter_stats_path = os.path.join(data_dir, f"{sub_dir}/stats/filtered_fastqs.tsv")
     filter_stats_df = pd.read_csv(filter_stats_path, header=0, sep='\t')
     filter_stats_df[samp_col] = [str(x.split('/')[-1].split('.', 1)[0]) for x in filter_stats_df['file']]
@@ -432,9 +438,9 @@ def main():
     for lmp_id_name, count in input_lmp_ids_dict.items():
         print(f"{lmp_id_name}: {count}")
 
-    output = os.path.join(data_dir, f"{sub_dir}/metadata/data_loss_sankey_label.html")
+    output = os.path.join(data_dir, f"{sub_dir}/metadata/data_loss_sankey_label_TYPE.html")
     build_sankey(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
-    output = os.path.join(data_dir, f"{sub_dir}/metadata/data_loss_sankey.html")
+    output = os.path.join(data_dir, f"{sub_dir}/metadata/data_loss_sankey_TYPE.html")
     build_sankey_nolabels(steps_list, counts_list, input_lmp_ids_dict, output_lmp_ids_dict, type_palette, output)
 
 if __name__ == "__main__":
