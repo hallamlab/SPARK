@@ -1,806 +1,633 @@
-import pandas as pd
-import numpy as np
-import sys
-import umap
+#!/usr/bin/env python3
+"""
+asv_summary_and_plots.py
+Project-independent CLI to build ASV master tables and plots (microbial & mitochondrial),
+with configurable paths, sample ID parsing, palettes, and plot toggles.
+
+Quickstart (mirrors your current layout):
+  python asv_summary_and_plots.py \
+    --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
+    --sub-dir spark_combined_output \
+    --metadata ref_db/spark_metadata.tsv \
+    --meta-sample-col sample \
+    --keep-types "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
+    --fastq-stats stats/fastq_stats.tsv --fastq-id-suffix-underscores 4 \
+    --asv-micro ASVs/ASV_target.micro.tsv --asv-mito mito/ASVs/ASV_target.mito.tsv \
+    --taxonomy taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv \
+    --type-palette "Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
+    --status-palette "Non-Cancer:white,Cancer:#A50026,methods:lightgray" \
+    --make-micro --make-mito
+
+Notes:
+- Outputs go to <data-dir>/<sub-dir>/{metadata,mito/metadata} and <data-dir>/<sub-dir>/{ASVs,mito/ASVs}.
+- Use --*_id_regex to provide a custom regex (one capture group) to extract sample IDs from file/column names.
+"""
+
+from __future__ import annotations
+
+import argparse
 import os
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.ticker import FuncFormatter
-from matplotlib.colors import PowerNorm
-from matplotlib import gridspec
-from matplotlib import font_manager as fm, rcParams
-from matplotlib.patches import Patch
-import matplotlib as mpl
-import seaborn as sns
-from scipy.stats import ttest_ind
-from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
-from itertools import combinations, combinations_with_replacement
-from statsmodels.stats.multitest import multipletests
-from statannotations.Annotator import Annotator
-import math
-from itertools import cycle
-import colorsys
-import matplotlib.colors as mcolors
+from pathlib import Path
 import re
 import warnings
-from matplotlib.colors import to_rgba
+from itertools import combinations, combinations_with_replacement
+from typing import Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
+from matplotlib.patches import Patch
 
-# Global settings — at the top of script or notebook cell
-mpl.rcParams['pdf.fonttype'] = 42   # Keep text as text in PDF
-mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
-plt.rcParams.update({'font.size': 12})  # Set your desired size
-mpl.rcParams['savefig.dpi'] = 600   # Optional — affects raster fallback
-pd.set_option('display.max_columns', None)
-# Set font globally
+# ---------- Global aesthetics ----------
+mpl.rcParams['pdf.fonttype'] = 42
+mpl.rcParams['svg.fonttype'] = 'none'
+mpl.rcParams['savefig.dpi'] = 600
+plt.rcParams.update({'font.size': 12})
 plt.rcParams['font.family'] = 'Source Sans Pro'
-sns.set_theme()  # re-applies style with updated rcParams
+sns.set_theme()
 sns.set_style("white")
 
 
+# ========= Utilities =========
+def parse_kv_csv(s: str, cast: Optional[type] = None) -> Dict[str, object]:
+    """Parse 'A:1,B:2' -> dict; tolerate whitespace."""
+    out: Dict[str, object] = {}
+    if not s:
+        return out
+    for item in s.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        if ':' not in item:
+            raise ValueError(f"Expected key:value, got '{item}'")
+        k, v = item.split(':', 1)
+        k = k.strip()
+        v = v.strip()
+        out[k] = cast(v) if cast else v
+    return out
+
+
+def parse_list_csv(s: str) -> List[str]:
+    return [x.strip() for x in s.split(',') if x.strip()] if s else []
+
+
+def extract_sample_id_from_path(path_str: str, suffix_underscores: Optional[int], regex: Optional[str]) -> str:
+    """
+    - If regex provided: return first capture group.
+    - Else, remove extensions and chop N underscore tokens from end.
+    """
+    base = os.path.basename(path_str)
+    if regex:
+        m = re.search(regex, path_str)
+        if not m or not m.groups():
+            raise ValueError(f"Regex did not match/capture: {regex} for {path_str}")
+        return m.group(1)
+    stem = base
+    for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq', '.tsv', '.csv', '.txt', '.gz'):
+        if stem.endswith(ext):
+            stem = stem[: -len(ext)]
+    if suffix_underscores is None:
+        return stem
+    parts = stem.split('_')
+    if len(parts) <= suffix_underscores:
+        return parts[0]
+    return '_'.join(parts[: len(parts) - suffix_underscores])
+
+
+def split_taxa_string(taxa_str: str, delimiter=';') -> Dict[str, Optional[str]]:
+    levels = ["Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
+    if taxa_str != 'Unassigned':
+        parts = [part.strip().split('__', 1)[1] if '__' in part else part.strip()
+                 for part in taxa_str.split(delimiter)]
+    else:
+        parts = ['Unassigned']
+    return {lvl: (parts[i] if i < len(parts) else None) for i, lvl in enumerate(levels)}
+
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def save_df(df: pd.DataFrame, path: Path) -> None:
+    ensure_dir(path.parent)
+    df.to_csv(path, sep='\t', index=False)
+
+
+def save_mat(df: pd.DataFrame, path: Path) -> None:
+    ensure_dir(path.parent)
+    df.to_csv(path, sep='\t', index=True)
+
+
+# ========= Core helpers =========
+def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Sequence[str]]) -> pd.DataFrame:
+    df = pd.read_csv(meta_path, sep='\t', header=0)
+    # Derive status if present
+    if 'Case' in df.columns:
+        df['status'] = np.where(df['Case'] == 'Control', 'Non-Cancer', df['Case'])
+    if 'Participant_ID' in df.columns:
+        patient_set = sorted(df['Participant_ID'].astype(str).unique())
+        pid_map = {p: i for i, p in enumerate(patient_set)}
+        df['patient_int'] = df['Participant_ID'].astype(str).map(pid_map)
+        df['patient_code'] = df['patient_int'].apply(lambda i: f'P{i}')
+    if 'type_group' in df.columns:
+        df['type_code'] = df['type_group'].astype(str).str[:2]
+    if 'Type' in df.columns:
+        df['lung_code'] = df['Type'].astype(str).str[0].where(lambda s: s.isin(['R', 'L']), other='N')
+    if keep_types is not None and 'type_group' in df.columns:
+        df = df[df['type_group'].isin(keep_types)].copy()
+    # Create sample_code if 'sample' exists
+    if 'sample' in df.columns:
+        df = df.drop_duplicates(subset=['sample'])
+        df = df.copy()
+        df['sample_code'] = [f"S{i+1:03d}" for i in range(len(df))]
+        # Move sample_code first
+        cols = ['sample_code'] + [c for c in df.columns if c != 'sample_code']
+        df = df[cols]
+    # Ensure meta_sample_col exists
+    if meta_sample_col not in df.columns:
+        raise ValueError(f"--meta-sample-col '{meta_sample_col}' not found in metadata columns: {df.columns.tolist()}")
+    return df
+
+
+def read_fastq_stats(path: Path, meta_sample_col: str, id_suffix_underscores: Optional[int],
+                     id_regex: Optional[str]) -> pd.DataFrame:
+    df = pd.read_csv(path, sep='\t', header=0)
+    if 'file' not in df or 'num_seqs' not in df:
+        raise ValueError(f"{path} must contain columns: file, num_seqs")
+    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x, id_suffix_underscores, id_regex))
+    return df.groupby(meta_sample_col, as_index=False)['num_seqs'].sum()
+
+
+def read_taxonomy_table(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, sep='\t', header=0)
+    if 'Feature ID' not in df or 'Taxon' not in df:
+        raise ValueError(f"{path} must have columns 'Feature ID' and 'Taxon'")
+    df['Feature ID'] = df['Feature ID'].astype(str).str.split(';', 1).str[0]
+    return df.set_index('Feature ID')
+
+
+def read_asv_wide_to_long(path: Path, meta_sample_col: str,
+                          asv_id_suffix_underscores: Optional[int],
+                          asv_id_regex: Optional[str],
+                          tax_index: Optional[pd.Index] = None) -> pd.DataFrame:
+    wide = pd.read_csv(path, sep='\t', header=0, index_col=0)
+    if tax_index is not None:
+        wide = wide.loc[[a for a in wide.index if a in set(tax_index)]]
+    cols_parsed = [extract_sample_id_from_path(c, asv_id_suffix_underscores, asv_id_regex) for c in wide.columns]
+    wide.columns = cols_parsed
+    long = wide.stack().reset_index()
+    long.columns = ['ASV_ID', meta_sample_col, 'count']
+    long = long[long['count'] > 0].copy()
+    long.set_index('ASV_ID', inplace=True)
+    return long
+
+
+def add_taxonomy(long_asv: pd.DataFrame, tax_df: pd.DataFrame) -> pd.DataFrame:
+    merged = long_asv.merge(tax_df, left_index=True, right_index=True, how='left')
+    # Expand taxonomy levels
+    tax_map = {lvl: [] for lvl in ["Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"]}
+    for t in merged['Taxon'].fillna('Unassigned'):
+        parts = split_taxa_string(t)
+        for lvl in tax_map:
+            tax_map[lvl].append(parts[lvl])
+    for lvl, vals in tax_map.items():
+        merged[lvl] = vals
+    return merged.reset_index()
+
+
+def correct_counts_against_controls(asv_meta: pd.DataFrame, meta: pd.DataFrame,
+                                    meta_sample_col: str, type_col: str,
+                                    scope_label='Scope Flush', skin_label='Skin Brush') -> pd.DataFrame:
+    """Subtract per-ASV means from control groups (scope, skin)."""
+    # Determine control ASV sets
+    ctrl = meta[[meta_sample_col, type_col]].copy()
+    df = asv_meta.merge(ctrl, left_on='sample', right_on=meta_sample_col, how='left', suffixes=('', '_meta'))
+
+    # Compute per-ASV mean in control types
+    keep_cols = ['ASV_ID', 'sample', 'count']
+    scope_mean = df[df[type_col] == scope_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
+    scope_mean.columns = ['ASV_ID', 'nctrl_mean']
+    skin_mean = df[df[type_col] == skin_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
+    skin_mean.columns = ['ASV_ID', 'offtarg_mean']
+
+    out = df.merge(scope_mean, on='ASV_ID', how='left').merge(skin_mean, on='ASV_ID', how='left')
+    out['nctrl_mean'] = out['nctrl_mean'].fillna(0)
+    out['offtarg_mean'] = out['offtarg_mean'].fillna(0)
+    out['corr_count'] = (out['count'] - out['nctrl_mean'] - out['offtarg_mean']).clip(lower=0).astype(int)
+
+    # Remove control types from downstream matrix
+    out = out[~out[type_col].isin([scope_label, skin_label])].copy()
+    return out
+
+
+def presence_shared_percent(count_mat: pd.DataFrame) -> pd.DataFrame:
+    """Presence/absence Jaccard * 100 from count matrix (ASVs x samples)."""
+    pa = (count_mat > 0).astype(int)
+    shared = pa.T.dot(pa)
+    n = pa.sum()
+    n_arr = n.to_numpy()
+    pct = shared.div(n_arr[:, None] + n_arr[None, :] - shared.to_numpy()) * 100
+    return pd.DataFrame(pct, index=shared.index, columns=shared.columns).fillna(0)
+
+
+def build_greys_cmap() -> LinearSegmentedColormap:
+    colors = [(0.0, '#ffffff'), (0.2, '#d9d9d9'), (1.0, '#000000')]
+    return LinearSegmentedColormap.from_list("light_greyscale", colors, N=256)
+
+
+def clustermap_shared_percent(
+    shared_pct: pd.DataFrame,
+    col_legend_df: pd.DataFrame,
+    row_legend_df: pd.DataFrame,
+    out_svg: Path,
+    out_pdf: Path,
+    cmap=None,
+) -> None:
+    cmap = cmap or build_greys_cmap()
+    g = sns.clustermap(
+        shared_pct, method='ward', metric='euclidean',
+        col_colors=col_legend_df, row_colors=row_legend_df,
+        cmap=cmap, vmin=0, vmax=100, linewidths=0,
+        xticklabels=False, yticklabels=False,
+        dendrogram_ratio=(0.05, 0.05), colors_ratio=(0.02, 0.02),
+        figsize=(32, 32), cbar_pos=(1.02, 0.2, 0.03, 0.4), alpha=1.0,
+    )
+    # Legend (caller should build handles as desired)
+    colorbar = g.ax_heatmap.collections[0].colorbar
+    colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
+    g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
+    g.ax_heatmap.tick_params(axis='x', which='both', length=5)
+    g.fig.savefig(out_svg, bbox_inches='tight')
+    g.fig.savefig(out_pdf, bbox_inches='tight')
+    plt.close(g.fig)
+
+
+# ========= Violin plotting (from your earlier function, tweaked to be standalone) =========
 def plot_grouppair_violins_sns(
     shared_df: pd.DataFrame,
     meta_df: pd.DataFrame,
-    sample_id_col: str = "sample_id",
-    group_col: str = "sample_type",
+    sample_id_col: str = "sample",
+    group_col: str = "type_group",
     include_within: bool = True,
     group_order: list | None = None,
-    group_colors: dict | None = None,   # {"GroupA":"#1b9e77", "GroupB":"#d95f02", ...}
+    group_colors: dict | None = None,
     title: str = "Group pair % shared",
     ylabel: str = "% shared",
-    inner: str = "quartile",            # seaborn violin inner: "box", "quartile", "point", None
-    cut: float = 0,                      # 0 = trim to data range
+    inner: str = "quartile",
+    cut: float = 0,
     bw: str | float = "scott",
     scale: str = "width",
     ax=None,
 ):
-    """
-    Seaborn violins of %shared for non-redundant group pairs.
-    - shared_df: square DataFrame (samples x samples) of float percent values.
-    - meta_df:   DataFrame with sample->group mapping.
-    - group_colors: dict group -> color. Missing groups auto-colored; invalid colors warn.
-    - Only samples present in BOTH the square matrix (index & columns) and metadata are used.
-      Duplicate samples in metadata are dropped (first occurrence kept).
-    Returns (ax, tidy_df).
-    """
-
-    # -------- align & sanitize --------
-    # (1) ensure square overlap between index and columns
+    # Align samples
     matrix_samples = [s for s in shared_df.index if s in shared_df.columns]
     if not matrix_samples:
-        raise ValueError("Matrix has no overlapping index/column sample names.")
-
-    # (2) clean metadata & drop duplicate sample rows
+        raise ValueError("Matrix has no overlapping index/column names.")
     meta = meta_df.copy()
     meta[sample_id_col] = meta[sample_id_col].astype(str).str.strip()
     meta[group_col] = meta[group_col].astype(str).str.strip()
     meta = meta.drop_duplicates(subset=[sample_id_col], keep="first")
-
-    # (3) intersect with metadata samples
     meta = meta[meta[sample_id_col].isin(matrix_samples)]
     if meta.empty:
         raise ValueError("No overlapping samples between matrix and metadata.")
-
-    # (4) final ordered sample list: preserve matrix row order, ensure in meta
     samples = [s for s in matrix_samples if s in set(meta[sample_id_col])]
     shared = shared_df.loc[samples, samples]
-
-    # (5) reorder meta to match 'samples'
     meta = meta.set_index(sample_id_col).loc[samples].reset_index()
 
-    # -------- groups & ordering --------
-    # appearance order from filtered metadata
+    # Groups & order
     seen = set(); groups_in_use = []
     for g in meta[group_col]:
         if g not in seen:
             seen.add(g); groups_in_use.append(g)
-
     if group_order:
         specified = [str(g).strip() for g in group_order if str(g).strip()]
-        unknown = [g for g in specified if g not in groups_in_use]
-        if unknown:
-            warnings.warn(f"Unknown groups in group_order {unknown}; ignored.")
         groups = [g for g in specified if g in groups_in_use] + [g for g in groups_in_use if g not in specified]
     else:
         groups = groups_in_use
 
-    # map group -> samples (order respects 'samples')
-    group_to_samples = {
-        g: [s for s in samples if meta.loc[meta[sample_id_col]==s, group_col].iloc[0] == g]
-        for g in groups
-    }
+    group_to_samples = {g: [s for s in samples if meta.loc[meta[sample_id_col] == s, group_col].iloc[0] == g] for g in groups}
 
-    # -------- color resolution (by group) --------
-    def _rgba_or_none(c, g):
+    def _rgba(c, g):
         try:
             return to_rgba(c)
         except ValueError:
             warnings.warn(f"Ignoring invalid color '{c}' for group '{g}'.")
             return None
 
-    resolved_group_colors = {}
+    resolved = {}
     user_map = group_colors or {}
-
-    # warn if user passes colors for groups not present
-    extras = [g for g in user_map if g not in groups]
-    if extras:
-        warnings.warn(f"group_colors provided for unknown groups {extras}; ignored.")
-
-    # take valid user colors
     for g in groups:
-        c = user_map.get(g, None)
-        if c is not None:
-            rgba = _rgba_or_none(c, g)
+        if g in user_map:
+            rgba = _rgba(user_map[g], g)
             if rgba is not None:
-                resolved_group_colors[g] = rgba
-
-    # auto-assign for missing groups
-    cmap = plt.get_cmap("tab20")
-    auto_i = 0
+                resolved[g] = rgba
+    cmap = plt.get_cmap("tab20"); auto_i = 0
     for g in groups:
-        if g not in resolved_group_colors:
-            resolved_group_colors[g] = cmap(auto_i % cmap.N)
-            auto_i += 1
-            warnings.warn(f"No color for group '{g}'; using auto color from 'tab20'.")
+        if g not in resolved:
+            resolved[g] = cmap(auto_i % cmap.N); auto_i += 1
 
     def _blend(a, b):
         a = np.array(a); b = np.array(b)
-        mix = (a + b) / 2.0
-        mix[3] = max(a[3], b[3])
-        return tuple(mix)
+        m = (a + b) / 2.0
+        m[3] = max(a[3], b[3])
+        return tuple(m)
 
-    # -------- collect values per group-pair --------
     gpairs = combinations_with_replacement(groups, 2) if include_within else combinations(groups, 2)
-
-    rows = []        # build tidy df rows
-    pair_labels = [] # to preserve order for plotting
-    pair_colors = {} # palette for seaborn keyed by pair label
-
+    rows, labels, pal = [], [], {}
     for g1, g2 in gpairs:
-        s1 = group_to_samples.get(g1, [])
-        s2 = group_to_samples.get(g2, [])
+        s1, s2 = group_to_samples.get(g1, []), group_to_samples.get(g2, [])
         if not s1 or not s2:
             continue
-
         if g1 == g2:
-            if len(s1) < 2:
-                continue
+            if len(s1) < 2: continue
             sub = shared.loc[s1, s1].to_numpy()
-            iu = np.triu_indices(len(s1), k=1)
-            vals = sub[iu]
-            col = resolved_group_colors[g1]
+            iu = np.triu_indices(len(s1), k=1); vals = sub[iu]
+            col = resolved[g1]
         else:
             vals = shared.loc[s1, s2].to_numpy().ravel()
-            col = _blend(resolved_group_colors[g1], resolved_group_colors[g2])
-
+            col = _blend(resolved[g1], resolved[g2])
         vals = vals[np.isfinite(vals)]
-        if vals.size == 0:
-            continue
-
-        label = f"{g1} × {g2}"
-        pair_labels.append(label)
-        pair_colors[label] = col
-        rows.append(pd.DataFrame({"pair": label, "value": vals}))
-
+        if vals.size == 0: continue
+        lab = f"{g1} × {g2}"
+        labels.append(lab); pal[lab] = col
+        rows.append(pd.DataFrame({"pair": lab, "value": vals}))
     if not rows:
-        raise ValueError("No pairwise values to plot (after alignment/dedup).")
-
+        raise ValueError("No pairwise values to plot.")
     tidy = pd.concat(rows, ignore_index=True)
 
-    # -------- plot with seaborn --------
     if ax is None:
-        _, ax = plt.subplots(figsize=(max(6, 1.3*len(pair_labels)), 4.5), dpi=150)
-
-    sns.violinplot(
-        data=tidy,
-        x="pair",
-        y="value",
-        order=pair_labels,              # keep deterministic pair order
-        palette=pair_colors,            # per-pair colors (within=group color, between=blend)
-        cut=cut,
-        bw=bw,
-        scale=scale,
-        inner=inner,
-        ax=ax,
-    )
-
-    ax.set_xlabel("")                  # x labels already categorical
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.tick_params(axis="x", rotation=45)
+        _, ax = plt.subplots(figsize=(max(6, 1.3 * len(labels)), 4.5), dpi=150)
+    sns.violinplot(data=tidy, x="pair", y="value", order=labels, palette=pal, cut=cut, bw=bw, scale=scale, inner=inner, ax=ax)
+    ax.set_xlabel(""); ax.set_ylabel(ylabel); ax.set_title(title); ax.tick_params(axis="x", rotation=45)
     ax.grid(axis="y", alpha=0.2, linestyle="--", linewidth=0.5)
-
     return ax, tidy
 
-def pad_ids(ids, prefix, pad_width=None):
-    # Extract numeric part
-    numbers = [int(re.search(r'\d+', i).group()) for i in ids]
-    
-    # Auto-determine padding if not provided
-    if pad_width is None:
-        pad_width = len(str(max(numbers)))
-    
-    # Return padded ASV IDs
-    return [f"{prefix}{num:0{pad_width}d}" for num in numbers]
 
+# ========= Pipeline pieces =========
+def compute_and_save_block(
+    mode_name: str,                      # "micro" or "mito"
+    asv_path: Path,
+    out_root: Path,                      # e.g., <data>/<sub>/metadata or <data>/<sub>/mito/metadata
+    asv_out_root: Path,                  # e.g., <data>/<sub>/ASVs or <data>/<sub>/mito/ASVs
+    meta: pd.DataFrame,
+    tax_df: pd.DataFrame,
+    meta_sample_col: str,
+    type_col: str,
+    type_palette: Dict[str, str],
+    status_palette: Dict[str, str],
+    keep_types: Sequence[str],
+    fastq_stats_df: pd.DataFrame,
+    id_suffix_underscores_asv: Optional[int],
+    id_regex_asv: Optional[str],
+    violin_groups: Sequence[str],
+    dashed_line_y: Optional[float] = None,   # Only used in mito box+swarm
+) -> None:
+    ensure_dir(out_root)
+    ensure_dir(asv_out_root)
 
-def perform_umap(
-    data: pd.DataFrame,
-    n_neighbors: int = 15,
-    min_dist: float = 0.1,
-    metric: str = 'euclidean',
-    random_state: int = 42,
-    precomputed: bool = False
-):
-    """
-    Performs UMAP dimensionality reduction on the data or on a precomputed distance matrix.
+    # Long ASV
+    long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, id_suffix_underscores_asv, id_regex_asv, tax_df.index)
+    asv_tax = add_taxonomy(long_asv, tax_df)
 
-    Args:
-        data (pd.DataFrame): 
-            - If precomputed=False, rows are lmp_ids × features.
-            - If precomputed=True, must be a square (lmp_ids × lmp_ids) distance matrix.
-        n_neighbors (int): Number of neighbors for UMAP.
-        min_dist (float): Minimum distance parameter for UMAP.
-        metric (str): Distance metric to use (ignored if precomputed=True).
-        random_state (int): Random state for reproducibility.
-        precomputed (bool): If True, treat `data` as a distance matrix and set metric='precomputed'.
+    # Merge with metadata
+    if 'sample' not in asv_tax.columns:
+        # ensure we have 'sample' col for downstream naming (mirror your script)
+        asv_tax = asv_tax.rename(columns={meta_sample_col: 'sample'})
+    asv_meta = asv_tax.merge(meta, on='sample', how='inner')
 
-    Returns:
-        umap.UMAP: Fitted UMAP reducer.
-        pd.DataFrame: DataFrame with UMAP embeddings (UMAP1, UMAP2).
-    """
-    umap_metric = 'precomputed' if precomputed else metric
+    # Stats per sample for raw reads
+    reads_df = fastq_stats_df.copy()
+    reads_df = reads_df.rename(columns={'num_seqs': 'num_reads_total'})
+    reads_df['raw_count'] = (reads_df['num_reads_total'] / 2.0)
 
-    reducer = umap.UMAP(
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        metric=umap_metric,
-        random_state=random_state
+    # Build metastat table
+    cnt_df = asv_meta.groupby(['sample'])['count'].sum().reset_index()
+    metastat = meta.merge(reads_df[['sample', 'raw_count']], on='sample', how='left') \
+                   .merge(cnt_df, on='sample', how='left')
+    metastat['pass_filter'] = [t if s in set(asv_meta['sample']) else 'Failed-QC'
+                               for s, t in zip(metastat['sample'], metastat[type_col])]
+    long_df = metastat.groupby([type_col, 'pass_filter', 'sample'])['raw_count'].sum().reset_index()
+    long_df = long_df[long_df['raw_count'] > 0]
+
+    # Box + swarm
+    plt.figure(figsize=(10, 10))
+    ax = sns.boxplot(x=type_col, y='raw_count', data=long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
+                     order=list(keep_types))
+    sns.stripplot(data=long_df, x=type_col, y='raw_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
+                  jitter=0.25, palette=type_palette)
+    if dashed_line_y is not None:
+        plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
+    plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
+    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
+    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.pdf")
+    plt.close()
+
+    # Control subtraction (scope+skin), pivot to ASV x sample corrected counts
+    corr_meta = correct_counts_against_controls(asv_meta, meta, 'sample', type_col)
+    cleaned = corr_meta.pivot_table(index='ASV_ID', columns='sample', values='corr_count', aggfunc='sum', fill_value=0)
+
+    # Keep only assigned Domain and only kept samples
+    keep_asvs = corr_meta[corr_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
+    kept_samples = metastat[metastat['pass_filter'] != 'Failed-QC']['sample'].unique().tolist()
+    final_mat = cleaned.reindex(index=keep_asvs).dropna(how='all')
+    final_mat = final_mat[[c for c in final_mat.columns if c in kept_samples]].fillna(0).astype(int)
+
+    # Write outputs
+    save_df(asv_meta, out_root / f"ASV_meta_{mode_name}.tsv")
+    save_mat(final_mat, asv_out_root / f"ASV_final.{mode_name}.tsv")
+    save_df(metastat, out_root / f"master_table_{mode_name}.tsv")
+    save_df(meta, out_root / f"metadata_updated_{mode_name}.tsv")
+
+    # Legends (sample colors)
+    m_df = metastat[metastat['sample'].isin(final_mat.columns)].set_index('sample')
+    filtered = final_mat[m_df.index.tolist()]
+    col_colors_df = pd.DataFrame({
+        'sample_type': m_df[type_col].map(type_palette),
+        'status': m_df.get('status', pd.Series(index=m_df.index)).map(status_palette) if 'status' in m_df.columns else None,
+    }, index=m_df.index)
+    row_colors_df = col_colors_df.copy()
+
+    # Shared % matrix and clustermap
+    shared_pct = presence_shared_percent(filtered)
+    clustermap_shared_percent(
+        shared_pct,
+        col_colors_df=col_colors_df,
+        row_legend_df=row_colors_df,
+        out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
+        out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.pdf",
     )
 
-    # For precomputed, pass the matrix values directly
-    input_array = data.values if precomputed else data
-
-    embedding = reducer.fit_transform(input_array)
-    umap_df = pd.DataFrame(
-        embedding,
-        index=data.index,
-        columns=["UMAP1", "UMAP2"]
-    )
-    print(f"Performed UMAP (precomputed={precomputed}, metric='{umap_metric}'). "
-          f"Embedding shape: {umap_df.shape}")
-    return reducer, umap_df
-
-def split_taxa_string(taxa_str, delimiter=';'):
-    """
-    Split a taxonomic string into the 7 standard levels.
-    
-    Parameters:
-        taxa_str (str): The taxonomic string, e.g.
-            "k__Bacteria; p__Proteobacteria; c__Gammaproteobacteria; o__Enterobacterales; f__Enterobacteriaceae; g__Escherichia; s__coli"
-        delimiter (str): The delimiter used in the string (default is semicolon).
-    
-    Returns:
-        dict: A dictionary with keys 'Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species'
-              mapping to their respective values.
-    """
-    # Define the taxonomic levels in order
-    tax_levels = ["Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
-    
-    # Split the string by the delimiter and strip whitespace
-    if taxa_str != 'Unassigned':
-        parts = [part.strip().split('__', 1)[1] for part in taxa_str.split(delimiter)]
-    else:
-        parts = ['Unassigned']
-    # In status there are missing levels, fill them with None
-    tax_dict = {}
-    for i, level in enumerate(tax_levels):
-        tax_dict[level] = parts[i] if i < len(parts) else None
-    
-    return tax_dict
+    # Violin pairs (only for selected groups present)
+    vg = [g for g in violin_groups if g in set(meta[type_col])]
+    if vg:
+        fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
+        _, tidy = plot_grouppair_violins_sns(
+            shared_pct, meta,
+            sample_id_col='sample', group_col=type_col,
+            include_within=True,
+            group_order=vg,
+            group_colors=type_palette,
+            title="ASVs Shared by Sample Type",
+            ylabel="ASVs Shared (%)",
+            inner="quartile",
+            cut=0,
+            ax=ax,
+        )
+        plt.tight_layout()
+        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.svg", bbox_inches='tight')
+        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.pdf", bbox_inches='tight')
+        plt.close()
 
 
-### MAGIC VALUES ###    
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_combined_output"
-samp_col = "lmp_id"
-###  END  MAGIC  ###
-
-
-
-output_dir = os.path.join(data_dir, f"{sub_dir}/metadata")
-if output_dir and not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-    print(f"Created output directory: {output_dir}")
-
-metadata_table_path = os.path.join(data_dir, 'ref_db/spark_metadata.tsv')
-metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
-patient_set = sorted(list(set(metadata_df['Participant_ID'])))
-patient_dict = {x:i for i,x in enumerate(patient_set)}
-metadata_df['patient_code'] = ['P' + str(patient_dict[p]) for p in metadata_df['Participant_ID']]
-metadata_df['patient_int'] = [patient_dict[p] for p in metadata_df['Participant_ID']]
-metadata_df['type_code'] = [t[0:2] for t in metadata_df['type_group']]
-metadata_df['lung_code'] = [l[0] if l[0] in ['R', 'L'] else 'N' for l in metadata_df['Type']]
-# Define desired order
-patient_order = sorted(list(metadata_df['patient_int'].unique()))
-type_order = ['Sk', 'Sc', 'Or', 'BA', 'Lu']
-lung_order = ['R', 'L', 'N']
-# Convert columns to categorical with specified order
-metadata_df['type_code'] = pd.Categorical(metadata_df['type_code'], categories=type_order, ordered=True)
-metadata_df['lung_code'] = pd.Categorical(metadata_df['lung_code'], categories=lung_order, ordered=True)
-# Sort the dataframe
-metadata_df = metadata_df.sort_values(['patient_int', 'type_code', 'lung_code'])
-# Create unique sample code
-metadata_df['sample_code'] = [str(f"S{i+1:03d}") for i in range(len(metadata_df['sample']))]
-col = 'sample_code'
-metadata_df = metadata_df[[col] + [c for c in metadata_df.columns if c != col]]
-metadata_df.drop_duplicates(subset=['sample'], inplace=True)
-
-keep_types = ['Skin Brush',
-              'Scope Flush',
-              'Oral Rinse',
-              'BAL',
-              'Lung Brush'
-              ]
-
-all_type_palette = {'Skin Brush': '#CC79A7',
-           'Scope Flush': '#E69F00',
-           'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A',
-           'Failed-QC': 'lightgray'
-           }
-
-type_palette = {'Lung Brush': '#009E73',
-                'BAL': '#0072B2',
-                'Oral Rinse': '#6A3D9A'
-                }
-status_palette = {'Non-Cancer':'white',
-                  'Cancer':'#A50026',
-                  'methods':'lightgray'
-                  }
-
-kit_pallete = {'HostZERO-DEP': 'black',
-               'HostZERO-NODEP': 'gray',
-               'SPARK-ZYMO': 'skyblue',
-               }
-
-metadata_df = metadata_df.loc[metadata_df['type_group'].isin(keep_types)]
-
-fastq_stats_path = os.path.join(data_dir, f"{sub_dir}/stats/fastq_stats.tsv")
-fstats_df = pd.read_csv(fastq_stats_path, header=0, sep='\t')
-fstats_df['sample'] = [str(x.split('/')[-1].rsplit('_', 4)[0]) for x in fstats_df['file']]
-#fstats_df['lmp_id'] = fstats_df['sample'].copy()
-#fstats_df['sample'] = fstats_df['sample'].map(
-#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-#).fillna(fstats_df['sample'])
-#fstats_df = fstats_df.loc[fstats_df['lmp_id'].isin(metadata_df['lmp_id'])]
-#metadata_df = metadata_df.loc[metadata_df['lmp_id'].isin(list(fstats_df['lmp_id']))]
-
-reads_df = fstats_df.groupby(['sample'])['num_seqs'].sum().reset_index()
-reads_df['raw_count'] = reads_df['num_seqs'] / 2
-
-taxonomy_path = os.path.join(data_dir, f"{sub_dir}/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv")
-tax_df = pd.read_csv(taxonomy_path, header=0, sep='\t')
-tax_df['Feature ID'] = [x.split(';', 1)[0] for x in tax_df['Feature ID']]
-tax_df.set_index('Feature ID', inplace=True)
-
-asv_path = os.path.join(data_dir, f"{sub_dir}/ASVs/ASV_target.micro.tsv")
-asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
-asv_df.columns = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_df.columns]
-asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
-asv_stack_df = asv_df.stack().reset_index()
-asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
-#asv_stack_df['sample'] = asv_stack_df['sample'].map(
-#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-#).fillna(asv_stack_df['sample'])
-#asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
-
-asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
-asv_stack_df.set_index('ASV_ID', inplace=True)
-
-asv_tax_df = asv_stack_df.merge(tax_df, how='left', left_index=True, right_index=True)
-taxonomy_dict = {'Domain': [], 'Phylum': [], 'Class': [],
-                 'Order': [], 'Family': [], 'Genus': [],
-                 'Species': []
-                 }
-for t in asv_tax_df['Taxon']:
-    lineage = split_taxa_string(t)
-    for l in lineage:
-        v = lineage[l]
-        taxonomy_dict[l].append(v)
-for t in taxonomy_dict:
-    asv_tax_df[t] = taxonomy_dict[t]
-
-asv_meta_df = asv_tax_df.reset_index().merge(metadata_df, on='sample', how='inner')
-
-cnt_df = asv_meta_df.groupby(['sample'])['count'].sum().reset_index()
-
-metastat_df = metadata_df.merge(reads_df, how='left', on='sample')
-metastat_df = metastat_df.merge(cnt_df, how='left', on='sample')
-metastat_df['pass_filter'] = [t if s in list(asv_meta_df['sample']) else 'Failed-QC'
-                              for s,t in  zip(metastat_df['sample'], metastat_df['type_group'])
-                              ]
-long_df = metastat_df.groupby(['type_group', 'pass_filter', 'sample'])['raw_count'].sum().reset_index()
-long_df = long_df.loc[long_df['raw_count'] > 0] # remove empty values
-
-# Plot
-plt.figure(figsize=(10, 10))
-ax = sns.boxplot(
-    x='type_group', y='raw_count', data=long_df,
-    color='white',  # box color
-    fliersize=0,        # hide default outliers
-    linewidth=1,        # box edge width
-    showcaps=True,
-    order=keep_types
+# ========= CLI =========
+def get_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="ASV summary tables and plots (microbial & mitochondrial).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-# Overlay with swarm plot
-sns.stripplot(data=long_df, x='type_group', y='raw_count',
-              hue='pass_filter', alpha=0.75, ax=ax, legend=False,
-              jitter=0.25, palette=all_type_palette
-              )
+    io = p.add_argument_group("Project I/O")
+    io.add_argument("--data-dir", type=Path, required=True, help="Project root")
+    io.add_argument("--sub-dir", default="spark_combined_output", help="Subdirectory under data-dir")
+    io.add_argument("--metadata", type=Path, default=None, help="Metadata TSV path (default: <data>/ref_db/spark_metadata.tsv)")
+    io.add_argument("--taxonomy", type=Path, required=True, help="SILVA taxonomy TSV (Feature ID, Taxon)")
 
-plt.title("Sample Type")
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/type_group_swarmplot.svg"))
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/type_group_swarmplot.pdf"))
-plt.close()
+    cols = p.add_argument_group("Columns / Groups")
+    cols.add_argument("--meta-sample-col", default="sample", help="Sample column name in metadata")
+    cols.add_argument("--type-col", default="type_group", help="Sample type column in metadata")
+    cols.add_argument("--keep-types", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush",
+                      help="Comma-separated list of types to keep (order honored)")
+    cols.add_argument("--violin-groups", default="Oral Rinse,BAL,Lung Brush", help="Order for violin plot groups")
 
-sub_df = metastat_df.loc[metastat_df['pass_filter'] != 'Failed-QC']
-scope_samples = list(sub_df.loc[sub_df['type_group'] == 'Scope Flush']['sample'])
-scope_asvs = asv_meta_df.loc[((asv_meta_df['sample'].isin(scope_samples)) & (asv_meta_df['count'] > 0))]['ASV_ID'].tolist()
-skin_samples = list(sub_df.loc[sub_df['type_group'] == 'Skin Brush']['sample'])
-skin_asvs = asv_meta_df.loc[((asv_meta_df['sample'].isin(skin_samples)) & (asv_meta_df['count'] > 0))]['ASV_ID'].tolist()
-offtarg_asvs = list(set(scope_asvs + skin_asvs))
-keep_cols = ['ASV_ID', 'sample', 'count']
-skin_df = asv_meta_df.loc[(
-    (asv_meta_df['ASV_ID'].isin(skin_asvs)) &
-    (asv_meta_df['type_group'].isin(['Skin Brush']))
-    )].copy()[keep_cols].groupby(['ASV_ID'])['count'].mean().reset_index().fillna(0)
-skin_df.columns = ['ASV_ID', 'offtarg_mean']
-keep_cols = ['ASV_ID', 'sample', 'count']
-scope_df = asv_meta_df.loc[(
-    (asv_meta_df['ASV_ID'].isin(scope_asvs)) &
-    (asv_meta_df['type_group'].isin(['Scope Flush']))
-    )].copy()[keep_cols].groupby(['ASV_ID'])['count'].mean().reset_index().fillna(0)
-scope_df.columns = ['ASV_ID', 'nctrl_mean']
-asv_meta_df = asv_meta_df.merge(skin_df, how='left', on=['ASV_ID'])
-asv_meta_df['offtarg_mean'] = asv_meta_df['offtarg_mean'].fillna(0)
-asv_meta_df = asv_meta_df.merge(scope_df, how='left', on='ASV_ID')
-asv_meta_df['nctrl_mean'] = asv_meta_df['nctrl_mean'].fillna(0)
-asv_meta_df['count_sub_scope'] = asv_meta_df['count'] - asv_meta_df['nctrl_mean']
-asv_meta_df['count_sub_skin'] = asv_meta_df['count_sub_scope'] - asv_meta_df['offtarg_mean']
-asv_meta_df['corr_count'] = [int(x) if x > 0 else int(0) for x in asv_meta_df['count_sub_skin']]
-asv_meta_df = asv_meta_df.loc[~asv_meta_df['type_group'].isin(['Scope Flush', 'Skin Brush'])]
+    reads = p.add_argument_group("Read Stats & ID Parsing")
+    reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
+    reads.add_argument("--fastq-id-suffix-underscores", type=int, default=4, help="Chop N underscore tokens from end for fastq IDs")
+    reads.add_argument("--fastq-id-regex", default="", help="Regex with one capture group for fastq IDs")
 
-cleaned_asv_df = asv_meta_df.pivot_table(index='ASV_ID', columns='sample',
-                              values='corr_count', aggfunc='sum', fill_value=0
-                              )
-asv_keep_list = list(asv_meta_df.loc[asv_meta_df['Domain'] != 'Unassigned']['ASV_ID'].unique())
-final_asv_df = cleaned_asv_df[[x for x in cleaned_asv_df.columns if x in list(sub_df['sample'])]]
-final_asv_df = final_asv_df.loc[asv_keep_list]
-final_asv_df = final_asv_df.loc[~(final_asv_df == 0).all(axis=1)]
+    asv = p.add_argument_group("ASV Matrices & ID Parsing")
+    asv.add_argument("--asv-micro", type=Path, required=True, help="ASV_target.micro.tsv")
+    asv.add_argument("--asv-mito", type=Path, required=True, help="ASV_target.mito.tsv")
+    asv.add_argument("--asv-id-suffix-underscores", type=int, default=2, help="Chop N underscore tokens from end for ASV column IDs")
+    asv.add_argument("--asv-id-regex", default="", help="Regex with one capture group for ASV column IDs")
 
-# Extract numeric parts and find max
-max_val = max(int(re.search(r'\d+', asv).group()) for asv in tax_df.index.tolist())
-# Get pad width
-pad_width = len(str(max_val))
+    vis = p.add_argument_group("Palettes / Visual")
+    vis.add_argument("--type-palette",
+                     default="Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
+                     help="Comma-separated 'Group:#HEX'")
+    vis.add_argument("--status-palette",
+                     default="Non-Cancer:white,Cancer:#A50026,methods:lightgray",
+                     help="Comma-separated 'Status:#HEX'")
+    vis.add_argument("--mito-threshold-line", type=float, default=1000.0, help="Dashed line Y on mito swarm plot (set negative to disable)")
 
-new_asv_meta_df = asv_meta_df.copy()
-#new_asv_meta_df['ASV_ID'] = pad_asv_ids(new_asv_meta_df['ASV_ID'].tolist(), pad_width=pad_width) 
-#final_asv_df.index = pad_asv_ids(final_asv_df.index.tolist(), pad_width=pad_width) 
+    mode = p.add_argument_group("Modes / Toggles")
+    mode.add_argument("--make-micro", action="store_true", help="Run microbial block")
+    mode.add_argument("--make-mito", action="store_true", help="Run mitochondrial block")
 
-new_tax_df = tax_df.copy()
-#new_tax_df.index = pad_asv_ids(new_tax_df.index.tolist(), pad_width=pad_width) 
-new_tax_df = new_tax_df.reset_index()
-new_tax_df.columns = ['ASV_ID', 'Taxon', 'Concensus']
+    misc = p.add_argument_group("Misc")
+    misc.add_argument("--verbose", action="store_true", help="Verbose logging")
 
-new_tax_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/taxonomy_updated.tsv"), sep='\t', index=False)
-new_asv_meta_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/ASV_meta.tsv"), sep='\t', index=False)
-final_asv_df.to_csv(os.path.join(data_dir, f"{sub_dir}/ASVs/ASV_final.micro.tsv"), sep='\t', index=True)
-metastat_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/master_table.tsv"), sep='\t', index=False)
-metadata_df.to_csv(os.path.join(data_dir, f"{sub_dir}/metadata/metadata_updated.tsv"), sep='\t', index=False)
-
-# Map to colors
-m_df = metastat_df.loc[metastat_df['sample'].isin(final_asv_df.columns)].set_index('sample')
-filtered_asv_df = final_asv_df[m_df.index.tolist()]
-#invert_bray_df = 1 - bray_df.loc[m_df.index.tolist(), m_df.index.tolist()]
-
-col_colors_df = pd.DataFrame({
-    'sample_type': m_df['type_group'].map(all_type_palette),
-    'status': m_df['status'].map(status_palette),
-    #'kit': m_df['kit'].map(kit_pallete)
-}, index=m_df.index)
-row_colors_df = pd.DataFrame({
-    'sample_type': m_df['type_group'].map(all_type_palette),
-    'status': m_df['status'].map(status_palette),
-    #'kit': m_df['kit'].map(kit_pallete)
-}, index=m_df.index)
-
-# Create a new colormap with white at the beginning
-viridis = plt.cm.get_cmap('viridis', 256)
-colors = viridis(np.linspace(0, 1, 256))
-colors[0] = [1, 1, 1, 1]  # Replace the first color (low end) with white
-# Create new colormap
-viridis_white = mcolors.ListedColormap(colors)
-
-# Faster shift from white to gray
-colors = [
-    (0.0, '#ffffff'),  # white at 0.0
-    (0.2, '#d9d9d9'),  # light gray quickly after
-    (1.0, '#000000')   # black at 1.0
-]
-cmap = LinearSegmentedColormap.from_list("light_greyscale", colors, N=256)
-
-presence_absence = (filtered_asv_df > 0).astype(int)
-shared = presence_absence.T.dot(presence_absence)
-n = presence_absence.sum()
-n_array = n.to_numpy()  # convert to NumPy
-shared_percent = shared.div(n_array[:, None] + n_array[None, :] - shared.to_numpy()) * 100
-shared_percent = pd.DataFrame(shared_percent, index=shared.index, columns=shared.columns).fillna(0)
-
-g = sns.clustermap(
-    shared_percent,
-    method='ward',
-    metric='euclidean',
-    col_colors=col_colors_df,
-    row_colors=row_colors_df,
-    cmap=cmap,
-    vmin=0,
-    vmax=100,
-    linewidths=0,
-    xticklabels=False,
-    yticklabels=False,
-    dendrogram_ratio=(0.05, 0.05),
-    colors_ratio=(0.02, 0.02),
-    figsize=(32, 32),
-    cbar_pos=(1.02, 0.2, 0.03, 0.4),
-    alpha=1.0,
-    #col_cluster=False
-    )
-# Create legend entries
-handles = []
-for group in ['Oral Rinse', 'BAL', 'Lung Brush']:
-    color = type_palette[group]
-    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-for group in ['Non-Cancer', 'Cancer']:
-    color = status_palette[group]
-    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-#for group in ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']:
-#    color = kit_pallete[group]
-#    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-# Add legend outside the clustermap
-plt.legend(
-    handles=handles,
-    bbox_to_anchor=(1, 1),
-    bbox_transform=plt.gcf().transFigure,
-    loc='upper left',
-    title="Sample Type / Kit",
-    frameon=False
-)
-# Format colorbar
-colorbar = g.ax_heatmap.collections[0].colorbar
-colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
-g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
-g.ax_heatmap.tick_params(axis='x', which='both', length=5)
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/clustermap_ASVpercent.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/clustermap_ASVpercent.pdf"), bbox_inches='tight')
-plt.close()
-
-# Violins
-fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
-ax, tidy = plot_grouppair_violins_sns(
-    shared_percent, metadata_df,
-    sample_id_col="sample",
-    group_col="type_group",
-    include_within=True,
-    group_order=["Oral Rinse","BAL","Lung Brush"],
-    group_colors=type_palette,   # used for within; between are blended
-    title="ASVs Shared by Sample Type",
-    ylabel="ASVs Shared (%)",
-    inner="quartile",            # or "box", "point", None
-    cut=0,
-    ax=ax,
-)
-
-plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/violin_ASVpercent.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/metadata/violin_ASVpercent.pdf"), bbox_inches='tight')
-plt.close()
+    return p
 
 
-# MITOCHONDRIAL
-asv_path = os.path.join(data_dir, f"{sub_dir}/mito/ASVs/ASV_target.mito.tsv")
-asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0)
-asv_df.columns = [str(x.split('/')[-1].rsplit('_', 2)[0]) for x in asv_df.columns]
-asv_df = asv_df.loc[[a for a in asv_df.index.values if a in list(tax_df.index.values)]]
+def main():
+    args = get_parser().parse_args()
 
-asv_stack_df = asv_df.stack().reset_index()
-asv_stack_df.columns = ['ASV_ID', 'sample', 'count']
-#asv_stack_df['sample'] = asv_stack_df['sample'].map(
-#    metadata_df.drop_duplicates('lmp_id').set_index('lmp_id')['sample']
-#).fillna(asv_stack_df['sample'])
-#asv_stack_df = asv_stack_df.loc[asv_stack_df['sample'].isin(metadata_df['sample'])]
-asv_stack_df = asv_stack_df.loc[asv_stack_df['count'] > 0]
-asv_stack_df.set_index('ASV_ID', inplace=True)
+    data_dir = args.data_dir
+    sub_dir = args.sub_dir
+    meta_path = args.metadata or (data_dir / "ref_db" / "spark_metadata.tsv")
+    keep_types = parse_list_csv(args.keep_types)
+    violin_groups = parse_list_csv(args.violin_groups)
+    type_palette = parse_kv_csv(args.type_palette, cast=None)
+    status_palette = parse_kv_csv(args.status_palette, cast=None)
 
-asv_tax_df = asv_stack_df.merge(tax_df, how='left', left_index=True, right_index=True)
-taxonomy_dict = {'Domain': [], 'Phylum': [], 'Class': [],
-                 'Order': [], 'Family': [], 'Genus': [],
-                 'Species': []
-                 }
-for t in asv_tax_df['Taxon']:
-    lineage = split_taxa_string(t)
-    for l in lineage:
-        v = lineage[l]
-        taxonomy_dict[l].append(v)
-for t in taxonomy_dict:
-    asv_tax_df[t] = taxonomy_dict[t]
+    # Resolve canonical paths
+    def resolve(rel_or_abs: str | Path) -> Path:
+        p = Path(rel_or_abs)
+        return p if p.is_absolute() else (data_dir / sub_dir / p)
 
-asv_meta_df = asv_tax_df.reset_index().merge(metadata_df, on='sample', how='inner')
+    fastq_stats_path = resolve(args.fastq_stats)
+    asv_micro_path = resolve(args.asv_micro)
+    asv_mito_path = resolve(args.asv_mito)
+    taxonomy_path = resolve(args.taxonomy)
 
-cnt_df = asv_meta_df.groupby(['sample'])['count'].sum().reset_index()
-metastat_df = metadata_df.merge(reads_df, how='left', on='sample')
-metastat_df = metastat_df.merge(cnt_df, how='left', on='sample')
-metastat_df['pass_filter'] = [t if s in list(asv_meta_df['sample']) else 'Failed-QC'
-                              for s,t in  zip(metastat_df['sample'], metastat_df['type_group'])
-                              ]
+    if args.verbose:
+        print(f"[i] Metadata: {meta_path}")
+        print(f"[i] Taxonomy: {taxonomy_path}")
+        print(f"[i] Fastq stats: {fastq_stats_path}")
+        print(f"[i] ASV micro: {asv_micro_path}")
+        print(f"[i] ASV mito : {asv_mito_path}")
 
-long_df = metastat_df.groupby(['type_group', 'pass_filter', 'sample'])['raw_count'].sum().reset_index()
-long_df = long_df.loc[long_df['raw_count'] > 0] # remove empty values
-
-# Plot
-plt.figure(figsize=(10, 10))
-ax = sns.boxplot(
-    x='type_group', y='raw_count', data=long_df,
-    color='white',  # box color
-    fliersize=0,        # hide default outliers
-    linewidth=1,        # box edge width
-    showcaps=True,
-    order=keep_types
+    # Read data
+    meta = read_metadata(meta_path, args.meta_sample_col, keep_types)
+    tax_df = read_taxonomy_table(taxonomy_path)
+    fastq_df = read_fastq_stats(
+        fastq_stats_path,
+        args.meta_sample_col,
+        args.fastq_id_suffix_underscores,
+        args.fastq_id_regex or None
     )
 
-# Overlay with swarm plot
-sns.stripplot(data=long_df, x='type_group', y='raw_count',
-              hue='pass_filter', alpha=0.75, ax=ax, legend=False,
-              jitter=0.25, palette=all_type_palette
-              )
+    # Output roots
+    meta_root = data_dir / sub_dir / "metadata"
+    mito_meta_root = data_dir / sub_dir / "mito" / "metadata"
+    asv_root = data_dir / sub_dir / "ASVs"
+    mito_asv_root = data_dir / sub_dir / "mito" / "ASVs"
 
-# Dashed line at 5k
-plt.axhline(y=1000, linestyle='--', color='black', linewidth=1)
+    # If neither toggle provided, run both
+    run_micro = args.make_micro or (not args.make_micro and not args.make_mito)
+    run_mito = args.make_mito or (not args.make_micro and not args.make_mito)
 
-plt.title("Sample Type")
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/metadata/type_group_swarmplot_mito.svg"))
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/metadata/type_group_swarmplot_mito.pdf"))
-plt.close()
+    # MICRO
+    if run_micro:
+        if args.verbose: print("[i] Running microbial block …")
+        compute_and_save_block(
+            mode_name="micro",
+            asv_path=asv_micro_path,
+            out_root=meta_root,
+            asv_out_root=asv_root,
+            meta=meta.copy(),
+            tax_df=tax_df,
+            meta_sample_col=args.meta_sample_col,
+            type_col=args.type_col,
+            type_palette=type_palette,
+            status_palette=status_palette,
+            keep_types=keep_types,
+            fastq_stats_df=fastq_df.copy(),
+            id_suffix_underscores_asv=args.asv_id_suffix_underscores,
+            id_regex_asv=args.asv_id_regex or None,
+            violin_groups=violin_groups,
+            dashed_line_y=None,
+        )
 
-sub_df = metastat_df.loc[metastat_df['pass_filter'] != 'Failed-QC']
-scope_samples = list(sub_df.loc[sub_df['type_group'] == 'Scope Flush']['sample'])
-scope_asvs = asv_meta_df.loc[((asv_meta_df['sample'].isin(scope_samples)) & (asv_meta_df['count'] > 0))]['ASV_ID'].tolist()
-skin_samples = list(sub_df.loc[sub_df['type_group'] == 'Skin Brush']['sample'])
-skin_asvs = asv_meta_df.loc[((asv_meta_df['sample'].isin(skin_samples)) & (asv_meta_df['count'] > 0))]['ASV_ID'].tolist()
-offtarg_asvs = list(set(scope_asvs + skin_asvs))
-keep_cols = ['ASV_ID', 'sample', 'count']
-skin_df = asv_meta_df.loc[(
-    (asv_meta_df['ASV_ID'].isin(skin_asvs)) &
-    (asv_meta_df['type_group'].isin(['Skin Brush']))
-    )].copy()[keep_cols].groupby(['ASV_ID'])['count'].mean().reset_index().fillna(0)
-skin_df.columns = ['ASV_ID', 'offtarg_mean']
-keep_cols = ['ASV_ID', 'sample', 'count']
-scope_df = asv_meta_df.loc[(
-    (asv_meta_df['ASV_ID'].isin(scope_asvs)) &
-    (asv_meta_df['type_group'].isin(['Scope Flush']))
-    )].copy()[keep_cols].groupby(['ASV_ID'])['count'].mean().reset_index().fillna(0)
-scope_df.columns = ['ASV_ID', 'nctrl_mean']
-asv_meta_df = asv_meta_df.merge(skin_df, how='left', on=['ASV_ID'])
-asv_meta_df['offtarg_mean'] = asv_meta_df['offtarg_mean'].fillna(0)
-asv_meta_df = asv_meta_df.merge(scope_df, how='left', on='ASV_ID')
-asv_meta_df['nctrl_mean'] = asv_meta_df['nctrl_mean'].fillna(0)
-asv_meta_df['count_sub_scope'] = asv_meta_df['count'] - asv_meta_df['nctrl_mean']
-asv_meta_df['count_sub_skin'] = asv_meta_df['count_sub_scope'] - asv_meta_df['offtarg_mean']
-asv_meta_df['corr_count'] = [int(x) if x > 0 else int(0) for x in asv_meta_df['count_sub_skin']]
-asv_meta_df = asv_meta_df.loc[~asv_meta_df['type_group'].isin(['Scope Flush', 'Skin Brush'])]
-cleaned_asv_df = asv_meta_df.pivot_table(index='ASV_ID', columns='sample',
-                              values='corr_count', aggfunc='sum', fill_value=0
-                              )
-asv_keep_list = list(asv_meta_df.loc[asv_meta_df['Domain'] != 'Unassigned']['ASV_ID'].unique())
-final_asv_df = cleaned_asv_df[[x for x in cleaned_asv_df.columns if x in list(sub_df['sample'])]]
-final_asv_df = final_asv_df.loc[asv_keep_list]
-final_asv_df = final_asv_df.loc[~(final_asv_df == 0).all(axis=1)]
+    # MITO
+    if run_mito:
+        if args.verbose: print("[i] Running mitochondrial block …")
+        compute_and_save_block(
+            mode_name="mito",
+            asv_path=asv_mito_path,
+            out_root=mito_meta_root,
+            asv_out_root=mito_asv_root,
+            meta=meta.copy(),
+            tax_df=tax_df,
+            meta_sample_col=args.meta_sample_col,
+            type_col=args.type_col,
+            type_palette=type_palette,
+            status_palette=status_palette,
+            keep_types=keep_types,
+            fastq_stats_df=fastq_df.copy(),
+            id_suffix_underscores_asv=args.asv_id_suffix_underscores,
+            id_regex_asv=args.asv_id_regex or None,
+            violin_groups=violin_groups,
+            dashed_line_y=(args.mito_threshold_line if args.mito_threshold_line >= 0 else None),
+        )
 
-asv_meta_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/metadata/ASV_meta_mito.tsv"), sep='\t', index=False)
-final_asv_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/ASVs/ASV_final.mito.tsv"), sep='\t', index=True)
-metastat_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/metadata/master_table_mito.tsv"), sep='\t', index=False)
-metadata_df.to_csv(os.path.join(data_dir, f"{sub_dir}/mito/metadata/metadata_updated_mito.tsv"), sep='\t', index=False)
-print(final_asv_df.shape)
+    if args.verbose:
+        print("✔ Done.")
 
-# Map to colors
-m_df = metastat_df.loc[metastat_df['sample'].isin(final_asv_df.columns)].set_index('sample')
-filtered_asv_df = final_asv_df[m_df.index.tolist()]
-#invert_bray_df = 1 - bray_df.loc[m_df.index.tolist(), m_df.index.tolist()]
 
-col_colors_df = pd.DataFrame({
-    'sample_type': m_df['type_group'].map(all_type_palette),
-    'status': m_df['status'].map(status_palette),
-    #'kit': m_df['kit'].map(kit_pallete)
-}, index=m_df.index)
-row_colors_df = pd.DataFrame({
-    'sample_type': m_df['type_group'].map(all_type_palette),
-    'status': m_df['status'].map(status_palette),
-    #'kit': m_df['kit'].map(kit_pallete)
-}, index=m_df.index)
-
-# Create a new colormap with white at the beginning
-viridis = plt.cm.get_cmap('viridis', 256)
-colors = viridis(np.linspace(0, 1, 256))
-colors[0] = [1, 1, 1, 1]  # Replace the first color (low end) with white
-# Create new colormap
-viridis_white = mcolors.ListedColormap(colors)
-
-# Faster shift from white to gray
-colors = [
-    (0.0, '#ffffff'),  # white at 0.0
-    (0.2, '#d9d9d9'),  # light gray quickly after
-    (1.0, '#000000')   # black at 1.0
-]
-cmap = LinearSegmentedColormap.from_list("light_greyscale", colors, N=256)
-
-presence_absence = (filtered_asv_df > 0).astype(int)
-shared = presence_absence.T.dot(presence_absence)
-n = presence_absence.sum()
-n_array = n.to_numpy()  # convert to NumPy
-shared_percent = shared.div(n_array[:, None] + n_array[None, :] - shared.to_numpy()) * 100
-shared_percent = pd.DataFrame(shared_percent, index=shared.index, columns=shared.columns).fillna(0)
-
-g = sns.clustermap(
-    shared_percent,
-    method='ward',
-    metric='euclidean',
-    col_colors=col_colors_df,
-    row_colors=row_colors_df,
-    cmap=cmap,
-    vmin=0,
-    vmax=100,
-    linewidths=0,
-    xticklabels=False,
-    yticklabels=False,
-    dendrogram_ratio=(0.05, 0.05),
-    colors_ratio=(0.02, 0.02),
-    figsize=(32, 32),
-    cbar_pos=(1.02, 0.2, 0.03, 0.4),
-    alpha=1.0,
-    #col_cluster=False
-    )
-# Create legend entries
-handles = []
-for group in ['Oral Rinse', 'BAL', 'Lung Brush']:
-    color = type_palette[group]
-    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-for group in ['Non-Cancer', 'Cancer', 'methods']:
-    color = status_palette[group]
-    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-#for group in ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']:
-#    color = kit_pallete[group]
-#    handles.append(Patch(facecolor=color, label=f"{group}", alpha=0.75))
-# Add legend outside the clustermap
-plt.legend(
-    handles=handles,
-    bbox_to_anchor=(1, 1),
-    bbox_transform=plt.gcf().transFigure,
-    loc='upper left',
-    title="Sample Type / Kit",
-    frameon=False
-)
-# Format colorbar
-colorbar = g.ax_heatmap.collections[0].colorbar
-colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
-g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
-g.ax_heatmap.tick_params(axis='x', which='both', length=5)
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/metadata/clustermap_ASVpercent_mito.svg"), bbox_inches='tight')
-plt.savefig(os.path.join(data_dir, f"{sub_dir}/mito/metadata/clustermap_ASVpercent_mito.pdf"), bbox_inches='tight')
-plt.close()
+if __name__ == "__main__":
+    main()

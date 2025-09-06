@@ -5,8 +5,8 @@ Build species-accumulation (collector’s) curves from an ASV count table.
 
 Inputs
 ------
-- Counts table (TSV): rows = ASVs, columns = samples, integer counts (>=0).
-- Metadata (TSV): includes a sample-id column and a grouping column.
+- Counts table (TSV/TSV.GZ): rows = ASVs, columns = samples, integer counts (>=0).
+- Metadata (TSV/TSV.GZ): includes a sample-id column and a grouping column.
 
 What the bounds mean
 --------------------
@@ -23,6 +23,8 @@ Features
 - Optional explicit color mapping per group (validated, with warnings).
 - Optional explicit group order for both facets (left→right, top→bottom)
   and legend order.
+- Multiple output formats with --formats (e.g., pdf,png,svg).
+- Presence threshold control (default >0).
 
 CLI
 ---
@@ -36,13 +38,16 @@ python collectors_curves.py \
   --group-colors "Soil=#1b9e77,Water=#d95f02,Air=#7570b3" \
   --palette tab10 \
   --xpad 0.75 \
+  --title "Collector's curves" \
+  --formats pdf,png \
   --out_prefix collectors
 
 Outputs
 -------
-- collectors_overlay.png
-- collectors_faceted.png
+- collectors_overlay.<ext> (per requested format)
+- collectors_faceted.<ext>
 - collectors_stats/<group>_collector_stats.tsv
+- collectors_summary.tsv  (one-row summary per group)
 """
 
 import math
@@ -59,9 +64,22 @@ plt.switch_backend("Agg")
 
 
 # ----------------------------- IO & Prep ------------------------------------
+def _read_table(path: str) -> pd.DataFrame:
+    path = str(path)
+    sep = "\t"
+    if path.endswith(".gz"):
+        return pd.read_csv(path, sep=sep, compression="infer")
+    return pd.read_csv(path, sep=sep)
+
+
 def read_inputs(counts_path, meta_path, sample_id_col, group_col):
-    counts = pd.read_csv(counts_path, sep="\t", index_col=0)
-    meta = pd.read_csv(meta_path, sep="\t", dtype=str)
+    counts = _read_table(counts_path)
+    if counts.shape[1] < 2:
+        raise ValueError("Counts table must have ASVs in rows and samples in columns. "
+                         "Ensure the first column is an index/ASV ID and the rest are samples.")
+    counts = counts.set_index(counts.columns[0])
+
+    meta = _read_table(meta_path)
 
     # Validate required columns
     for c in (sample_id_col, group_col):
@@ -222,8 +240,8 @@ def _x_limits_with_padding(xmax, xpad):
     return left, right
 
 
-def plot_overlay(curves, colors, group_col, out_path, xpad, groups_order):
-    plt.figure(figsize=(8, 6), dpi=150)
+def plot_overlay(curves, colors, group_col, out_base, xpad, groups_order, title, formats, dpi, ylim_pad):
+    plt.figure(figsize=(8, 6), dpi=dpi)
     ymax = max(curves[g]["hi"].max() for g in groups_order)
     xmax = max(len(curves[g]["mean"]) for g in groups_order)
     handles, labels = [], []
@@ -238,22 +256,24 @@ def plot_overlay(curves, colors, group_col, out_path, xpad, groups_order):
 
     plt.xlabel("# samples accumulated")
     plt.ylabel("# unique ASVs observed")
-    plt.title(f"")
+    if title:
+        plt.title(title)
     xlo, xhi = _x_limits_with_padding(xmax, xpad)
     plt.xlim(xlo, xhi)
-    plt.ylim(0, ymax * 1.02)
+    plt.ylim(0, ymax * ylim_pad)
     plt.legend(handles, labels, frameon=False, title=group_col)
     plt.tight_layout()
-    plt.savefig(out_path)
+    for ext in formats:
+        plt.savefig(f"{out_base}_overlay.{ext}")
     plt.close()
 
 
-def plot_faceted(curves, colors, group_col, out_path, xpad, groups_order):
+def plot_faceted(curves, colors, group_col, out_base, xpad, groups_order, title, formats, dpi, max_cols, show_perms, ylim_pad):
     groups = list(groups_order)
     n = len(groups)
-    ncols = min(3, n) if n else 1
+    ncols = min(max_cols, n) if n else 1
     nrows = math.ceil(n / ncols) if n else 1
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3.5*nrows), dpi=150)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3.5*nrows), dpi=dpi)
     if nrows * ncols == 1:
         axes = np.array([[axes]])
     axes = np.array(axes).reshape(nrows, ncols)
@@ -267,8 +287,8 @@ def plot_faceted(curves, colors, group_col, out_path, xpad, groups_order):
         ax = axes[r, c]
         curv = curves[g]
         x = np.arange(1, len(curv["mean"]) + 1)
-        show_perms = min(10, curv["all"].shape[0])
-        for k in range(show_perms):
+        sp = min(show_perms, curv["all"].shape[0])
+        for k in range(sp):
             ax.plot(x, curv["all"][k, :], alpha=0.08, linewidth=1, color=colors[g])
         ax.fill_between(x, curv["lo"], curv["hi"], alpha=0.2, color=colors[g])
         ax.plot(x, curv["mean"], linewidth=2, color=colors[g])
@@ -276,7 +296,7 @@ def plot_faceted(curves, colors, group_col, out_path, xpad, groups_order):
 
         ax.set_title(f"{group_col} = {g}")
         ax.set_xlim(xlo, xhi)
-        ax.set_ylim(0, ymax * 1.02)
+        ax.set_ylim(0, ymax * ylim_pad)
         ax.set_xlabel("# samples")
         ax.set_ylabel("# ASVs")
         ax.grid(alpha=0.2, linestyle="--", linewidth=0.5)
@@ -286,20 +306,22 @@ def plot_faceted(curves, colors, group_col, out_path, xpad, groups_order):
         r, c = divmod(j, ncols)
         fig.delaxes(axes[r, c])
 
-    fig.suptitle(f"", y=0.99)
+    if title:
+        fig.suptitle(title, y=0.99)
     fig.tight_layout()
-    fig.subplots_adjust(top=0.90)
-    fig.savefig(out_path)
+    fig.subplots_adjust(top=0.90 if title else 0.95)
+    for ext in formats:
+        fig.savefig(f"{out_base}_faceted.{ext}")
     plt.close(fig)
 
 
 # ----------------------------- CLI ------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Build collector's curves (species accumulation) from an ASV table.")
-    ap.add_argument("--counts", default="asv_counts.tsv",
-                    help="TSV with ASVs as rows and samples as columns.")
-    ap.add_argument("--meta", default="sample_metadata.tsv",
-                    help="TSV metadata file.")
+    ap.add_argument("--counts", required=True,
+                    help="TSV (optionally .gz) with ASVs as rows and samples as columns.")
+    ap.add_argument("--meta", required=True,
+                    help="TSV (optionally .gz) metadata file.")
     ap.add_argument("--sample-id-col", default="sample_id",
                     help="Metadata column with IDs matching count-table columns.")
     ap.add_argument("--group-col", default="sample_type",
@@ -311,27 +333,45 @@ def main():
     ap.add_argument("--out_prefix", default="collectors",
                     help="Output prefix for figures and stats.")
 
-    # Colors
+    # Colors & appearance
     ap.add_argument("--palette", default="tab10",
                     help="Matplotlib palette/colormap name for groups (default: tab10).")
     ap.add_argument("--group-colors", default=None,
                     help='Explicit mapping like "GroupA=#1f77b4,GroupB=#ff7f0e". '
                          "Unknown groups warn; missing groups fall back to --palette.")
-
-    # Group order for facets and legend
     ap.add_argument("--group-order", default=None,
                     help='Comma-separated group order for facets (left→right, top→bottom) and legend. '
                          'Example: "Soil,Water,Air"')
-
-    # Upper-only x-axis padding so dashed vlines at xmax are visible
+    ap.add_argument("--title", default="",
+                    help="Optional plot title (overlay and faceted).")
+    ap.add_argument("--formats", default="pdf",
+                    help="Comma-separated image formats to write (e.g., pdf,png,svg).")
+    ap.add_argument("--dpi", type=int, default=150, help="Figure DPI for raster outputs (PNG).")
     ap.add_argument("--xpad", type=float, default=0.5,
                     help="Upper x-axis padding only (default 0.5) so max dashed vlines are visible.")
+    ap.add_argument("--max-cols", type=int, default=3,
+                    help="Max columns for faceted layout.")
+    ap.add_argument("--show-perms", type=int, default=10,
+                    help="Max individual permutation traces to overlay in each facet.")
+    ap.add_argument("--ylim-pad", type=float, default=1.02,
+                    help="Multiply ymax by this factor for headroom on y-axis.")
+
+    # Filtering
+    ap.add_argument("--presence-threshold", type=float, default=0.0,
+                    help="Count threshold > T to consider an ASV present (default 0).")
 
     args = ap.parse_args()
 
     counts, meta = read_inputs(args.counts, args.meta, args.sample_id_col, args.group_col)
-    all_groups_order = resolve_group_order(meta[args.group_col], args.group_order)
 
+    # Presence/absence threshold
+    if args.presence_threshold > 0:
+        counts = (counts > args.presence_threshold).astype(int)
+    else:
+        # keep numeric and treat >0 as present in core function
+        counts = counts.apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    all_groups_order = resolve_group_order(meta[args.group_col], args.group_order)
     curves, groups_order = build_group_curves(
         counts, meta,
         sample_id_col=args.sample_id_col,
@@ -346,14 +386,20 @@ def main():
     user_map = parse_group_colors(args.group_colors)
     colors = color_map_for_groups(groups_order, palette_name=args.palette, user_map=user_map)
 
-    overlay_png = f"{args.out_prefix}_overlay.pdf"
-    faceted_png = f"{args.out_prefix}_faceted.pdf"
-    plot_overlay(curves, colors, args.group_col, overlay_png, xpad=args.xpad, groups_order=groups_order)
-    plot_faceted(curves, colors, args.group_col, faceted_png, xpad=args.xpad, groups_order=groups_order)
+    formats = [f.strip().lstrip(".").lower() for f in args.formats.split(",") if f.strip()]
+    out_base = args.out_prefix
 
-    # Write per-group summary stats
-    out_dir = Path(f"{args.out_prefix}_stats")
+    # Figures
+    plot_overlay(curves, colors, args.group_col, out_base, xpad=args.xpad,
+                 groups_order=groups_order, title=args.title, formats=formats, dpi=args.dpi, ylim_pad=args.ylim_pad)
+    plot_faceted(curves, colors, args.group_col, out_base, xpad=args.xpad, groups_order=groups_order,
+                 title=args.title, formats=formats, dpi=args.dpi, max_cols=args.max_cols,
+                 show_perms=args.show_perms, ylim_pad=args.ylim_pad)
+
+    # Write per-group summary stats + combined summary
+    out_dir = Path(f"{out_base}_stats")
     out_dir.mkdir(exist_ok=True)
+    summary_rows = []
     for g in groups_order:
         curv = curves[g]
         df = pd.DataFrame({
@@ -365,7 +411,18 @@ def main():
         safe_g = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(g))
         df.to_csv(out_dir / f"{safe_g}_collector_stats.tsv", sep="\t", index=False)
 
-    # Optional: print a small summary
+        # one-line summary per group (final step)
+        summary_rows.append({
+            "group": g,
+            "n_samples": int(curv["n_samples"]),
+            "mean_asvs_final": float(curv["mean"][-1]),
+            "lo_2p5_final": float(curv["lo"][-1]),
+            "hi_97p5_final": float(curv["hi"][-1]),
+        })
+
+    pd.DataFrame(summary_rows).to_csv(f"{out_base}_summary.tsv", sep="\t", index=False)
+
+    # Optional: console summary
     for g in groups_order:
         curv = curves[g]
         print(f"[{args.group_col}={g}] samples={curv['n_samples']} "
