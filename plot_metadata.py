@@ -166,7 +166,7 @@ def read_taxonomy_table(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', header=0)
     if 'Feature ID' not in df or 'Taxon' not in df:
         raise ValueError(f"{path} must have columns 'Feature ID' and 'Taxon'")
-    df['Feature ID'] = df['Feature ID'].astype(str).str.split(';', 1).str[0]
+    df['Feature ID'] = df['Feature ID'].astype(str).str.partition(';')[0]
     return df.set_index('Feature ID')
 
 
@@ -437,7 +437,7 @@ def compute_and_save_block(
     final_mat = final_mat[[c for c in final_mat.columns if c in kept_samples]].fillna(0).astype(int)
 
     # Write outputs
-    save_df(asv_meta, out_root / f"ASV_meta_{mode_name}.tsv")
+    save_df(corr_meta, out_root / f"ASV_meta_{mode_name}.tsv")
     save_mat(final_mat, asv_out_root / f"ASV_final.{mode_name}.tsv")
     save_df(metastat, out_root / f"master_table_{mode_name}.tsv")
     save_df(meta, out_root / f"metadata_updated_{mode_name}.tsv")
@@ -455,7 +455,7 @@ def compute_and_save_block(
     shared_pct = presence_shared_percent(filtered)
     clustermap_shared_percent(
         shared_pct,
-        col_colors_df=col_colors_df,
+        col_legend_df=col_colors_df,
         row_legend_df=row_colors_df,
         out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
         out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.pdf",

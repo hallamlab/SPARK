@@ -97,7 +97,7 @@ done
 # Define directories
 INPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/fastq_combined"
 REFDB_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/ref_db"
-OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_combined_output"
+OUTPUT_DIR="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/spark_refactored_output"
 QC_DIR="${OUTPUT_DIR}/fastp"
 MERGED_DIR="${OUTPUT_DIR}/merged"
 FILTERED_DIR="${OUTPUT_DIR}/filtered"
@@ -135,8 +135,8 @@ fastp_qc() {
             -I ${INPUT_DIR}/${SAMPLE}_R2.fastq.gz \
             -o ${QC_DIR}/${SAMPLE}_R1.fastq.gz \
             -O ${QC_DIR}/${SAMPLE}_R2.fastq.gz \
-            -f 19 -t 80 \
-            -F 20 -T 80 \
+            -f 19 -t 20 \
+            -F 20 -T 20 \
             -j ${QC_DIR}/${SAMPLE}_report.json \
             -h ${QC_DIR}/${SAMPLE}_report.html \
             -w ${THREADS}

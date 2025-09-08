@@ -4,25 +4,41 @@ suppressPackageStartupMessages({
   library(tidyverse)
   library(readr)
   library(indicspecies)
-  # 'how()' comes from {permute}; indicspecies imports it but load explicitly for clarity
-  library(permute)
+  library(permute)  # for how()
 })
 
 # ---------- CLI ----------
-opt <- OptionParser(
-  usage = "%prog --asv ASV_final.micro.tsv --meta metadata.tsv --sample-col sample --group-cols status,type_group --outdir out_dir",
-  option_list = list(
-    make_option("--asv",        type = "character", help = "ASV count table (rows=ASVs, cols=samples). TSV."),
-    make_option("--meta",       type = "character", help = "Sample metadata TSV."),
-    make_option("--sample-col", type = "character", default = "sample", help = "Column in metadata matching sample IDs (default: %default)."),
-    make_option("--group-cols", type = "character", default = "status,type_group", help = "Comma-separated grouping columns to analyze."),
-    make_option("--perms",      type = "integer",   default = 999, help = "Permutations for multipatt (default: %default)."),
-    make_option("--min-n",      type = "integer",   default = 2, help = "Minimum samples per group to keep (default: %default)."),
-    make_option("--outdir",     type = "character", required = TRUE, help = "Output directory.")
-  )
-) |> parse_args()
+option_list <- list(
+  make_option("--asv",        type="character", help="ASV count table (rows=ASVs, cols=samples). TSV."),
+  make_option("--meta",       type="character", help="Sample metadata TSV."),
+  make_option("--sample-col", type="character", default="sample",
+              help="Column in metadata matching sample IDs [default: %default]"),
+  make_option("--group-cols", type="character", default="status,type_group",
+              help="Comma-separated grouping columns to analyze [default: %default]"),
+  make_option("--perms",      type="integer",   default=999,
+              help="Permutations for multipatt [default: %default]"),
+  make_option("--min-n",      type="integer",   default=2,
+              help="Minimum samples per group to keep [default: %default]"),
+  make_option("--outdir",     type="character",
+              help="Output directory (will create '<outdir>/indicspecies').")
+)
 
-stopifnot(!is.null(opt$asv), !is.null(opt$meta))
+parser <- OptionParser(
+  usage = "%prog --asv ASV_final.micro.tsv --meta metadata.tsv --sample-col sample --group-cols status,type_group --outdir out_dir",
+  description = "Run indicspecies multipatt on ASV + metadata tables.",
+  option_list = option_list
+)
+
+opt <- parse_args(parser)
+
+# Enforce required options
+required <- c("asv", "meta", "outdir")
+missing <- required[sapply(required, function(x) is.null(opt[[x]]))]
+if (length(missing)) {
+  cat("Missing required option(s):", paste(missing, collapse=", "), "\n\n", file=stderr())
+  print_help(parser)
+  quit(status=2)
+}
 
 outdir <- file.path(opt$outdir, "indicspecies")
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)

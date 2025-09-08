@@ -11,34 +11,34 @@ suppressPackageStartupMessages({
 })
 
 # ----------------------------- CLI -------------------------------------------
-opt <- list(
+opt_list <- list(
   make_option("--counts", type="character", default=NULL,
-              help="Path to ASV table (TSV). Rows=ASVs, Cols=samples by default."),
+              help="Path to ASV table (TSV). First column = ASV IDs. Other columns = samples."),
   make_option("--transpose", type="logical", default=TRUE,
-              help="Transpose counts so rows=samples, cols=ASVs [default %default]."),
-  make_option("--strip-suffix-regex", type="character", default=NULL,
-              help="Optional regex to strip from sample column names before transpose (e.g. '_[^_]+$')."),
+              help="Transpose so rows=samples, cols=ASVs [default %default]."),
+  make_option("--strip-suffix-regex", type="character", default=NULL, dest="strip_suffix_regex",
+              help="Regex to strip from sample column names before transpose (e.g. '_[^_]+$')."),
   make_option("--outdir", type="character", default=NULL,
-              help="Output directory for all results (required)."),
+              help="Output directory (required)."),
   make_option("--prefix", type="character", default="spieceasi",
               help="Filename prefix for outputs [default %default]."),
 
-  # Filtering gates (set to 0 to disable)
-  make_option("--min-rel-abund", type="double", default=0.0,
+  # Filtering
+  make_option("--min-rel-abund", type="double", default=0.0, dest="min_rel_abund",
               help="Keep ASVs reaching at least this relative abundance in >=1 sample [default %default]."),
-  make_option("--min-prevalence", type="double", default=0.0,
+  make_option("--min-prevalence", type="double", default=0.0, dest="min_prevalence",
               help="Keep ASVs present in at least this fraction of samples [0-1] [default %default]."),
-  make_option("--remove-zero-var", type="logical", default=TRUE,
+  make_option("--remove-zero-var", type="logical", default=TRUE, dest="remove_zero_var",
               help="Drop ASVs with zero variance after filtering [default %default]."),
 
   # SpiecEasi params
   make_option("--method", type="character", default="glasso",
               help="SpiecEasi method: glasso | mb [default %default]."),
-  make_option("--lambda-min-ratio", type="double", default=1e-2,
+  make_option("--lambda-min-ratio", type="double", default=1e-2, dest="lambda_min_ratio",
               help="lambda.min.ratio [default %default]."),
   make_option("--nlambda", type="integer", default=20,
               help="Number of lambda values [default %default]."),
-  make_option("--rep-num", type="integer", default=50,
+  make_option("--rep-num", type="integer", default=50, dest="rep_num",
               help="pulsar rep.num [default %default]."),
   make_option("--thresh", type="double", default=0.1,
               help="pulsar selection threshold [default %default]."),
@@ -48,73 +48,65 @@ opt <- list(
               help="Random seed [default %default]."),
 
   # Graph construction
-  make_option("--edge-threshold", type="double", default=0.1,
+  make_option("--edge-threshold", type="double", default=0.1, dest="edge_threshold",
               help="Absolute partial correlation cutoff for thresholded graphs [default %default]."),
-  make_option("--keep-negative", type="logical", default=TRUE,
+  make_option("--keep-negative", type="logical", default=TRUE, dest="keep_negative",
               help="Also write a signed (pos/neg) thresholded network [default %default]."),
 
   # Layout + viz sizes
-  make_option("--layout-iters", type="integer", default=1000,
+  make_option("--layout-iters", type="integer", default=1000, dest="layout_iters",
               help="Fruchterman–Reingold iterations [default %default]."),
-  make_option("--pdf-width", type="double", default=10,
+  make_option("--pdf-width", type="double", default=10, dest="pdf_width",
               help="PDF width (inches) [default %default]."),
-  make_option("--pdf-height", type="double", default=10,
+  make_option("--pdf-height", type="double", default=10, dest="pdf_height",
               help="PDF height (inches) [default %default]."),
-  make_option("--vsize-offset", type="double", default=6,
-              help="Vertex size offset added to clr means [default %default]."),
-  make_option("--vsize-scale", type="double", default=0.5,
+  make_option("--vsize-offset", type="double", default=6, dest="vsize_offset",
+              help="Vertex size offset added to CLR means [default %default]."),
+  make_option("--vsize-scale", type="double", default=0.5, dest="vsize_scale",
               help="Vertex size scaling factor [default %default]."),
 
   # Caching / recompute
-  make_option("--force-filter", type="logical", default=FALSE,
+  make_option("--force-filter", type="logical", default=FALSE, dest="force_filter",
               help="Recompute filtered counts even if cache exists [default %default]."),
-  make_option("--force-spieceasi", type="logical", default=FALSE,
+  make_option("--force-spieceasi", type="logical", default=FALSE, dest="force_spieceasi",
               help="Recompute SpiecEasi even if cache exists [default %default]."),
-  make_option("--force-graphs", type="logical", default=FALSE,
+  make_option("--force-graphs", type="logical", default=FALSE, dest="force_graphs",
               help="Recompute igraph + layouts even if cache exists [default %default].")
 )
 
-opt <- parse_args(OptionParser(option_list = opt))
+usage <- "%prog --counts ASV_final.micro.tsv --outdir out_dir [--transpose TRUE] [--min-rel-abund 0.0005] [--min-prevalence 0.01]"
+opt <- parse_args(OptionParser(option_list = opt_list, usage = usage))
 
 if (is.null(opt$counts) || is.null(opt$outdir)) {
-  stop("Please provide --counts and --outdir", call.=FALSE)
+  stop("Please provide --counts and --outdir", call. = FALSE)
 }
-
 dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 
 # ----------------------------- Helpers ---------------------------------------
 msg <- function(...) cat(sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), sprintf(...)))
-
 load_if_exists <- function(path) if (file.exists(path)) readRDS(path) else FALSE
 save_csv <- function(x, path) { write.csv(x, path, row.names = FALSE); msg("Wrote %s", path) }
 
-safe_clr <- function(x, margin=1) {
-  # SpiecEasi::clr assumes compositional data; add small pseudocount if zeros
+safe_clr <- function(x, margin = 1) {
   x <- as.matrix(x)
-  if (any(x == 0)) x <- x + 1
+  if (any(x == 0, na.rm = TRUE)) x <- x + 1
   SpiecEasi::clr(x, margin)
 }
 
 get_precision_at_opt <- function(se) {
-  # Attempt to extract precision matrix at selected lambda
   if (!is.null(se$est$icov)) {
-    idx <- tryCatch(se$select$stars$opt.index, error=function(e) NA_integer_)
-    if (is.na(idx) || idx < 1 || idx > length(se$est$icov)) {
-      # fallback to last
-      idx <- length(se$est$icov)
-    }
+    idx <- tryCatch(se$select$stars$opt.index, error = function(e) NA_integer_)
+    if (is.na(idx) || idx < 1 || idx > length(se$est$icov)) idx <- length(se$est$icov)
     return(as.matrix(se$est$icov[[idx]]))
-  }
-  # Fallback: reconstruct from beta (MB) if available
-  if (!is.null(se$est$path)) {
-    stop("Precision matrix not found in se$est$icov; implement MB inverse-cov reconstruction if needed.")
   }
   stop("Could not find precision (icov) in SpiecEasi object.")
 }
 
 precision_to_partial_cor <- function(Theta) {
-  d <- diag(1 / sqrt(diag(Theta)))
-  P <- - d %*% Theta %*% d
+  d <- diag(Theta)
+  d[d == 0 | is.na(d) | is.infinite(d)] <- 1e-8
+  D <- diag(1 / sqrt(d))
+  P <- - D %*% Theta %*% D
   diag(P) <- 0
   P
 }
@@ -127,49 +119,49 @@ adj_from_partial <- function(P, threshold, positive_only = TRUE) {
   } else {
     A[abs(A) < threshold] <- 0
   }
-  # force symmetry
-  A <- (A + t(A))/2
+  A <- (A + t(A)) / 2
   diag(A) <- 0
   A
 }
 
-# ----------------------------- I/O & Filtering -------------------------------
+# ----------------------------- I/O & filtering -------------------------------
 counts_path <- normalizePath(opt$counts)
 prefix <- file.path(normalizePath(opt$outdir), opt$prefix)
 
-cache_counts   <- paste0(prefix, "_count_data_filtered.rds")
-cache_spiece   <- paste0(prefix, "_spiec_easi.rds")
-cache_graph    <- paste0(prefix, "_igraph_main.rds")
-cache_layout   <- paste0(prefix, "_layout_nicely.rds")
+cache_counts <- paste0(prefix, "_count_data_filtered.rds")
+cache_spiece <- paste0(prefix, "_spiec_easi.rds")
+cache_graph  <- paste0(prefix, "_igraph_main.rds")
+cache_layout <- paste0(prefix, "_layout_nicely.rds")
 
-# Load counts
 msg("Reading counts from: %s", counts_path)
-raw <- suppressMessages(readr::read_tsv(counts_path, col_types = cols(.default = col_double(), .name_repair="minimal")))
+raw <- suppressMessages(
+  readr::read_tsv(counts_path, show_col_types = FALSE)
+)
+raw <- tibble::as_tibble(raw, .name_repair = "minimal")
 
-if (!("X1" %in% names(raw)) && !(names(raw)[1] == "")) {
-  # readr won't set rownames; first column is IDs
-  ids <- colnames(raw)[1]
-} else {
-  ids <- "X1"
-}
+# First column = ASV IDs, rest must be numeric
+id_col <- names(raw)[1]
+asv_ids <- raw[[id_col]]
+mat_df  <- dplyr::select(raw, -all_of(id_col))
 
-asv_ids <- raw[[1]]
-mat <- as.matrix(raw[,-1, drop=FALSE])
-colnames(mat) <- colnames(raw)[-1]
+# Force numeric (coerce if needed)
+mat <- as.matrix(lapply(mat_df, function(x) as.numeric(as.character(x)))) |> do.call(what = cbind)
+colnames(mat) <- colnames(mat_df)
 rownames(mat) <- asv_ids
+storage.mode(mat) <- "double"
 
+# Optional sample name cleanup
 if (!is.null(opt$strip_suffix_regex)) {
-  colnames(mat) <- sub(opt$strip_suffix_regex, "", colnames(mat), perl=TRUE)
+  colnames(mat) <- sub(opt$strip_suffix_regex, "", colnames(mat), perl = TRUE)
 }
 
+# SpiecEasi expects rows = samples, cols = features (ASVs)
 if (isTRUE(opt$transpose)) {
   mat <- t(mat)
 }
-# Now rows = samples, cols = ASVs
-storage.mode(mat) <- "double"
 
 # Filter (cached)
-count_data_filtered <- if (!opt$force_filter) load_if_exists(cache_counts) else FALSE
+count_data_filtered <- if (isFALSE(opt$force_filter)) load_if_exists(cache_counts) else FALSE
 
 if (identical(count_data_filtered, FALSE)) {
   msg("Filtering ASVs ...")
@@ -179,20 +171,20 @@ if (identical(count_data_filtered, FALSE)) {
     rs <- rowSums(mat)
     rs[rs == 0] <- 1
     rel <- mat / rs
-    max_ra <- apply(rel, 2, max)
+    max_ra <- apply(rel, 2, max, na.rm = TRUE)
     keep <- keep & (max_ra >= opt$min_rel_abund)
   }
 
   if (opt$min_prevalence > 0) {
-    prev <- colSums(mat > 0) / nrow(mat)
+    prev <- colSums(mat > 0, na.rm = TRUE) / nrow(mat)
     keep <- keep & (prev >= opt$min_prevalence)
   }
 
-  mat_f <- mat[, keep, drop=FALSE]
+  mat_f <- mat[, keep, drop = FALSE]
 
   if (isTRUE(opt$remove_zero_var) && ncol(mat_f) > 0) {
-    v <- apply(mat_f, 2, var)
-    mat_f <- mat_f[, v > 0, drop=FALSE]
+    v <- apply(mat_f, 2, var, na.rm = TRUE)
+    mat_f <- mat_f[, v > 0, drop = FALSE]
   }
 
   count_data_filtered <- mat_f
@@ -205,7 +197,7 @@ if (identical(count_data_filtered, FALSE)) {
 stopifnot(nrow(count_data_filtered) > 1, ncol(count_data_filtered) > 1)
 
 # ----------------------------- SpiecEasi -------------------------------------
-se_obj <- if (!opt$force_spieceasi) load_if_exists(cache_spiece) else FALSE
+se_obj <- if (isFALSE(opt$force_spieceasi)) load_if_exists(cache_spiece) else FALSE
 
 if (identical(se_obj, FALSE)) {
   set.seed(opt$seed)
@@ -227,71 +219,109 @@ if (identical(se_obj, FALSE)) {
 
 msg("Samples: %d, ASVs: %d", nrow(count_data_filtered), ncol(count_data_filtered))
 
-# ---------------------- Precision / Partial Cor / STARS ----------------------
+# -------- Precision / Partial Cor / STARS (export CSVs for inspection) -------
 msg("Extracting precision and partial correlations ...")
 Theta <- get_precision_at_opt(se_obj)
 stopifnot(nrow(Theta) == ncol(count_data_filtered), ncol(Theta) == ncol(count_data_filtered))
 
+# Ensure dimnames exist on Theta (SpiecEasi sometimes omits them)
+asv_names <- colnames(count_data_filtered)
+if (is.null(rownames(Theta)) || is.null(colnames(Theta))) {
+  rownames(Theta) <- asv_names
+  colnames(Theta) <- asv_names
+}
+
 pcor <- precision_to_partial_cor(Theta)
-colnames(pcor) <- colnames(count_data_filtered)
-rownames(pcor) <- colnames(count_data_filtered)
+# Set names on pcor too (safe if already set)
+rownames(pcor) <- asv_names
+colnames(pcor) <- asv_names
 
 # Export matrices
-save_csv(tibble(ASV_ID = rownames(Theta)) %>% bind_cols(as.data.frame(Theta)), paste0(prefix, "_precision_matrix.csv"))
-save_csv(tibble(ASV_ID = rownames(pcor))  %>% bind_cols(as.data.frame(pcor)),  paste0(prefix, "_partial_correlation_matrix.csv"))
+save_csv(tibble(ASV_ID = rownames(Theta)) %>% bind_cols(as.data.frame(Theta)),
+         paste0(prefix, "_precision_matrix.csv"))
+save_csv(tibble(ASV_ID = rownames(pcor)) %>% bind_cols(as.data.frame(pcor)),
+         paste0(prefix, "_partial_correlation_matrix.csv"))
 
-# STARS adjacency (binary)
 if (!is.null(se_obj$refit$stars)) {
   adj_bin <- as.matrix(se_obj$refit$stars)
   colnames(adj_bin) <- colnames(count_data_filtered)
   rownames(adj_bin) <- colnames(count_data_filtered)
   save_csv(tibble(ASV_ID = rownames(adj_bin)) %>% bind_cols(as.data.frame(adj_bin)),
            paste0(prefix, "_adj_STARS_matrix.csv"))
-} else {
-  adj_bin <- (abs(pcor) > 0) * 1
 }
 
 # ----------------------------- Graphs + Layouts ------------------------------
-ig_main <- if (!opt$force_graphs) load_if_exists(cache_graph) else FALSE
-am_coord <- if (!opt$force_graphs) load_if_exists(cache_layout) else FALSE
+ig_main  <- if (isFALSE(opt$force_graphs)) load_if_exists(cache_graph)  else FALSE
+am_coord <- if (isFALSE(opt$force_graphs)) load_if_exists(cache_layout) else FALSE
 
 if (identical(ig_main, FALSE) || identical(am_coord, FALSE)) {
   msg("Building graphs ...")
-  # Positive-only thresholded
-  A_pos_thr <- adj_from_partial(pcor, threshold = opt$edge_threshold, positive_only = TRUE)
-  ig_main <- graph_from_adjacency_matrix(A_pos_thr, mode="undirected", weighted=TRUE, diag=FALSE)
 
-  # All positives, no threshold (for reference)
-  A_pos_all <- pcor; A_pos_all[A_pos_all < 0] <- 0; A_pos_all <- (A_pos_all + t(A_pos_all))/2; diag(A_pos_all) <- 0
-  ig_pos_all <- graph_from_adjacency_matrix(A_pos_all, mode="undirected", weighted=TRUE, diag=FALSE)
+  # Thresholded positive-only graph
+  A_pos_thr <- adj_from_partial(pcor, threshold = opt$edge_threshold, positive_only = TRUE)
+  ig_main   <- graph_from_adjacency_matrix(A_pos_thr, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+  # All positive weights (no threshold) for reference
+  A_pos_all <- pcor
+  A_pos_all[A_pos_all < 0] <- 0
+  A_pos_all <- (A_pos_all + t(A_pos_all)) / 2
+  diag(A_pos_all) <- 0
+  ig_pos_all <- graph_from_adjacency_matrix(A_pos_all, mode = "undirected", weighted = TRUE, diag = FALSE)
 
   # Signed thresholded (optional)
+  ig_signed <- NULL
   if (isTRUE(opt$keep_negative)) {
     A_signed_thr <- adj_from_partial(pcor, threshold = opt$edge_threshold, positive_only = FALSE)
-    ig_signed <- graph_from_adjacency_matrix(A_signed_thr, mode="undirected", weighted=TRUE, diag=FALSE)
+    ig_signed <- graph_from_adjacency_matrix(A_signed_thr, mode = "undirected", weighted = TRUE, diag = FALSE)
     E(ig_signed)$color <- ifelse(E(ig_signed)$weight > 0, "red", "blue")
-  } else {
-    ig_signed <- NULL
   }
 
-  # Vertex sizes from CLR means
-  vsize <- rowMeans(safe_clr(count_data_filtered, 1)) + opt$vsize_offset
-  vsize <- vsize * opt$vsize_scale
-  vsize <- as.numeric(vsize)
+  # --- Vertex sizes from CLR means (always per-ASV), robust to orientation ---
+  # Expected: count_data_filtered has rows=samples, cols=ASVs. But we guard anyway.
+  asv_names <- colnames(count_data_filtered)
+  stopifnot(!is.null(asv_names))
+
+  clr_mat <- safe_clr(count_data_filtered, margin = 1)
+  msg("CLR matrix dims: %d x %d (rows x cols)", nrow(clr_mat), ncol(clr_mat))
+  msg("ASV (column) count: %d", length(asv_names))
+
+  # Compute means along the dimension that matches ASVs
+  if (ncol(clr_mat) == length(asv_names)) {
+    vsize_vec <- colMeans(clr_mat, na.rm = TRUE)
+  } else if (nrow(clr_mat) == length(asv_names)) {
+    # Orientation is flipped; take row means instead
+    vsize_vec <- rowMeans(clr_mat, na.rm = TRUE)
+  } else {
+    stop(sprintf("Cannot align CLR matrix (%dx%d) to %d ASVs.",
+                nrow(clr_mat), ncol(clr_mat), length(asv_names)))
+  }
+
+  # Scale/offset and align by vertex name
+  vsize_vec <- (as.numeric(vsize_vec) + opt$vsize_offset) * opt$vsize_scale
+
+  # Ensure graph vertices are named with ASV IDs
+  if (is.null(V(ig_main)$name)) V(ig_main)$name <- asv_names
+
+  # Name the size vector with the ASV IDs it represents
+  names(vsize_vec) <- asv_names
+
+  # Pull sizes in graph vertex order
+  vsize <- vsize_vec[V(ig_main)$name]
+
+  # Final sanity & flooring
+  vsize[!is.finite(vsize)] <- 1
+  vsize <- pmax(vsize, 1)
+
+  msg("Sizes aligned: length(vsize)=%d, vcount=%d, ASVs=%d",
+      length(vsize), vcount(ig_main), length(asv_names))
+  stopifnot(length(vsize) == vcount(ig_main))
 
   # Layouts
   set.seed(opt$seed)
-  layout_nicely_coords <- layout_nicely(ig_main)
-  if (!is.matrix(layout_nicely_coords)) layout_nicely_coords <- matrix(layout_nicely_coords, ncol = 2)
-
-  layout_fr_coords <- layout_with_fr(ig_main, niter = opt$layout_iters)
-  if (!is.matrix(layout_fr_coords)) layout_fr_coords <- matrix(layout_fr_coords, ncol = 2)
-
-  layout_kk_coords <- layout_with_kk(ig_main)
-  if (!is.matrix(layout_kk_coords)) layout_kk_coords <- matrix(layout_kk_coords, ncol = 2)
-
-  layout_drl_coords <- layout_with_drl(ig_main)
-  if (!is.matrix(layout_drl_coords)) layout_drl_coords <- matrix(layout_drl_coords, ncol = 2)
+  layout_nicely_coords <- layout_nicely(ig_main); if (!is.matrix(layout_nicely_coords)) layout_nicely_coords <- matrix(layout_nicely_coords, ncol=2)
+  layout_fr_coords     <- layout_with_fr(ig_main, niter = opt$layout_iters); if (!is.matrix(layout_fr_coords)) layout_fr_coords <- matrix(layout_fr_coords, ncol=2)
+  layout_kk_coords     <- layout_with_kk(ig_main); if (!is.matrix(layout_kk_coords)) layout_kk_coords <- matrix(layout_kk_coords, ncol=2)
+  layout_drl_coords    <- layout_with_drl(ig_main); if (!is.matrix(layout_drl_coords)) layout_drl_coords <- matrix(layout_drl_coords, ncol=2)
 
   # Cache main objects
   saveRDS(ig_main,  cache_graph);  msg("Saved igraph:  %s", cache_graph)
@@ -299,25 +329,21 @@ if (identical(ig_main, FALSE) || identical(am_coord, FALSE)) {
 
   # Multipage PDF of layouts
   pdf(file = paste0(prefix, "_multipage_layouts.pdf"), width = opt$pdf_width, height = opt$pdf_height)
-  plot(ig_main, layout = layout_nicely_coords, vertex.size = vsize, vertex.label = NA,
-       main = "layout_nicely")
-  plot(ig_main, layout = layout_fr_coords, vertex.size = vsize, vertex.label = NA,
-       main = sprintf("Fruchterman-Reingold (niter=%d)", opt$layout_iters))
-  plot(ig_main, layout = layout_kk_coords, vertex.size = vsize, vertex.label = NA,
-       main = "Kamada-Kawai")
-  plot(ig_main, layout = layout_drl_coords, vertex.size = vsize, vertex.label = NA,
-       main = "DRL")
+  plot(ig_main, layout = layout_nicely_coords, vertex.size = vsize, vertex.label = NA, main = "layout_nicely")
+  plot(ig_main, layout = layout_fr_coords,     vertex.size = vsize, vertex.label = NA, main = sprintf("Fruchterman-Reingold (niter=%d)", opt$layout_iters))
+  plot(ig_main, layout = layout_kk_coords,     vertex.size = vsize, vertex.label = NA, main = "Kamada-Kawai")
+  plot(ig_main, layout = layout_drl_coords,    vertex.size = vsize, vertex.label = NA, main = "DRL")
   dev.off()
   msg("Wrote %s_multipage_layouts.pdf", prefix)
 
-  # Write graphs (GraphML + GML)
-  write_graph(ig_main,   file = paste0(prefix, "_network_pos_thr.graphml"), format = "graphml")
-  write_graph(ig_main,   file = paste0(prefix, "_network_pos_thr.gml"),     format = "gml")
-  write_graph(ig_pos_all,file = paste0(prefix, "_network_pos_all.graphml"), format = "graphml")
-  write_graph(ig_pos_all,file = paste0(prefix, "_network_pos_all.gml"),     format = "gml")
+  # Write graphs
+  write_graph(ig_main,    file = paste0(prefix, "_network_pos_thr.graphml"),  format = "graphml")
+  write_graph(ig_main,    file = paste0(prefix, "_network_pos_thr.gml"),      format = "gml")
+  write_graph(ig_pos_all, file = paste0(prefix, "_network_pos_all.graphml"),  format = "graphml")
+  write_graph(ig_pos_all, file = paste0(prefix, "_network_pos_all.gml"),      format = "gml")
   if (!is.null(ig_signed)) {
-    write_graph(ig_signed, file = paste0(prefix, "_network_signed_thr.graphml"), format = "graphml")
-    write_graph(ig_signed, file = paste0(prefix, "_network_signed_thr.gml"),     format = "gml")
+    write_graph(ig_signed,  file = paste0(prefix, "_network_signed_thr.graphml"), format = "graphml")
+    write_graph(ig_signed,  file = paste0(prefix, "_network_signed_thr.gml"),     format = "gml")
   }
 
   # Export weighted adjacency matrices
@@ -329,16 +355,12 @@ if (identical(ig_main, FALSE) || identical(am_coord, FALSE)) {
     save_csv(tibble(ASV_ID = colnames(A_signed_thr)) %>% bind_cols(as.data.frame(A_signed_thr)),
              paste0(prefix, "_adj_weighted_signed_thr.csv"))
   }
-
 } else {
   msg("Loaded igraph + layout from cache.")
 }
 
-# ----------------------------- Edge lists ------------------------------------
-# Ensure names (graph_from_adjacency_matrix uses dimnames when present)
-if (is.null(V(ig_main)$name)) {
-  V(ig_main)$name <- colnames(count_data_filtered)
-}
+# ----------------------------- Edge list -------------------------------------
+if (is.null(V(ig_main)$name)) V(ig_main)$name <- colnames(count_data_filtered)
 
 edges_df <- as_edgelist(ig_main) %>% as.data.frame()
 colnames(edges_df) <- c("Taxon1", "Taxon2")

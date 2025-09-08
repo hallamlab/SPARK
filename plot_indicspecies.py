@@ -95,6 +95,8 @@ def read_taxonomy_table(taxonomy_path: Path) -> pd.DataFrame:
     Expects columns: ASV_ID, Taxon (e.g., 'k__Bacteria; p__Firmicutes; ...').
     """
     tax_df = pd.read_csv(taxonomy_path, sep="\t", header=0)
+    if "Feature ID" in tax_df.columns:
+        tax_df['ASV_ID'] = tax_df['Feature ID'].astype(str).str.partition(';')[0]
     if "ASV_ID" not in tax_df.columns:
         raise ValueError("Taxonomy file must contain column 'ASV_ID'.")
     if "Taxon" not in tax_df.columns:
@@ -290,23 +292,27 @@ def plot_p_vs_stat_no_overlap(
     if style_col is not None:
         cats = dd[style_col].dropna().unique().tolist()
         if marker_dict:
-            markers = {c: marker_dict.get(c, "o") for c in cats}
+            markers = marker_dict
         else:
             default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
             markers = {c: default_markers[i % len(default_markers)] for i, c in enumerate(cats)}
 
     # Legend handles
     color_handles = []
+    '''
     if show_legend and hue_col is not None:
         levels = dd[hue_col].dropna().unique().tolist()
         if type_palette:
             for name in levels:
                 col = type_palette.get(name, "lightgray")
-                color_handles.append(
-                    mlines.Line2D([], [], marker="o", linestyle="None",
-                                  markerfacecolor=col, markeredgecolor="black",
-                                  markeredgewidth=0.5, markersize=8, label=str(name))
-                )
+                '''
+    for name in type_palette:
+        col = type_palette.get(name, "lightgray")
+        color_handles.append(
+        mlines.Line2D([], [], marker="o", linestyle="None",
+                        markerfacecolor=col, markeredgecolor="black",
+                        markeredgewidth=0.5, markersize=8, label=str(name))
+        )
 
     marker_handles = []
     if show_legend and style_col is not None and markers:

@@ -353,7 +353,7 @@ def main():
                     help="Max columns for faceted layout.")
     ap.add_argument("--show-perms", type=int, default=10,
                     help="Max individual permutation traces to overlay in each facet.")
-    ap.add_argument("--ylim-pad", type=float, default=1.02,
+    ap.add_argument("--ylim-pad", type=float, default=1.1,
                     help="Multiply ymax by this factor for headroom on y-axis.")
 
     # Filtering

@@ -196,7 +196,7 @@ def cumulative_microbial_vs_host(master: pd.DataFrame, steps: Sequence[str], hos
             microbial = int(len(master) - non_target)
             rows.append({'Method': step, 'Host': host_incr, 'Microbial': microbial})
     # drop the first host step row (to match original figure)
-    return pd.DataFrame(rows)[[lambda d: d['Method'] != host_first_step]]
+    return pd.DataFrame(rows)[lambda d: d['Method'] != host_first_step]
 
 
 def per_method_counts(master: pd.DataFrame, steps: Sequence[str]) -> pd.DataFrame:

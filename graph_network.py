@@ -24,6 +24,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import seaborn as sns
+import math
+from collections import Counter
 
 # Optional: labels w/ collision-avoidance
 try:
@@ -70,14 +72,69 @@ def ensure_cols(df: pd.DataFrame, cols: Iterable[str], name: str):
         die(f"{name} missing required columns: {missing}")
 
 
-def save_figure(figpath: str):
-    plt.tight_layout()
-    plt.savefig(figpath, bbox_inches='tight')
-    root, ext = os.path.splitext(figpath)
-    if ext.lower() == ".svg":
-        plt.savefig(root + ".pdf", bbox_inches='tight')
-    ok(f"Saved: {figpath}")
+def _safe_float(x, default=0.0):
+    try:
+        if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+            return default
+        return float(x)
+    except Exception:
+        return default
 
+def preflight_node_attr_report(
+    G: nx.Graph,
+    name: str,
+    color_attr: str,
+    size_attr: str = "AxB",
+    palette_values: set | None = None
+) -> None:
+    """Print helpful counts before plotting."""
+    n_nodes = G.number_of_nodes()
+    n_edges = G.number_of_edges()
+    print(f"[check:{name}] nodes={n_nodes} edges={n_edges}")
+
+    if n_nodes == 0:
+        print(f"[check:{name}] graph has no nodes")
+        return
+
+    colors = [G.nodes[n].get(color_attr, None) for n in G.nodes()]
+    sizes  = [G.nodes[n].get(size_attr, None) for n in G.nodes()]
+
+    n_missing_color = sum(c is None for c in colors)
+    n_missing_size  = sum(s is None for s in sizes)
+    n_nonzero_size  = sum(_safe_float(s, 0.0) > 0 for s in sizes)
+
+    # Compact distribution of color values
+    color_counts = Counter(c if c is not None else "<missing>" for c in colors)
+    top_colors = ", ".join([f"{k}:{v}" for k, v in color_counts.most_common(8)])
+    print(f"[check:{name}] color_attr='{color_attr}': missing={n_missing_color}, top={top_colors}")
+
+    if palette_values is not None:
+        n_outside = sum((c not in palette_values) for c in colors if c is not None)
+        print(f"[check:{name}] colors not in palette: {n_outside}")
+
+    # Basic size stats
+    vals = np.array([_safe_float(s, 0.0) for s in sizes], dtype=float)
+    if len(vals):
+        print(f"[check:{name}] size_attr='{size_attr}': >0={n_nonzero_size}, "
+              f"min={vals.min():.3g}, median={np.median(vals):.3g}, max={vals.max():.3g}")
+    else:
+        print(f"[check:{name}] size_attr='{size_attr}': no values found")
+
+def save_figure(figpath: str) -> None:
+    """Safe save; avoid crashing on empty collections."""
+    try:
+        # If nothing was added (no artists), add an invisible dot so renderer has something.
+        ax = plt.gca()
+        if not (ax.collections or ax.patches or ax.lines):
+            ax.plot([0], [0], alpha=0)  # invisible fallback
+        plt.savefig(figpath, bbox_inches='tight')
+        if figpath.endswith(".svg"):
+            plt.savefig(figpath.replace(".svg", ".pdf"), bbox_inches='tight')
+        print(f"[+] Saved: {figpath}")
+    except Exception as e:
+        print(f"[!] save_figure failed for {figpath}: {e}")
+    finally:
+        plt.close()
 
 def split_taxa_string(taxa_str: str, delimiter: str = ';') -> Dict[str, Optional[str]]:
     """Split a SILVA/Greengenes-like lineage into 7 standard levels."""
@@ -133,7 +190,7 @@ def spring_layout_cached(G: nx.Graph, seed: int, scale_xy: float,
 
 def add_node_attrs_from_df(G: nx.Graph, attrs_df: pd.DataFrame, keep_cols: Iterable[str]):
     """Copy selected columns from attrs_df (index must match node IDs) into G."""
-    found = set(G.nodes()).intersection(set(attrs_df.index))
+    found = list(set(G.nodes()).intersection(set(attrs_df.index)))
     if not found:
         print("[WARN] No overlapping node IDs between graph and attribute table.")
         return
@@ -215,19 +272,47 @@ def label_selected(G: nx.Graph, pos: Dict, select_nodes: List[str], text_attr: s
 
 
 # ---------------------------- ISA summaries ----------------------------------
+import pandas as pd
+
+def reshape_indicspecies_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
+    # 1) standardize IDs
+    df = summary_df.rename(columns={'ASV': 'ASV_ID'}).copy()
+
+    # 2) infer group names from the *.B columns
+    b_cols = [c for c in df.columns if c.endswith('.B')]
+    groups = [c[:-2] for c in b_cols]  # strip ".B"
+
+    # 3) build rename map to create A.<group> and B.<group>
+    rename_map = {}
+    # A columns are the same group names w/o ".B"
+    for g in groups:
+        if g in df.columns:
+            rename_map[g] = f"A.{g}"
+        rename_map[f"{g}.B"] = f"B.{g}"
+
+    df = df.rename(columns=rename_map)
+
+    # 4) reshape to long; keep both A and B
+    out = (
+        pd.wide_to_long(
+            df,
+            stubnames=['A', 'B'],
+            i=['ASV_ID', 'index'],
+            j='Group',
+            sep='.',
+            suffix='.+',          # group names can include spaces/plus signs
+        )
+        .reset_index()[['ASV_ID', 'index', 'Group', 'A', 'B']]
+        .sort_values(['ASV_ID', 'index', 'Group'], ignore_index=True)
+    )
+    return out
+
 def long_AB_for_group(summary_df: pd.DataFrame, index_map: Dict[int, str]) -> pd.DataFrame:
     """
     Convert indicspecies *_summary.tsv into long-form with aligned group rows.
     Keeps rows where Group matches the mapped 'index'.
     """
-    df = pd.wide_to_long(
-        summary_df.rename(columns={'ASV': 'ASV_ID'}),
-        stubnames=['A', 'B'],
-        i=['ASV_ID', 'index'],
-        j='Group',
-        sep='.',
-        suffix='.*'
-    ).reset_index()[['ASV_ID', 'index', 'Group', 'A', 'B']]
+    df = reshape_indicspecies_summary(summary_df)
     df['Group_mapped'] = df['index'].map(index_map)
     df = df.loc[df['Group'] == df['Group_mapped']].drop(columns=['Group_mapped'])
     df['AxB'] = (df['A'] * df['B']).fillna(0)
@@ -277,63 +362,167 @@ def plot_abundance(G: nx.Graph, pos: Dict, out_svg: str):
     save_figure(out_svg)
     plt.close()
 
+def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
+    """
+    Robust type-ISA plot:
+    - Defaults missing colors to 'lightgray' and missing AxB to 0
+    - Ensures node list is non-empty
+    - Skips category draws when no nodes in that category
+    """
+    nodes = list(G.nodes())
+    if not nodes:
+        print("[!] plot_type_isa: graph has no nodes; skipping.")
+        return
 
-def plot_type_isa(G: nx.Graph, pos: Dict, out_svg: str, type_palette: Dict[str, str],
-                  isa_scale: float, label: bool = False):
-    plt.figure(figsize=(18, 18))
-    draw_edges_light(G, pos, alpha=1.0)
+    # Build per-node attributes with safe defaults
+    node_colors = []
+    node_sizes  = []
+    for n in nodes:
+        d = G.nodes[n]
+        c = d.get("type_color", "lightgray")
+        # if value is not one of your palette values, fall back to gray
+        if c not in set(type_palette.values()):
+            c = "lightgray"
+        node_colors.append(c)
 
-    # Color is per node 'color' (already mapped); Size is AxB * scale
-    def color_fn(n): return G.nodes[n].get('color', 'lightgray')
-    def size_fn(n): return float(G.nodes[n].get('AxB', 0.0)) * isa_scale
-    def alpha_fn(n): return 0.5 if color_fn(n) == 'lightgray' else 1.0
-    draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=alpha_fn)
+        s = _safe_float(d.get("AxB", 0.0), 0.0) * isa_scale
+        # floor size so matplotlib doesn't choke on all-zeros
+        if not np.isfinite(s) or s <= 0:
+            s = 1.0
+        node_sizes.append(s)
 
-    # legends: type colors + ISA size
-    color_handles = [mpatches.Patch(color=c, label=k) for k, c in type_palette.items()]
-    size_handles = size_legend_handles([0.1, 0.25, 0.5, 0.75, 1.0], "ISA:", isa_scale)
-    plt.legend(handles=color_handles + size_handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Attributes", frameon=False, scatterpoints=1, labelspacing=1.5)
+    fig = plt.figure(figsize=(18, 18))
+    ax = plt.gca()
 
+    # Edges: don't use connectionstyle for LineCollection (silences the warning)
+    nx.draw_networkx_edges(
+        G, pos,
+        edge_color="lightgray", alpha=0.8, ax=ax
+    )
+
+    # Nodes: single call with complete nodelist (never empty)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=nodes,
+        node_color=node_colors,
+        node_size=node_sizes,
+        edgecolors="black", linewidths=0.25, alpha=0.9, ax=ax
+    )
+
+    # Optional labels for non-gray nodes
     if label:
-        to_label = [n for n in G.nodes() if color_fn(n) != 'lightgray']
-        label_selected(G, pos, to_label, text_attr='Taxon')
+        for n in nodes:
+            if G.nodes[n].get("type_color", "lightgray") != "lightgray":
+                x, y = pos[n]
+                ax.text(x, y, G.nodes[n].get("Taxon", n),
+                        fontsize=9, fontweight="bold",
+                        ha="center", va="center")
 
-    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
-    ttl = "SPIEC-EASI Network\nNode color: Sample Type | Node size: Indicator Species Strength"
-    if label: ttl += " (Labeled)"
-    plt.title(ttl)
-    plt.axis('off')
-    save_figure(out_svg)
-    plt.close()
+    # Legend (types) + size legend
+    type_handles = [mpatches.Patch(color=c, label=t) for t, c in type_palette.items()]
+    size_legend_vals = [0.1, 0.25, 0.5, 0.75, 1.0]
+    size_handles = [plt.scatter([], [], s=max(1.0, v*isa_scale),
+                                edgecolors="black", facecolors="gray", alpha=1,
+                                label=f"ISA: {v:g}") for v in size_legend_vals]
 
+    ax.legend(type_handles + size_handles, [h.get_label() for h in type_handles + size_handles],
+              loc="upper left", bbox_to_anchor=(1, 1), frameon=False, title="Node Attributes",
+              scatterpoints=1, labelspacing=1.5)
 
-def plot_type_venn(G: nx.Graph, pos: Dict, out_svg: str, type_palette: Dict[str, str],
-                   isa_scale: float, label: bool = False):
-    plt.figure(figsize=(18, 18))
-    draw_edges_light(G, pos, alpha=1.0)
+    # Keep proportions & avoid autoscaling surprises
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.autoscale(enable=True)
 
-    def color_fn(n): return G.nodes[n].get('venn_color', 'lightgray')
-    def size_fn(n): return float(G.nodes[n].get('AxB', 0.0)) * isa_scale
-    def alpha_fn(n): return 0.5 if color_fn(n) == 'lightgray' else 1.0
-    draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=alpha_fn)
+    if title:
+        ax.set_title(title)
 
-    color_handles = [mpatches.Patch(color=c, label=k) for k, c in type_palette.items()]
-    size_handles = size_legend_handles([0.1, 0.25, 0.5, 0.75, 1.0], "ISA:", isa_scale)
-    plt.legend(handles=color_handles + size_handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Attributes", frameon=False, scatterpoints=1, labelspacing=1.5)
+    ax.axis("off")
+    fig.tight_layout()
+    plt.savefig(out_svg, bbox_inches="tight")
+    # optional PDF sibling
+    if out_svg.endswith(".svg"):
+        plt.savefig(out_svg.replace(".svg", ".pdf"), bbox_inches="tight")
+    plt.close(fig)
 
+def plot_type_venn(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
+    """
+    Robust Venn-colored plot:
+    - Colors from node['venn_color'] (fallback 'lightgray')
+    - Sizes from node['AxB'] * isa_scale (floored to 1)
+    - Always draws a non-empty node list in one call
+    """
+    nodes = list(G.nodes())
+    if not nodes:
+        print("[!] plot_type_venn: graph has no nodes; skipping.")
+        return
+
+    # Preflight report (prints to stdout)
+    preflight_node_attr_report(
+        G, name="type_venn",
+        color_attr="venn_color",
+        size_attr="AxB",
+        palette_values=set(type_palette.values())
+    )
+
+    # Build per-node color/size with safe defaults
+    node_colors, node_sizes = [], []
+    palette_vals = set(type_palette.values())
+    for n in nodes:
+        d = G.nodes[n]
+        c = d.get("venn_color", "lightgray")
+        if c not in palette_vals:
+            c = "lightgray"
+        node_colors.append(c)
+
+        s = _safe_float(d.get("AxB", 0.0), 0.0) * isa_scale
+        if not np.isfinite(s) or s <= 0:
+            s = 1.0
+        node_sizes.append(s)
+
+    fig = plt.figure(figsize=(18, 18))
+    ax = plt.gca()
+
+    # Edges (no connectionstyle for LineCollection)
+    nx.draw_networkx_edges(G, pos, edge_color="lightgray", alpha=0.8, ax=ax)
+
+    # Nodes (single call; never an empty list)
+    nx.draw_networkx_nodes(
+        G, pos,
+        nodelist=nodes,
+        node_color=node_colors,
+        node_size=node_sizes,
+        edgecolors="black", linewidths=0.25, alpha=0.9, ax=ax
+    )
+
+    # Optional labels for colored nodes
     if label:
-        to_label = [n for n in G.nodes() if color_fn(n) != 'lightgray']
-        label_selected(G, pos, to_label, text_attr='Taxon')
+        for n in nodes:
+            if G.nodes[n].get("venn_color", "lightgray") != "lightgray":
+                x, y = pos[n]
+                ax.text(x, y, G.nodes[n].get("Taxon", n),
+                        fontsize=9, fontweight="bold",
+                        ha="center", va="center")
 
-    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
-    ttl = "SPIEC-EASI Network\nNode color: Venn Group | Node size: Indicator Species Strength"
-    if label: ttl += " (Labeled)"
-    plt.title(ttl)
-    plt.axis('off')
+    # Legend (types) + size legend
+    type_handles = [mpatches.Patch(color=c, label=t) for t, c in type_palette.items()]
+    size_vals = [0.1, 0.25, 0.5, 0.75, 1.0]
+    size_handles = [plt.scatter([], [], s=max(1.0, v * isa_scale),
+                                edgecolors="black", facecolors="gray", alpha=1,
+                                label=f"ISA: {v:g}") for v in size_vals]
+
+    ax.legend(type_handles + size_handles,
+              [h.get_label() for h in type_handles + size_handles],
+              loc="upper left", bbox_to_anchor=(1, 1),
+              frameon=False, title="Node Attributes",
+              scatterpoints=1, labelspacing=1.5)
+
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.autoscale(enable=True)
+    if title:
+        ax.set_title(title)
+    ax.axis("off")
+    fig.tight_layout()
     save_figure(out_svg)
-    plt.close()
 
 
 def plot_status_isa(G: nx.Graph, pos: Dict, out_svg: str, status_palette: Dict[str, str],
@@ -341,7 +530,7 @@ def plot_status_isa(G: nx.Graph, pos: Dict, out_svg: str, status_palette: Dict[s
     plt.figure(figsize=(18, 18))
     draw_edges_light(G, pos, alpha=1.0)
 
-    def color_fn(n): return G.nodes[n].get('color', 'lightgray')
+    def color_fn(n): return G.nodes[n].get('status_color', 'lightgray')
     def size_fn(n): return float(G.nodes[n].get('AxB', 0.0)) * isa_scale
     def alpha_fn(n): return 0.5 if color_fn(n) == 'lightgray' else 1.0
     def lw_fn(n): return 1.0 if color_fn(n) == 'white' else 0.25  # thicker edge for Non-Cancer
@@ -483,6 +672,8 @@ def main():
     mean_abund = mean_abund[['ASV_ID', 'mean']]
 
     tax = load_table(taxonomy_path, sep='\t')
+    if "Feature ID" in tax.columns:
+        tax['ASV_ID'] = tax['Feature ID'].astype(str).str.partition(';')[0]
     if 'ASV_ID' not in tax.columns or 'Taxon' not in tax.columns:
         # Handle case where ASV_ID is embedded; keep your original logic
         if 'ASV_ID' in tax.columns:
@@ -512,6 +703,7 @@ def main():
 
     type_sum = load_table(type_summary_path, sep='\t')
     status_sum = load_table(status_summary_path, sep='\t')
+
     ensure_cols(type_sum, ['ASV', 'index'], "type_summary")
     ensure_cols(status_sum, ['ASV', 'index'], "status_summary")
 
@@ -523,9 +715,11 @@ def main():
     nfeat_type = nf.reset_index().merge(
         type_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
+
     # color per type group index
     nfeat_type['type_name'] = nfeat_type['index'].map(type_index)
-    nfeat_type['color'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
+    nfeat_type['type_color'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
+
     # venn color
     venn_map = venn_type_map()
     tmp = nf.reset_index().merge(venn, left_on='Taxon', right_index=True, how='left')
@@ -542,7 +736,7 @@ def main():
         status_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
     nfeat_status['status_name'] = nfeat_status['index'].map(status_index)
-    nfeat_status['color'] = nfeat_status['status_name'].map(status_palette).fillna('lightgray')
+    nfeat_status['status_color'] = nfeat_status['status_name'].map(status_palette).fillna('lightgray')
     # add taxonomy to status table (for consistency)
     nfeat_status = nfeat_status.reset_index().merge(
         tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
@@ -560,7 +754,7 @@ def main():
 
     keep_cols = [
         'Taxon', 'Degree', 'Betweenness', 'Closeness', 'EigenCentral',
-        'A', 'B', 'AxB', 'color', 'venn_color', 'Phylum', 'mean'
+        'A', 'B', 'AxB', 'type_color', 'status_color', 'venn_color', 'Phylum', 'mean'
     ]
 
     # -------------------- Load graphs + positions -----------------------------
@@ -602,6 +796,13 @@ def main():
             "status_isa", "status_isa_labeled",
             "phylum_abund", "phylum_isa"
         }
+
+    # Example for the Venn plot on the thresholded graph
+    preflight_node_attr_report(
+        G_sub, name="pre-venn-sub",
+        color_attr="venn_color", size_attr="AxB",
+        palette_values=set(type_palette.values())
+    )
 
     # Degree (all edges; weighted widths)
     if "degree_all" in modes:

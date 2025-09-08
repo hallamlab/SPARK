@@ -52,6 +52,9 @@ from skbio import DistanceMatrix
 from skbio.stats.distance import permanova
 from itertools import combinations
 from statsmodels.stats.multitest import multipletests
+from statannotations.Annotator import Annotator
+import matplotlib.colors as mcolors
+
 
 # -------------------------- style --------------------------
 mpl.rcParams['pdf.fonttype'] = 42
@@ -182,7 +185,8 @@ def scatter_umap(df: pd.DataFrame,
     sns.scatterplot(
         data=df, x=x, y=y, hue=hue, size=size, style=style,
         palette=palette, sizes=size_range, alpha=0.8,
-        edgecolor=edgecolor, linewidth=0.5, ax=ax
+        edgecolor=edgecolor, linewidth=0.5, ax=ax,
+        hue_order=palette.keys()
     )
     ax.set_title(title)
     ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1), frameon=False)
@@ -252,38 +256,55 @@ def run_one_pass(name: str,
         order = list(df.get("type_group", pd.Series()).dropna().unique())
     type_palette = {k: PALETTE_TYPES.get(k, PALETTE_TYPES.get("Failed-QC", "#999999")) for k in order}
 
-    # ---------- Alpha t-tests ----------
+    # ---------- Alpha t-tests + boxplot with visible alpha ----------
     out_alpha = outdir / ("alpha_ttest.tsv" if name == "micro" else "alpha_ttest_mito.tsv")
-    if "Shannon" in df.columns and "type_group" in df.columns:
+    if {"Shannon", "type_group"} <= set(df.columns):
         ttab = fdr_ttests_by_group(df, "type_group", "Shannon")
         ttab.to_csv(out_alpha, sep="\t", index=False)
 
-        # Boxplot with stars
-        g = sns.catplot(
-            data=df, x="type_group", y="Shannon", hue="type_group",
-            kind="box", order=order, palette=type_palette,
-            saturation=1, boxprops=dict(alpha=.5), height=8, aspect=1.2
+        # single-axis boxplot (no hue), colors contain alpha
+        fig, ax = plt.subplots(figsize=(9, 6))
+        sns.boxplot(
+            data=df, x="type_group", y="Shannon",
+            order=order, palette=type_palette, linewidth=1
         )
-        g.set_xticklabels(rotation=45)
-        g.set_axis_labels("", "Shannon")
-        g.fig.tight_layout()
-        for ext in ("svg", "pdf"):
-            g.fig.savefig(outdir / f"Alpha_type_boxplot_{name}.{ext}")
-        plt.close(g.fig)
+        # also fade lines (whiskers/medians) a bit
+        for line in ax.lines:
+            line.set_alpha(0.6)
 
-        # Faceted by status if present
+        # Add stats
+        pairs = list(combinations(order, 2))
+        annot = Annotator(ax, pairs, data=df, x="type_group", y="Shannon", order=order)
+        annot.configure(test='t-test_ind', text_format='star', loc='inside', verbose=0)
+        annot.apply_and_annotate()
+
+        ax.set_xlabel("")
+        ax.set_ylabel("Shannon")
+        ax.tick_params(axis='x', rotation=45)
+        fig.tight_layout()
+        for ext in ("svg", "pdf"):
+            fig.savefig(outdir / f"Alpha_type_boxplot_{name}.{ext}")
+        plt.close(fig)
+
+        # Faceted by status (boxed with alpha’d palette)
         if "status" in df.columns:
-            g = sns.catplot(
-                data=df, x="status", y="Shannon", hue="status",
-                col="type_group", col_wrap=3, sharey=True, order=["Cancer", "Non-Cancer"],
-                kind="box", palette=PALETTE_STATUS, height=4
+            g = sns.FacetGrid(df, col="type_group", col_wrap=3, sharey=True,
+                            col_order=order, height=4, aspect=1.2)
+            g.map_dataframe(
+                sns.boxplot, x="status", y="Shannon",
+                order=["Non-Cancer", "Cancer"], palette=PALETTE_STATUS, linewidth=1
             )
-            g.set_xticklabels(rotation=45)
-            g.set_axis_labels("", "Shannon")
-            g.fig.tight_layout()
+            for ax in g.axes.flat:
+                for line in ax.lines:
+                    line.set_alpha(0.7)
+                ax.set_xlabel("")
+                ax.set_ylabel("Shannon")
+                ax.tick_params(axis='x', rotation=45)
+
+            g.figure.tight_layout()
             for ext in ("svg", "pdf"):
-                g.fig.savefig(outdir / f"Alpha_status_boxplot_{name}.{ext}")
-            plt.close(g.fig)
+                g.figure.savefig(outdir / f"Alpha_status_boxplot_{name}.{ext}")
+            plt.close(g.figure)
 
     # ---------- PERMANOVA ----------
     if not bray.empty and "type_group" in df.columns:

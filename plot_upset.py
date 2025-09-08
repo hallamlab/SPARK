@@ -10,7 +10,6 @@ Supports:
 - Abundance-weighted UpSet with stacked bars by category
 - Venn plots (3-set via matplotlib-venn; 4–6 sets via `venn` package if available)
 - Presence tables (exclusive membership lists) and exclusive-sum tables
-- Optional "Oral/Lung" composite group and kit-level plots
 
 Examples
 --------
@@ -28,8 +27,7 @@ python asv_overlap.py \
   --three-groups "Oral Rinse,BAL,Lung Brush" \
   --formats png
 
-# Run kit analysis if 'kit' is in metadata
-python asv_overlap.py --data-dir /data/run1 --domain micro --do-kit
+python asv_overlap.py --data-dir /data/run1 --domain micro
 """
 
 from __future__ import annotations
@@ -58,7 +56,7 @@ try:
 except Exception:
     pass
 try:
-    from venn import draw_venn, generate_petal_labels, generate_colors  # 4–6 sets
+    from venn import venn
     _HAVE_VENN = True
 except Exception:
     pass
@@ -156,7 +154,7 @@ class Inputs:
         if domain == "micro":
             self.asv_raw = self.data_dir / subdir / "ASVs" / "ASV_target.micro.tsv"
             self.asv_final = self.data_dir / subdir / "ASVs" / "ASV_final.micro.tsv"
-            self.meta = self.data_dir / subdir / "metadata" / "metadata_updated.tsv"
+            self.meta = self.data_dir / subdir / "metadata" / "metadata_updated_micro.tsv"
             # taxonomy shared across domains by default
             self.tax = taxonomy_path or (self.data_dir / subdir / "metadata" / "taxonomy_updated.tsv")
             self.out_base = self.data_dir / subdir / "metadata"
@@ -191,7 +189,7 @@ def read_taxonomy(path: Path) -> pd.DataFrame:
         tx["ASV_ID"] = tx["ASV_ID"].astype(str).str.split(';', 1).str[0]
         tx = tx.set_index("ASV_ID")
     elif "Feature ID" in tx.columns:
-        tx["Feature ID"] = tx["Feature ID"].astype(str).str.split(';', 1).str[0]
+        tx['Feature ID'] = tx['Feature ID'].astype(str).str.partition(';')[0]
         tx = tx.set_index("Feature ID")
     else:
         raise ValueError("taxonomy file must have ASV_ID or Feature ID column")
@@ -259,7 +257,8 @@ def plot_upset_unique(
     out_base: Path,
     formats: Sequence[str]
 ) -> None:
-    data = build_upset_unique(group_sets)
+    rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
+    data = build_upset_unique(rev_grp_sets)
     upset = UpSet(
         data,
         subset_size='count',
@@ -289,9 +288,18 @@ def plot_upset_weighted(
     out_base: Path,
     formats: Sequence[str]
 ) -> None:
-    df = build_upset_weighted_rows(group_sets, per_group_values, group_order)
+    rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
+    df = build_upset_weighted_rows(rev_grp_sets, per_group_values, group_order)
+    contents = {c: set(df.loc[df[c].astype(bool), 'ASV_ID']) for c in group_order[::-1]}
+    weights = df.groupby(['ASV_ID', 'group'])['count'].sum().reset_index().set_index('ASV_ID')
+    # ★ Force custom stacking order here
+    weights['group'] = pd.Categorical(weights['group'],
+                                      categories=list(group_order),
+                                      ordered=True)
+
+    ser = from_contents(contents, data=weights)
     upset = UpSet(
-        df, sum_over='count', subset_size='sum',
+        ser, sum_over='count', subset_size='sum',
         element_size=None, show_counts=True,
         sort_categories_by='input', min_subset_size=0,
         intersection_plot_elements=0
@@ -366,28 +374,29 @@ def plot_venn(
         return
 
     if 4 <= len(names) <= 6 and _HAVE_VENN:
-        # use 'venn' package
-        fig = plt.figure(figsize=(6, 6))
-        if weighted_labels is None:
-            # unweighted labels = cardinalities
-            from venn import venn as venn_func  # convenience wrapper
-            venn_func({n: s for n, s in zip(names, sets)},
-                      cmap=[colors[n] for n in names], fontsize=8, alpha=0.45)
+        # Make sure each entry is a Python set
+        labels2sets = {n: set(s) for n, s in zip(names, sets)}
+
+        # Optional: bail if everything is empty to avoid blank plots
+        if not any(len(s) for s in labels2sets.values()):
+            print("All Venn sets are empty; skipping Venn plot.")
         else:
-            # weighted: use draw_venn with petal_labels
-            petal = generate_petal_labels([group_sets[n] for n in names], fmt="{size}")
-            # Map 'binary' keys like '10100' to human-readable names
-            def bin_to_tuple(b: str) -> Tuple[str, ...]:
-                return tuple(n for n, ch in zip(names, b) if ch == '1')
-            # create label dict in binary-key space
-            lab = {k: weighted_labels.get(tuple(sorted(bin_to_tuple(k))), 0.0) for k in petal}
-            draw_venn(petal_labels=lab,
-                      dataset_labels=names,
-                      colors=generate_colors(len(names), cmap="viridis", alpha=0.45),
-                      figsize=(6, 6), fontsize=10, legend_loc="upper right")
-        plt.title(title)
-        savefig_multi(fig, out_base, "venn", formats)
-        return
+            fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
+
+            # Draw into the Axes we just created
+            ax = venn(
+                labels2sets,
+                ax=ax,
+                cmap=[colors[n] for n in names],  # works with the `venn` package
+                fontsize=8,
+                alpha=0.45,
+            )
+            ax.set_title(title)
+
+            savefig_multi(fig, out_base, "venn", formats)
+            plt.close(fig)
+            return
+
 
     # Fallback: skip venn if no backend
     print(f"[WARN] Venn plotting not available for {len(names)} sets (matplotlib-venn or venn not installed). Skipping.")
@@ -424,7 +433,6 @@ def run_domain(
     five_groups: Sequence[str],
     three_groups: Sequence[str],
     do_composite_oral_lung: bool,
-    do_kit: bool,
     formats: Sequence[str],
     palette_5: Mapping[str, str],
     palette_3: Mapping[str, str],
@@ -532,28 +540,6 @@ def run_domain(
         else:
             print(f"[{inp.domain}] Skipping composite suite (need ≥2 present groups).")
 
-    # ---------------- Kit analysis (final) -----------------------------------
-    if do_kit and ("kit" in fin_tx.columns):
-        kit_palette = {'HostZERO-DEP': 'black', 'HostZERO-NODEP': 'gray', 'SPARK-ZYMO': 'skyblue'}
-        kits = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
-        kit_present = [k for k in kits if k in set(fin_tx['kit'].unique())]
-        kit_sets = {k: set(fin_tx.loc[fin_tx['kit'] == k, 'ASV_ID']) for k in kit_present}
-        if len(kit_sets) >= 2:
-            base = inp.out_base / f"Kits_{inp.domain}"
-            plot_upset_unique(kit_sets, {k: kit_palette[k] for k in kit_present},
-                              "ASV Membership by Kit", base, formats)
-            # weighted by per-(kit, ASV) totals (final)
-            kit_totals = fin_tx.groupby(["kit", "ASV_ID"])["count"].sum().to_dict()
-            plot_upset_weighted(kit_sets, kit_totals, kit_present,
-                                {k: kit_palette[k] for k in kit_present},
-                                "ASV Abundance by Kit", base, formats)
-            plot_venn(kit_sets, {k: kit_palette[k] for k in kit_present},
-                      "Venn: Kits", base, formats)
-            write_presence_and_sums(kit_sets, fin_asv_total, base, "Kits")
-        else:
-            print(f"[{inp.domain}] Skipping kit suite (need ≥2 present kits).")
-
-
 # ---------- CLI ----------
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="ASV overlap (UpSet & Venn) plotter")
@@ -571,7 +557,6 @@ def parse_args() -> argparse.Namespace:
                     help="Comma list for the 3-group suite (final ASVs)")
     ap.add_argument("--do-composite-oral-lung", action="store_true",
                     help="Also make Skin vs Scope vs Oral/Lung composite (raw)")
-    ap.add_argument("--do-kit", action="store_true", help="Also make kit UpSet/Venn from final ASVs")
     # Colors (defaults match your originals)
     ap.add_argument("--color-skin", default="#CC79A7")
     ap.add_argument("--color-scope", default="#E69F00")
@@ -612,7 +597,6 @@ def main() -> None:
             five_groups=five_groups,
             three_groups=three_groups,
             do_composite_oral_lung=args.do_composite_oral_lung,
-            do_kit=args.do_kit,
             formats=formats,
             palette_5=palette_5,
             palette_3=palette_3,

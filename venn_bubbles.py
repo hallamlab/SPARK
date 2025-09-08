@@ -6,9 +6,9 @@ Build per-intersection genus-level bubble plots from ASV presence tables.
 Inputs
 ------
 - ASV_meta.tsv: long table with columns including:
-  ASV_ID, type_group, kit (optional), Family, Genus, corr_count (or count)
+  ASV_ID, type_group, Family, Genus, corr_count (or count)
 - Venn presence table(s): rows: grouping, ASV_ID
-  e.g. Three_types_venn_presence_table.tsv (and optionally venn3_presence_table_kit.tsv)
+  e.g. Three_types_venn_presence_table.tsv
 
 Outputs
 -------
@@ -48,11 +48,6 @@ THREE_PALETTE_DEFAULT = {
     'Lung Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
-}
-KIT_PALETTE_DEFAULT = {
-    'HostZERO-DEP':   'black',
-    'HostZERO-NODEP': 'gray',
-    'SPARK-ZYMO':     'skyblue',
 }
 
 # ---------- Helpers ----------
@@ -163,12 +158,8 @@ def parse_args() -> argparse.Namespace:
                     help="Path to ASV_meta.tsv (default: <data-dir>/<subdir>/metadata/ASV_meta.tsv)")
     ap.add_argument("--presence", default=None,
                     help="Three-types presence TSV (default: metadata/Three_types_venn_presence_table.tsv)")
-    ap.add_argument("--kit-presence", default=None,
-                    help="Kit presence TSV (default: metadata/venn3_presence_table_kit.tsv if exists)")
     ap.add_argument("--type-order", default="Oral Rinse,BAL,Lung Brush",
                     help="Comma list order for type_group axis")
-    ap.add_argument("--kit-order", default="HostZERO-DEP,HostZERO-NODEP,SPARK-ZYMO",
-                    help="Comma list order for kit axis")
     ap.add_argument("--formats", default="svg,pdf",
                     help="Comma-separated image formats (svg,pdf,png)")
     return ap.parse_args()
@@ -183,12 +174,8 @@ def main():
 
     asv_meta_path = Path(args.asv_meta) if args.asv_meta else (meta_dir / "ASV_meta.tsv")
     presence_path = Path(args.presence) if args.presence else (meta_dir / "Three_types_venn_presence_table.tsv")
-    kit_presence_path = (Path(args.kit_presence)
-                         if args.kit_presence
-                         else (meta_dir / "venn3_presence_table_kit.tsv"))
     formats = [f.strip().lstrip(".") for f in args.formats.split(",") if f.strip()]
     type_order = [t.strip() for t in args.type_order.split(",") if t.strip()]
-    kit_order  = [t.strip() for t in args.kit_order.split(",") if t.strip()]
 
     # Load ASV meta (single source for both modes)
     asv_meta_df = load_asv_meta(asv_meta_path)
@@ -204,7 +191,7 @@ def main():
             palette=TYPE_PALETTE_DEFAULT,
             out_dir=meta_dir,
             out_prefix=out_prefix,
-            formats=formsats := formats
+            formats=formats
         )
         if not plotted_df.empty:
             plotted_df.to_csv(meta_dir / f"{out_prefix}_presence_tax.tsv", sep="\t", index=False)
@@ -213,30 +200,6 @@ def main():
             print("[WARN] No rows to plot for three-types presence table.")
     else:
         print(f"[WARN] Presence table not found: {presence_path}")
-
-    # ----- Kit mode (optional) -----
-    if kit_presence_path.exists() and "kit" in asv_meta_df.columns:
-        pres_df = load_presence_table(kit_presence_path)
-        out_prefix = "venn3_presence_table_kit"
-        plotted_df = bubble_each_intersection(
-            pres_df, asv_meta_df,
-            group_col="kit",
-            order=kit_order,
-            palette=KIT_PALETTE_DEFAULT,
-            out_dir=meta_dir,
-            out_prefix=out_prefix,
-            formats=formsats
-        )
-        if not plotted_df.empty:
-            plotted_df.to_csv(meta_dir / f"{out_prefix}_tax.tsv", sep="\t", index=False)
-            print(f"[OK] Wrote {out_prefix}_tax.tsv and bubble plots")
-        else:
-            print("[WARN] No rows to plot for kit presence table.")
-    else:
-        if not kit_presence_path.exists():
-            print(f"[INFO] Kit presence table not found: {kit_presence_path} (skipping).")
-        else:
-            print("[INFO] 'kit' column absent in ASV meta (skipping kit plots).")
 
 if __name__ == "__main__":
     main()

@@ -22,11 +22,6 @@ Notes
 - For compositional data, `--transform clr` applies multiplicative replacement then CLR.
 - Grouping:
     --group-cols can include 'none' (treat all samples together) and/or metadata column names.
-- Training split:
-    By default, each group's TRAIN = TEST = all samples in the group (your original behavior).
-    You can switch to a split by kit using:
-      --train-mode kit_split --kit-col kit --kit-train-value SPARK-ZYMO
-    This will train on rows with kit == SPARK-ZYMO and test on the rest within each group.
 """
 
 from __future__ import annotations
@@ -166,9 +161,6 @@ def run_for_group(
     group_name: str,
     asv_df: pd.DataFrame,      # transformed samples x features (only group samples will be taken)
     meta_df: pd.DataFrame,     # metadata indexed by sample
-    train_mode: str,           # 'all' or 'kit_split'
-    kit_col: Optional[str],
-    kit_train_value: Optional[str],
     scale: bool,
     model_flags: Tuple[bool, bool, bool],
     iso_kwargs: dict,
@@ -188,24 +180,8 @@ def run_for_group(
         base["is_outlier"] = False
         return base
 
-    # determine train/test split
-    if train_mode == "all":
-        train_samples = group_samples
-        test_samples = group_samples
-    elif train_mode == "kit_split":
-        if kit_col is None or kit_train_value is None:
-            raise ValueError("kit_split requires --kit-col and --kit-train-value")
-        spark = meta_df[meta_df[kit_col] == kit_train_value].index.tolist()
-        other = meta_df[meta_df[kit_col] != kit_train_value].index.tolist()
-        if len(spark) == 0 or len(other) == 0:
-            # fallback to 'all' if either side empty
-            train_samples = group_samples
-            test_samples = group_samples
-        else:
-            train_samples = spark
-            test_samples = other
-    else:
-        raise ValueError("--train-mode must be 'all' or 'kit_split'")
+    train_samples = [a for a in asv_df.index if a in group_samples]
+    test_samples = [a for a in asv_df.index if a in group_samples]
 
     X_train = asv_df.loc[train_samples].values
     X_test = asv_df.loc[test_samples].values
@@ -219,17 +195,6 @@ def run_for_group(
         iso_kwargs, svm_kwargs, hdb_kwargs
     )
     preds["group"] = group_name
-
-    # if we tested a subset (kit_split), also mark train set as inliers by definition
-    if set(test_samples) != set(group_samples):
-        rest = pd.DataFrame(index=[s for s in group_samples if s not in preds.index])
-        for c in ["IsolationForest", "OneClassSVM", "HDBSCAN"]:
-            if c in preds.columns:
-                rest[c] = 1
-        rest["outlier_votes"] = 0
-        rest["group"] = group_name
-        preds = pd.concat([preds, rest])
-
     preds["is_outlier"] = preds["outlier_votes"] >= vote_threshold
     return preds
 
@@ -259,10 +224,6 @@ def get_parser() -> argparse.ArgumentParser:
     grp = p.add_argument_group("Grouping & training")
     grp.add_argument("--group-cols", default="none",
                      help="Comma-sep list of grouping columns from metadata; include 'none' to pool all samples")
-    grp.add_argument("--train-mode", choices=["all", "kit_split"], default="all",
-                     help="Train on all samples in group, or split by kit")
-    grp.add_argument("--kit-col", default="kit", help="Metadata column holding kit/platform (for kit_split)")
-    grp.add_argument("--kit-train-value", default="SPARK-ZYMO", help="Value in --kit-col to use for training subset")
 
     mdl = p.add_argument_group("Models & voting")
     mdl.add_argument("--use-iso", action="store_true", help="Include IsolationForest")
@@ -337,9 +298,6 @@ def main():
                 group_name="all",
                 asv_df=feat,
                 meta_df=meta,  # all rows
-                train_mode=args.train_mode,
-                kit_col=args.kit_col,
-                kit_train_value=args.kit_train_value,
                 scale=args.scale,
                 model_flags=(args.use_iso, args.use_svm, args.use_hdb),
                 iso_kwargs=iso_kwargs,
@@ -361,9 +319,6 @@ def main():
                     group_name=str(level),
                     asv_df=sub_feat,
                     meta_df=sub_meta,
-                    train_mode=args.train_mode,
-                    kit_col=args.kit_col,
-                    kit_train_value=args.kit_train_value,
                     scale=args.scale,
                     model_flags=(args.use_iso, args.use_svm, args.use_hdb),
                     iso_kwargs=iso_kwargs,
@@ -389,7 +344,7 @@ def main():
         if args.verbose:
             n_out = int(preds["is_outlier"].sum())
             print(f"[✓] Wrote {out_path}  (outliers={n_out}, n={len(preds)})")
-
+    
     # convenience: also write a combined file if >1 grouping requested
     if len(outputs) > 1:
         combo = []
