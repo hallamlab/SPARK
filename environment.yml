@@ -54,4 +54,5 @@ dependencies:
   - holoviews
   - colorcet
   - scikit-image
-  - matplotlib_venn
+  - pip:
+    - matplotlib_venn
