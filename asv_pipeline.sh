@@ -76,19 +76,83 @@ if [[ "$ENV_SYNC" == "true" ]]; then
   fi
 fi
 
-# 5) Activate for the rest of the script (no 'conda init' required)
-if [[ "$PM" = "micromamba" ]]; then
-  micromamba activate "$ENV_NAME" || { echo "[ERROR] activate failed"; exit 1; }
-else
-  conda activate "$ENV_NAME" || {
-    # final fallback if hook didn’t stick
-    BASE="$($PM info --base 2>/dev/null)" || true
-    # shellcheck disable=SC1091
-    [[ -n "$BASE" ]] && source "$BASE/etc/profile.d/conda.sh"
-    conda activate "$ENV_NAME" || { echo "[ERROR] activate failed"; exit 1; }
-  }
+# -------- Hardened PM hook + activate --------
+: "${ENV_NAME:?ENV_NAME not set}"
+
+# Auto-detect PM if not provided: micromamba > mamba > conda
+if [[ -z "${PM-}" ]]; then
+  if command -v micromamba >/dev/null 2>&1; then PM="micromamba"
+  elif command -v mamba >/dev/null 2>&1; then PM="mamba"
+  elif command -v conda >/dev/null 2>&1; then PM="conda"
+  else
+    echo "[ERROR] No micromamba/mamba/conda on PATH"; exit 1
+  fi
 fi
-echo "[INFO] Activated: $ENV_NAME via $PM"
+
+_pm_root_from_exe() {
+  local exe="$1"
+  [[ -n "$exe" ]] || return 1
+  exe="$(command -v "$exe" 2>/dev/null || true)"
+  [[ -n "$exe" ]] || return 1
+  dirname "$(dirname "$exe")"
+}
+
+_source_pm_hook() {
+  # 0) env hints
+  for exe in "${CONDA_EXE-}" "${MAMBA_EXE-}"; do
+    [[ -n "$exe" ]] && {
+      local root; root="$(dirname "$(dirname "$exe")")"
+      [[ -f "$root/etc/profile.d/conda.sh"  ]] && { # shellcheck disable=SC1090
+        source "$root/etc/profile.d/conda.sh"; return 0; }
+      [[ -f "$root/etc/profile.d/mamba.sh"  ]] && { # shellcheck disable=SC1090
+        source "$root/etc/profile.d/mamba.sh"; return 0; }
+    }
+  done
+
+  # 1) ask PM (works for conda/mamba)
+  local base; base="$($PM info --base 2>/dev/null || true)"
+
+  # 2) derive from executable on PATH
+  local pathroot; pathroot="$(_pm_root_from_exe "$PM" || true)"
+
+  # 3) common roots to try in order
+  local roots=(
+    "$base" "$pathroot"
+    "$HOME/mambaforge" "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3"
+  )
+
+  local r
+  for r in "${roots[@]}"; do
+    [[ -n "$r" ]] || continue
+    if [[ -f "$r/etc/profile.d/conda.sh" ]]; then
+      # shellcheck disable=SC1090
+      source "$r/etc/profile.d/conda.sh"; return 0
+    fi
+    if [[ -f "$r/etc/profile.d/mamba.sh" ]]; then
+      # shellcheck disable=SC1090
+      source "$r/etc/profile.d/mamba.sh"; return 0
+    fi
+  done
+  return 1
+}
+
+activate_env() {
+  if [[ "$PM" == "micromamba" ]]; then
+    eval "$(micromamba shell hook -s bash)" || { echo "[ERROR] micromamba hook"; exit 1; }
+    micromamba activate "$ENV_NAME" || { echo "[ERROR] activate failed ($ENV_NAME)"; exit 1; }
+  else
+    _source_pm_hook || {
+      echo "[ERROR] conda/mamba hook missing (tried \$PM info, PATH, and common roots)"; exit 1; }
+    # Prefer 'conda activate'; fallback to PM activate
+    conda activate "$ENV_NAME" 2>/dev/null || $PM activate "$ENV_NAME" || {
+      echo "[ERROR] activate failed ($ENV_NAME)"; exit 1; }
+  fi
+  echo "[INFO] Activated: $ENV_NAME via $PM"
+}
+
+activate_env
+# -------- end hardened block --------
+
 # --- end bootstrap ---
 
 # ---------- utils ----------
