@@ -417,6 +417,7 @@ filter_reads(){
     vsearch --fastx_filter "$m" \
             --fastq_maxee "${FILTER_MAXEE}" \
             --fastq_minlen "${FILTER_MINLEN}" \
+            --fastq_maxlen "${FILTER_MAXLEN}" \
             --fastaout "${FILTERED_DIR}/${s}.filtered.fasta"
   done 2>&1 | tee -a "${LOG_DIR}/filtering_log.txt"
   log "Step 3 done."

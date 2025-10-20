@@ -37,6 +37,7 @@ dependencies:
   - r-spieceasi
   - r-tidyr
   - r-tidyverse
+  - r-optparse
   - scanpy
   - scikit-learn
   - scipy
@@ -54,5 +55,7 @@ dependencies:
   - holoviews
   - colorcet
   - scikit-image
+  - scikit-bio
+  - statannotations
   - pip:
     - matplotlib_venn
