@@ -4,7 +4,7 @@ asv_outliers_ensemble.py
 Ensemble outlier detection over ASV tables with CLR (optional), per-group training,
 and consensus voting across IsolationForest, OneClassSVM, and HDBSCAN.
 
-Quickstart (matches your current workflow):
+Quickstart (original workflow with raw counts):
   python asv_outliers_ensemble.py \
     --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
     --asv spark_combined_output/ASVs/ASV_final.micro.tsv \
@@ -15,11 +15,26 @@ Quickstart (matches your current workflow):
     --transform clr --hdbscan-min-cluster-size 5 --svm-nu 0.1 \
     --vote-threshold 3 --verbose
 
+Quickstart (with batch-corrected CLR data):
+  python asv_outliers_ensemble.py \
+    --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
+    --asv spark_combined_output/batch_correction/asv_clr_after_correction.tsv \
+    --metadata spark_combined_output/metadata/metadata_updated.tsv \
+    --meta-index-col sample \
+    --group-cols none,type_group \
+    --output-dir spark_combined_output/outlier_detection_corrected \
+    --asv-orientation samples_rows \
+    --pre-transformed \
+    --hdbscan-min-cluster-size 5 --svm-nu 0.1 \
+    --vote-threshold 3 --verbose
+
 Notes
 -----
 - By default the ASV file is assumed to be features (ASVs) in rows and samples in columns;
   pass --asv-orientation samples_rows if yours is already samples x features.
 - For compositional data, `--transform clr` applies multiplicative replacement then CLR.
+- If using batch-corrected data from asv_batch_correction.py, use:
+  --asv-orientation samples_rows --pre-transformed --transform none
 - Grouping:
     --group-cols can include 'none' (treat all samples together) and/or metadata column names.
 """
@@ -64,6 +79,18 @@ def load_metadata(path: Path, index_col: str) -> pd.DataFrame:
 def load_asv_table(path: Path, orientation: str) -> pd.DataFrame:
     """
     Returns samples x features (rows=samples).
+    
+    Parameters
+    ----------
+    path : Path
+        Path to ASV table
+    orientation : str
+        "features_rows" = ASVs in rows, samples in columns (will transpose)
+        "samples_rows" = samples in rows, ASVs in columns (no transpose)
+        
+    Returns
+    -------
+    df : DataFrame (samples x features)
     """
     df = pd.read_csv(path, sep="\t", header=0, index_col=0)
     if orientation == "features_rows":
@@ -74,26 +101,63 @@ def load_asv_table(path: Path, orientation: str) -> pd.DataFrame:
     return df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
 
-def align_and_filter(asv: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+def align_and_filter(asv: pd.DataFrame, meta: pd.DataFrame, pre_transformed: bool = False) -> pd.DataFrame:
+    """
+    Align samples between ASV table and metadata, filter zero entries.
+    
+    Parameters
+    ----------
+    asv : DataFrame (samples x features)
+    meta : DataFrame
+    pre_transformed : bool
+        If True, skip filtering all-zero features/samples since CLR-transformed
+        data may have negative values and zero filtering may not be appropriate
+    """
     shared = asv.index.intersection(meta.index)
     if len(shared) == 0:
         raise ValueError("No overlapping samples between ASV table and metadata.")
     asv = asv.loc[shared]
-    # drop all-zero features and all-zero samples
-    asv = asv.loc[(asv != 0).any(axis=1), (asv != 0).any(axis=0)]
-    # drop samples that became all-zero after feature drop
-    asv = asv.loc[(asv != 0).any(axis=1)]
+    
+    if not pre_transformed:
+        # For raw count data, filter all-zero features and samples
+        asv = asv.loc[(asv != 0).any(axis=1), (asv != 0).any(axis=0)]
+        # drop samples that became all-zero after feature drop
+        asv = asv.loc[(asv != 0).any(axis=1)]
+    else:
+        # For pre-transformed data, just check that we have variation
+        # Remove constant features (no variation across samples)
+        asv = asv.loc[:, asv.std(axis=0) > 0]
+    
     return asv
 
 
-def apply_transform(asv_samples_x_features: pd.DataFrame, transform: str) -> pd.DataFrame:
+def apply_transform(asv_samples_x_features: pd.DataFrame, transform: str, pre_transformed: bool = False) -> pd.DataFrame:
+    """
+    Apply transformation to ASV data.
+    
+    Parameters
+    ----------
+    asv_samples_x_features : DataFrame (samples x features)
+    transform : str
+        "none" or "clr"
+    pre_transformed : bool
+        If True, skip transformation (data already transformed)
+    """
+    if pre_transformed:
+        if transform != "none":
+            print("[!] Warning: --pre-transformed flag set but --transform is not 'none'.")
+            print("[!] Skipping transformation since data is already transformed.")
+        return asv_samples_x_features.copy()
+    
     if transform == "none":
         return asv_samples_x_features.copy()
+    
     if transform == "clr":
         # multiplicative replacement expects ndarray; works on samples x features
         arr = multiplicative_replacement(asv_samples_x_features.values)
         emb = clr(arr)
         return pd.DataFrame(emb, index=asv_samples_x_features.index, columns=asv_samples_x_features.columns)
+    
     raise ValueError("--transform must be 'none' or 'clr'")
 
 
@@ -210,15 +274,20 @@ def get_parser() -> argparse.ArgumentParser:
 
     io = p.add_argument_group("I/O")
     io.add_argument("--data-dir", type=Path, required=True, help="Project root to resolve relative paths")
-    io.add_argument("--asv", type=str, required=True, help="Path to ASV table (TSV). Default orientation: features in rows.")
+    io.add_argument("--asv", type=str, required=True, 
+                    help="Path to ASV table (TSV). Can be raw counts or batch-corrected CLR data.")
     io.add_argument("--metadata", type=str, required=True, help="Path to metadata TSV")
     io.add_argument("--meta-index-col", default="sample", help="Column in metadata to use as index (sample ID)")
     io.add_argument("--output-dir", type=str, required=True, help="Directory to write outputs")
 
     fmt = p.add_argument_group("Data formatting")
     fmt.add_argument("--asv-orientation", choices=["features_rows", "samples_rows"], default="features_rows",
-                     help="How the ASV file is laid out on disk")
-    fmt.add_argument("--transform", choices=["none", "clr"], default="clr", help="Feature transform before modeling")
+                     help="How the ASV file is laid out on disk. Use 'samples_rows' for batch-corrected data.")
+    fmt.add_argument("--transform", choices=["none", "clr"], default="clr", 
+                     help="Feature transform before modeling. Use 'none' with --pre-transformed.")
+    fmt.add_argument("--pre-transformed", action="store_true",
+                     help="Set this flag if input data is already CLR-transformed (e.g., from batch correction). "
+                          "This will skip the transformation step.")
     fmt.add_argument("--scale", action="store_true", help="Z-score features (fit on train, apply to test)")
 
     grp = p.add_argument_group("Grouping & training")
@@ -263,17 +332,27 @@ def main():
     if not (args.use_iso or args.use_svm or args.use_hdb):
         args.use_iso = args.use_svm = args.use_hdb = True
 
+    # Validate arguments
+    if args.pre_transformed and args.transform == "clr":
+        print("[!] Warning: --pre-transformed flag is set, but --transform is 'clr'.")
+        print("[!] Setting --transform to 'none' since data is already transformed.")
+        args.transform = "none"
+
     # load data
     meta = load_metadata(resolve_path(root, args.metadata), args.meta_index_col)
     asv = load_asv_table(resolve_path(root, args.asv), args.asv_orientation)
-    asv = align_and_filter(asv, meta)
+    asv = align_and_filter(asv, meta, pre_transformed=args.pre_transformed)
 
     if args.verbose:
         print(f"[i] ASV matrix (samples x features) after filtering: {asv.shape}")
         print(f"[i] Metadata rows (unique samples): {meta.shape[0]}")
+        if args.pre_transformed:
+            print(f"[i] Using pre-transformed data (skipping CLR transformation)")
+        else:
+            print(f"[i] Will apply transformation: {args.transform}")
 
     # transform & (optionally) scale later per train/test
-    feat = apply_transform(asv, args.transform)
+    feat = apply_transform(asv, args.transform, pre_transformed=args.pre_transformed)
 
     # group list
     group_cols = [g.strip() for g in args.group_cols.split(",") if g.strip()]

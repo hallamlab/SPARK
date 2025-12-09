@@ -266,18 +266,36 @@ is_r1_like() {
 }
 
 r2_from_r1() {
-  local r1="$1" cand
+  local r1="$1"
+  local cand orig
+  orig="$r1"
+
   for i in "${!R1TOK[@]}"; do
-    cand="${r1//_${R1TOK[$i]}_/_${R2TOK[$i]}_}"
-    cand="${cand//.${R1TOK[$i]}./.${R2TOK[$i]}.}"
-    cand="${cand//-${R1TOK[$i]}-/-${R2TOK[$i]}-}"
-    cand="${cand//-${R1TOK[$i]}\./-${R2TOK[$i]}.}"
-    cand="${cand//_${R1TOK[$i]}\./_${R2TOK[$i]}.}"
-    cand="${cand//_${R1TOK[$i]}$/_${R2TOK[$i]}}"
-    cand="${cand//${R1TOK[$i]}_001/${R2TOK[$i]}_001}"
-    if [[ -f "$cand" ]]; then echo "$cand"; return 0; fi
+    local r1tok="${R1TOK[$i]}"
+    local r2tok="${R2TOK[$i]}"
+
+    # start from the original each time
+    cand="$orig"
+
+    # Try a set of common paired patterns
+    cand="${cand//_${r1tok}_/_${r2tok}_}"
+    cand="${cand//.${r1tok}./.${r2tok}.}"
+    cand="${cand//-${r1tok}-/-${r2tok}-}"
+    cand="${cand//-${r1tok}\./-${r2tok}.}"
+    cand="${cand//_${r1tok}\./_${r2tok}.}"
+    cand="${cand//_${r1tok}$/_${r2tok}}"
+    cand="${cand//${r1tok}_001/${r2tok}_001}"
+
+    # Only accept if it actually changed AND exists
+    if [[ "$cand" != "$orig" && -f "$cand" ]]; then
+      echo "$cand"
+      return 0
+    fi
   done
-  echo "" ; return 1
+
+  # No valid R2 found
+  echo ""
+  return 1
 }
 
 # Safe sample name parser (no sed)
@@ -395,6 +413,7 @@ merge_reads(){
               --fastqout "${MERGED_DIR}/${s}.merged.fastq" \
               --fastq_maxdiffs "${MERGE_MAXDIFFS}" \
               --fastq_minovlen "${MERGE_MINOVLEN}" \
+              --fastq_truncqual "${MERGE_TRUNQUAL}" \
               "${allow[@]}" \
               --threads "${THREADS}"
     else

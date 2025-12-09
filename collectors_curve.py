@@ -34,8 +34,6 @@ python collectors_curves.py \
   --sample-id-col sample_id \
   --group-col sample_type \
   --permutations 512 \
-  --group-order "Soil,Water,Air" \
-  --group-colors "Soil=#1b9e77,Water=#d95f02,Air=#7570b3" \
   --palette tab10 \
   --xpad 0.75 \
   --title "Collector's curves" \
@@ -133,11 +131,11 @@ def validate_color(color_str, group_name):
         return False
 
 
-def resolve_group_order(meta_series, order_arg):
+def resolve_group_order(meta_series, order):
     uniq = list(pd.unique(meta_series.fillna("NA")))
-    if not order_arg:
+    if not order:
         return uniq
-    specified = [g.strip() for g in order_arg.split(",") if g.strip()]
+    specified = order
     unknown = [g for g in specified if g not in uniq]
     if unknown:
         warnings.warn(f"--group-order contains unknown group(s) {unknown}; they will be ignored.")
@@ -261,7 +259,9 @@ def plot_overlay(curves, colors, group_col, out_base, xpad, groups_order, title,
     xlo, xhi = _x_limits_with_padding(xmax, xpad)
     plt.xlim(xlo, xhi)
     plt.ylim(0, ymax * ylim_pad)
-    plt.legend(handles, labels, frameon=False, title=group_col)
+    plt.legend(handles, labels, title=group_col, 
+            bbox_to_anchor=(1.05, 1), loc='upper left',
+            frameon=True, fontsize=10, title_fontsize=12)
     plt.tight_layout()
     for ext in formats:
         plt.savefig(f"{out_base}_overlay.{ext}")
@@ -334,14 +334,8 @@ def main():
                     help="Output prefix for figures and stats.")
 
     # Colors & appearance
-    ap.add_argument("--palette", default="tab10",
-                    help="Matplotlib palette/colormap name for groups (default: tab10).")
-    ap.add_argument("--group-colors", default=None,
-                    help='Explicit mapping like "GroupA=#1f77b4,GroupB=#ff7f0e". '
-                         "Unknown groups warn; missing groups fall back to --palette.")
-    ap.add_argument("--group-order", default=None,
-                    help='Comma-separated group order for facets (left→right, top→bottom) and legend. '
-                         'Example: "Soil,Water,Air"')
+    ap.add_argument("--color-col", default="Color",
+                    help="Color column")
     ap.add_argument("--title", default="",
                     help="Optional plot title (overlay and faceted).")
     ap.add_argument("--formats", default="pdf",
@@ -364,6 +358,16 @@ def main():
 
     counts, meta = read_inputs(args.counts, args.meta, args.sample_id_col, args.group_col)
 
+    # Convert group_col to integers for proper sorting
+    meta[args.group_col] = meta[args.group_col].astype(int)
+
+    # set palette
+    palette = {k[0]: k[1] for k in zip(meta[args.group_col], meta[args.color_col])}
+    palette = dict(sorted(palette.items()))  # Now sorts numerically
+
+    groups_order = list(palette.keys())
+    colors = {k: v for k, v in zip(palette.keys(), palette.values())}
+
     # Presence/absence threshold
     if args.presence_threshold > 0:
         counts = (counts > args.presence_threshold).astype(int)
@@ -371,7 +375,7 @@ def main():
         # keep numeric and treat >0 as present in core function
         counts = counts.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-    all_groups_order = resolve_group_order(meta[args.group_col], args.group_order)
+    all_groups_order = resolve_group_order(meta[args.group_col], groups_order)
     curves, groups_order = build_group_curves(
         counts, meta,
         sample_id_col=args.sample_id_col,
@@ -383,8 +387,6 @@ def main():
     if not curves:
         raise RuntimeError("No groups found to plot (check --group-col values and overlaps with counts).")
 
-    user_map = parse_group_colors(args.group_colors)
-    colors = color_map_for_groups(groups_order, palette_name=args.palette, user_map=user_map)
 
     formats = [f.strip().lstrip(".").lower() for f in args.formats.split(",") if f.strip()]
     out_base = args.out_prefix

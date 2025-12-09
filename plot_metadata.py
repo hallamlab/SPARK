@@ -11,11 +11,9 @@ Quickstart (mirrors your current layout):
     --metadata ref_db/spark_metadata.tsv \
     --meta-sample-col sample \
     --keep-types "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
-    --fastq-stats stats/fastq_stats.tsv --fastq-id-suffix-underscores 4 \
+    --fastq-stats stats/fastq_stats.tsv --fastq-id-prefix-underscores 4 \
     --asv-micro ASVs/ASV_target.micro.tsv --asv-mito mito/ASVs/ASV_target.mito.tsv \
     --taxonomy taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv \
-    --type-palette "Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
-    --status-palette "Non-Cancer:white,Cancer:#A50026,methods:lightgray" \
     --make-micro --make-mito
 
 Notes:
@@ -75,7 +73,35 @@ def parse_list_csv(s: str) -> List[str]:
     return [x.strip() for x in s.split(',') if x.strip()] if s else []
 
 
-def extract_sample_id_from_path(path_str: str, suffix_underscores: Optional[int], regex: Optional[str]) -> str:
+def normalize_taxon_value(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return text.lower()
+
+
+def parse_rank_filters(items: Sequence[str]) -> Dict[str, set[str]]:
+    """Parse LEVEL:Name entries and normalize taxonomy level casing."""
+    valid_levels = ["Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
+    lookup = {lvl.lower(): lvl for lvl in valid_levels}
+    filters: Dict[str, set[str]] = {}
+    for raw in items or []:
+        if not raw:
+            continue
+        if ':' not in raw:
+            raise ValueError(f"--include-rank expects LEVEL:Name, got '{raw}'")
+        level, name = raw.split(':', 1)
+        level_key = lookup.get(level.strip().lower())
+        if not level_key:
+            raise ValueError(f"Unknown taxonomy level '{level}'. Expected one of: {', '.join(valid_levels)}")
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError(f"Missing taxon name in include-rank entry '{raw}'")
+        filters.setdefault(level_key, set()).add(clean_name.lower())
+    return filters
+
+
+def extract_sample_id_from_path(path_str: str, prefix_underscores: Optional[int], regex: Optional[str]) -> str:
     """
     - If regex provided: return first capture group.
     - Else, remove extensions and chop N underscore tokens from end.
@@ -90,12 +116,12 @@ def extract_sample_id_from_path(path_str: str, suffix_underscores: Optional[int]
     for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq', '.tsv', '.csv', '.txt', '.gz'):
         if stem.endswith(ext):
             stem = stem[: -len(ext)]
-    if suffix_underscores is None:
+    if prefix_underscores is None:
         return stem
     parts = stem.split('_')
-    if len(parts) <= suffix_underscores:
+    if len(parts) <= prefix_underscores:
         return parts[0]
-    return '_'.join(parts[: len(parts) - suffix_underscores])
+    return '_'.join(parts[: prefix_underscores]).split('-', 1)[0]
 
 
 def split_taxa_string(taxa_str: str, delimiter=';') -> Dict[str, Optional[str]]:
@@ -139,9 +165,9 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
         df['lung_code'] = df['Type'].astype(str).str[0].where(lambda s: s.isin(['R', 'L']), other='N')
     if keep_types is not None and 'type_group' in df.columns:
         df = df[df['type_group'].isin(keep_types)].copy()
-    # Create sample_code if 'sample' exists
-    if 'sample' in df.columns:
-        df = df.drop_duplicates(subset=['sample'])
+    # Create sample_code if meta_sample_col exists
+    if meta_sample_col in df.columns:
+        df = df.drop_duplicates(subset=[meta_sample_col])
         df = df.copy()
         df['sample_code'] = [f"S{i+1:03d}" for i in range(len(df))]
         # Move sample_code first
@@ -153,12 +179,12 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
     return df
 
 
-def read_fastq_stats(path: Path, meta_sample_col: str, id_suffix_underscores: Optional[int],
+def read_fastq_stats(path: Path, meta_sample_col: str, id_prefix_underscores: Optional[int],
                      id_regex: Optional[str]) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', header=0)
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
-    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x, id_suffix_underscores, id_regex))
+    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex))
     return df.groupby(meta_sample_col, as_index=False)['num_seqs'].sum()
 
 
@@ -171,13 +197,13 @@ def read_taxonomy_table(path: Path) -> pd.DataFrame:
 
 
 def read_asv_wide_to_long(path: Path, meta_sample_col: str,
-                          asv_id_suffix_underscores: Optional[int],
+                          asv_id_prefix_underscores: Optional[int],
                           asv_id_regex: Optional[str],
                           tax_index: Optional[pd.Index] = None) -> pd.DataFrame:
     wide = pd.read_csv(path, sep='\t', header=0, index_col=0)
     if tax_index is not None:
         wide = wide.loc[[a for a in wide.index if a in set(tax_index)]]
-    cols_parsed = [extract_sample_id_from_path(c, asv_id_suffix_underscores, asv_id_regex) for c in wide.columns]
+    cols_parsed = [extract_sample_id_from_path(c, asv_id_prefix_underscores, asv_id_regex) for c in wide.columns]
     wide.columns = cols_parsed
     long = wide.stack().reset_index()
     long.columns = ['ASV_ID', meta_sample_col, 'count']
@@ -205,10 +231,10 @@ def correct_counts_against_controls(asv_meta: pd.DataFrame, meta: pd.DataFrame,
     """Subtract per-ASV means from control groups (scope, skin)."""
     # Determine control ASV sets
     ctrl = meta[[meta_sample_col, type_col]].copy()
-    df = asv_meta.merge(ctrl, left_on='sample', right_on=meta_sample_col, how='left', suffixes=('', '_meta'))
+    df = asv_meta.merge(ctrl, left_on=meta_sample_col, right_on=meta_sample_col, how='left', suffixes=('', '_meta'))
 
     # Compute per-ASV mean in control types
-    keep_cols = ['ASV_ID', 'sample', 'count']
+    keep_cols = ['ASV_ID', meta_sample_col, 'count']
     scope_mean = df[df[type_col] == scope_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
     scope_mean.columns = ['ASV_ID', 'nctrl_mean']
     skin_mean = df[df[type_col] == skin_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
@@ -243,6 +269,7 @@ def clustermap_shared_percent(
     shared_pct: pd.DataFrame,
     col_legend_df: pd.DataFrame,
     row_legend_df: pd.DataFrame,
+    col_palette: Dict[int, str],
     out_svg: Path,
     out_pdf: Path,
     cmap=None,
@@ -256,11 +283,20 @@ def clustermap_shared_percent(
         dendrogram_ratio=(0.05, 0.05), colors_ratio=(0.02, 0.02),
         figsize=(32, 32), cbar_pos=(1.02, 0.2, 0.03, 0.4), alpha=1.0,
     )
-    # Legend (caller should build handles as desired)
+    
     colorbar = g.ax_heatmap.collections[0].colorbar
     colorbar.set_label("% Shared ASVs", rotation=270, labelpad=15)
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
+    
+    # Create legend with Depth values as labels
+    handles = [Patch(facecolor=color, edgecolor='black', label=str(depth)) 
+               for depth, color in sorted(col_palette.items())]
+    
+    g.ax_heatmap.legend(handles=handles, title='Depth', 
+                        bbox_to_anchor=(1.05, 1), loc='upper left',
+                        frameon=True, fontsize=10)
+    
     g.fig.savefig(out_svg, bbox_inches='tight')
     g.fig.savefig(out_pdf, bbox_inches='tight')
     plt.close(g.fig)
@@ -378,39 +414,59 @@ def compute_and_save_block(
     meta_sample_col: str,
     type_col: str,
     type_palette: Dict[str, str],
-    status_palette: Dict[str, str],
     keep_types: Sequence[str],
     fastq_stats_df: pd.DataFrame,
-    id_suffix_underscores_asv: Optional[int],
+    id_prefix_underscores_asv: Optional[int],
     id_regex_asv: Optional[str],
-    violin_groups: Sequence[str],
     dashed_line_y: Optional[float] = None,   # Only used in mito box+swarm
+    include_rank_filters: Optional[Dict[str, set[str]]] = None,
 ) -> None:
     ensure_dir(out_root)
     ensure_dir(asv_out_root)
 
     # Long ASV
-    long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, id_suffix_underscores_asv, id_regex_asv, tax_df.index)
+    long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, id_prefix_underscores_asv, id_regex_asv, tax_df.index)
+    print(f"[i] {mode_name} ASV long shape: {long_asv.shape}")
+    if long_asv.empty:
+        print(f"No ASV counts found in {asv_path}, moving on...")
+        return
     asv_tax = add_taxonomy(long_asv, tax_df)
+    if include_rank_filters:
+        pre_filter = len(asv_tax)
+        mask = pd.Series(False, index=asv_tax.index, dtype=bool)
+        for level, names in include_rank_filters.items():
+            if level not in asv_tax.columns:
+                continue
+            norm_col = asv_tax[level].apply(normalize_taxon_value)
+            mask |= norm_col.isin(names)
+        asv_tax = asv_tax[mask].copy()
+        post_filter = len(asv_tax)
+        print(f"[i] include-rank filters kept {post_filter} / {pre_filter} ASV rows in {mode_name} block")
+        if asv_tax.empty:
+            print(f"[w] No ASVs matched include-rank filters {include_rank_filters}; skipping {mode_name} block.")
+            return
+    sample_list = asv_tax[meta_sample_col].unique().tolist()
+    meta = meta[meta[meta_sample_col].isin(sample_list)].copy()
+
+    if not keep_types:
+        meta[type_col] = meta[type_col].astype(int)
+        keep_types = sorted(meta[type_col].unique().tolist())
 
     # Merge with metadata
-    if 'sample' not in asv_tax.columns:
-        # ensure we have 'sample' col for downstream naming (mirror your script)
-        asv_tax = asv_tax.rename(columns={meta_sample_col: 'sample'})
-    asv_meta = asv_tax.merge(meta, on='sample', how='inner')
-
+    asv_meta = asv_tax.merge(meta, on=meta_sample_col, how='inner')
+    
     # Stats per sample for raw reads
     reads_df = fastq_stats_df.copy()
     reads_df = reads_df.rename(columns={'num_seqs': 'num_reads_total'})
     reads_df['raw_count'] = (reads_df['num_reads_total'] / 2.0)
 
     # Build metastat table
-    cnt_df = asv_meta.groupby(['sample'])['count'].sum().reset_index()
-    metastat = meta.merge(reads_df[['sample', 'raw_count']], on='sample', how='left') \
-                   .merge(cnt_df, on='sample', how='left')
-    metastat['pass_filter'] = [t if s in set(asv_meta['sample']) else 'Failed-QC'
-                               for s, t in zip(metastat['sample'], metastat[type_col])]
-    long_df = metastat.groupby([type_col, 'pass_filter', 'sample'])['raw_count'].sum().reset_index()
+    cnt_df = asv_meta.groupby([meta_sample_col])['count'].sum().reset_index()
+    metastat = meta.merge(reads_df[[meta_sample_col, 'raw_count']], on=meta_sample_col, how='left') \
+                   .merge(cnt_df, on=meta_sample_col, how='left')
+    metastat['pass_filter'] = [t if s in set(asv_meta[meta_sample_col]) else 'Failed-QC'
+                               for s, t in zip(metastat[meta_sample_col], metastat[type_col])]
+    long_df = metastat.groupby([type_col, 'pass_filter', meta_sample_col])['raw_count'].sum().reset_index()
     long_df = long_df[long_df['raw_count'] > 0]
 
     # Box + swarm
@@ -427,12 +483,12 @@ def compute_and_save_block(
     plt.close()
 
     # Control subtraction (scope+skin), pivot to ASV x sample corrected counts
-    corr_meta = correct_counts_against_controls(asv_meta, meta, 'sample', type_col)
-    cleaned = corr_meta.pivot_table(index='ASV_ID', columns='sample', values='corr_count', aggfunc='sum', fill_value=0)
+    corr_meta = correct_counts_against_controls(asv_meta, meta, meta_sample_col, type_col)
+    cleaned = corr_meta.pivot_table(index='ASV_ID', columns=meta_sample_col, values='corr_count', aggfunc='sum', fill_value=0)
 
     # Keep only assigned Domain and only kept samples
     keep_asvs = corr_meta[corr_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
-    kept_samples = metastat[metastat['pass_filter'] != 'Failed-QC']['sample'].unique().tolist()
+    kept_samples = metastat[metastat['pass_filter'] != 'Failed-QC'][meta_sample_col].unique().tolist()
     final_mat = cleaned.reindex(index=keep_asvs).dropna(how='all')
     final_mat = final_mat[[c for c in final_mat.columns if c in kept_samples]].fillna(0).astype(int)
 
@@ -443,31 +499,32 @@ def compute_and_save_block(
     save_df(meta, out_root / f"metadata_updated_{mode_name}.tsv")
 
     # Legends (sample colors)
-    m_df = metastat[metastat['sample'].isin(final_mat.columns)].set_index('sample')
+    m_df = metastat[metastat[meta_sample_col].isin(final_mat.columns)].set_index(meta_sample_col)
     filtered = final_mat[m_df.index.tolist()]
     col_colors_df = pd.DataFrame({
-        'sample_type': m_df[type_col].map(type_palette),
-        'status': m_df.get('status', pd.Series(index=m_df.index)).map(status_palette) if 'status' in m_df.columns else None,
+        type_col: m_df[type_col].map(type_palette),
     }, index=m_df.index)
     row_colors_df = col_colors_df.copy()
-
+    
     # Shared % matrix and clustermap
     shared_pct = presence_shared_percent(filtered)
+    sub_palette = {x:type_palette[x] for x in type_palette if x in keep_types}
     clustermap_shared_percent(
         shared_pct,
         col_legend_df=col_colors_df,
         row_legend_df=row_colors_df,
+        col_palette=sub_palette,
         out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
         out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.pdf",
     )
 
     # Violin pairs (only for selected groups present)
-    vg = [g for g in violin_groups if g in set(meta[type_col])]
+    vg = [g for g in set(meta[type_col])]
     if vg:
         fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
         _, tidy = plot_grouppair_violins_sns(
             shared_pct, meta,
-            sample_id_col='sample', group_col=type_col,
+            sample_id_col=meta_sample_col, group_col=type_col,
             include_within=True,
             group_order=vg,
             group_colors=type_palette,
@@ -499,28 +556,32 @@ def get_parser() -> argparse.ArgumentParser:
     cols = p.add_argument_group("Columns / Groups")
     cols.add_argument("--meta-sample-col", default="sample", help="Sample column name in metadata")
     cols.add_argument("--type-col", default="type_group", help="Sample type column in metadata")
-    cols.add_argument("--keep-types", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush",
+    cols.add_argument("--color-col", default="Color", help="Color column in metadata")
+    cols.add_argument("--keep-types", default="",
                       help="Comma-separated list of types to keep (order honored)")
-    cols.add_argument("--violin-groups", default="Oral Rinse,BAL,Lung Brush", help="Order for violin plot groups")
 
     reads = p.add_argument_group("Read Stats & ID Parsing")
     reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
-    reads.add_argument("--fastq-id-suffix-underscores", type=int, default=4, help="Chop N underscore tokens from end for fastq IDs")
+    reads.add_argument("--fastq-id-prefix-underscores", type=int, default=2, help="Chop N underscore tokens from end for fastq IDs")
     reads.add_argument("--fastq-id-regex", default="", help="Regex with one capture group for fastq IDs")
 
     asv = p.add_argument_group("ASV Matrices & ID Parsing")
     asv.add_argument("--asv-micro", type=Path, required=True, help="ASV_target.micro.tsv")
     asv.add_argument("--asv-mito", type=Path, required=True, help="ASV_target.mito.tsv")
-    asv.add_argument("--asv-id-suffix-underscores", type=int, default=2, help="Chop N underscore tokens from end for ASV column IDs")
+    asv.add_argument("--asv-id-prefix-underscores", type=int, default=None, help="Chop N underscore tokens from end for ASV column IDs")
     asv.add_argument("--asv-id-regex", default="", help="Regex with one capture group for ASV column IDs")
 
-    vis = p.add_argument_group("Palettes / Visual")
-    vis.add_argument("--type-palette",
-                     default="Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
-                     help="Comma-separated 'Group:#HEX'")
-    vis.add_argument("--status-palette",
-                     default="Non-Cancer:white,Cancer:#A50026,methods:lightgray",
-                     help="Comma-separated 'Status:#HEX'")
+    tax = p.add_argument_group("Taxonomy Filters")
+    tax.add_argument(
+        "--include-rank",
+        action="append",
+        default=[],
+        metavar="LEVEL:NAME",
+        help="Only keep ASVs whose taxonomy at LEVEL (Domain/Phylum/Class/Order/Family/Genus/Species) matches NAME."
+             " Provide multiple flags to OR filters.",
+    )
+
+    vis = p.add_argument_group("Visual")
     vis.add_argument("--mito-threshold-line", type=float, default=1000.0, help="Dashed line Y on mito swarm plot (set negative to disable)")
 
     mode = p.add_argument_group("Modes / Toggles")
@@ -538,12 +599,10 @@ def main():
 
     data_dir = args.data_dir
     sub_dir = args.sub_dir
-    meta_path = args.metadata or (data_dir / "ref_db" / "spark_metadata.tsv")
+    meta_path = args.metadata
     keep_types = parse_list_csv(args.keep_types)
-    violin_groups = parse_list_csv(args.violin_groups)
-    type_palette = parse_kv_csv(args.type_palette, cast=None)
-    status_palette = parse_kv_csv(args.status_palette, cast=None)
-
+    include_rank_filters = parse_rank_filters(args.include_rank)
+    
     # Resolve canonical paths
     def resolve(rel_or_abs: str | Path) -> Path:
         p = Path(rel_or_abs)
@@ -563,11 +622,17 @@ def main():
 
     # Read data
     meta = read_metadata(meta_path, args.meta_sample_col, keep_types)
+
+    # set palette
+    palette = {k[0]: k[1] for k in zip(meta[args.type_col], meta[args.color_col])}
+    palette = dict(sorted(palette.items()))
+    palette['Failed-QC'] = '#d3d3d3'  # light grey for failed QC
+    
     tax_df = read_taxonomy_table(taxonomy_path)
     fastq_df = read_fastq_stats(
         fastq_stats_path,
         args.meta_sample_col,
-        args.fastq_id_suffix_underscores,
+        args.fastq_id_prefix_underscores,
         args.fastq_id_regex or None
     )
 
@@ -580,7 +645,7 @@ def main():
     # If neither toggle provided, run both
     run_micro = args.make_micro or (not args.make_micro and not args.make_mito)
     run_mito = args.make_mito or (not args.make_micro and not args.make_mito)
-
+    
     # MICRO
     if run_micro:
         if args.verbose: print("[i] Running microbial block …")
@@ -593,14 +658,13 @@ def main():
             tax_df=tax_df,
             meta_sample_col=args.meta_sample_col,
             type_col=args.type_col,
-            type_palette=type_palette,
-            status_palette=status_palette,
+            type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),
-            id_suffix_underscores_asv=args.asv_id_suffix_underscores,
+            id_prefix_underscores_asv=args.asv_id_prefix_underscores,
             id_regex_asv=args.asv_id_regex or None,
-            violin_groups=violin_groups,
             dashed_line_y=None,
+            include_rank_filters=include_rank_filters,
         )
 
     # MITO
@@ -615,14 +679,13 @@ def main():
             tax_df=tax_df,
             meta_sample_col=args.meta_sample_col,
             type_col=args.type_col,
-            type_palette=type_palette,
-            status_palette=status_palette,
+            type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),
-            id_suffix_underscores_asv=args.asv_id_suffix_underscores,
+            id_prefix_underscores_asv=args.asv_id_prefix_underscores,
             id_regex_asv=args.asv_id_regex or None,
-            violin_groups=violin_groups,
             dashed_line_y=(args.mito_threshold_line if args.mito_threshold_line >= 0 else None),
+            include_rank_filters=include_rank_filters,
         )
 
     if args.verbose:

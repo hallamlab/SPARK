@@ -7,8 +7,8 @@ Venn membership and coloring by Phylum.
 
 Inputs (typical)
 ---------------
---type-results   path/to/type_group_indicator_species_results.tsv
---status-results path/to/status_indicator_species_results.tsv
+--group1-results   path/to/group1_indicator_species_results.tsv
+--group2-results   path/to/group2_indicator_species_results.tsv
 --venn           path/to/Three_types_venn_presence_table.tsv   (optional)
 --taxonomy       path/to/taxonomy_updated.tsv                   (optional)
 
@@ -19,21 +19,27 @@ under --outdir.
 Examples
 --------
 python isa_plots_cli.py \
-  --type-results  /.../indicspecies/type_group_indicator_species_results.tsv \
-  --status-results /.../indicspecies/status_indicator_species_results.tsv \
+  --group1-results  /.../indicspecies/group1_indicator_species_results.tsv \
+  --group2-results /.../indicspecies/group2_indicator_species_results.tsv \
   --venn          /.../metadata/Three_types_venn_presence_table.tsv \
   --taxonomy      /.../metadata/taxonomy_updated.tsv \
   --outdir        /.../indicspecies \
   --p-thresh 0.05 --stat-thresh 0.0 \
-  --type-index "1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush" \
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000" \
-  --status-index "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer" \
-  --status-palette "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"
+  --group1-index "1=BAL,2=Lung Brush,3=Oral Rinse" \
+  --group1-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" \
+  --group2-index "1=Cancer,2=Non-Cancer" \
+  --group2-palette "Cancer=#A50026,Non-Cancer=#FFFFFF"
+
+Palettes (and index-to-label lookups) can also be sourced from a metadata TSV by
+passing --metadata along with the relevant column names, avoiding long
+comma-separated CLI mappings.
 """
 
 import argparse
 from pathlib import Path
+from typing import Optional
 import warnings
+import re
 
 import numpy as np
 import pandas as pd
@@ -54,6 +60,8 @@ sns.set_style("white")
 
 
 # ------------------------------- Utilities ----------------------------------
+
+
 def parse_mapping(s: str) -> dict:
     """
     Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Lung Brush" into dict.
@@ -75,6 +83,97 @@ def parse_mapping(s: str) -> dict:
             continue
         out[k.strip()] = v.strip()
     return out
+
+
+def read_metadata_table(path: Optional[Path]) -> Optional[pd.DataFrame]:
+    if path is None:
+        return None
+    df = pd.read_csv(path, sep="\t", header=0)
+    return df
+
+
+def _normalize_index_key(val) -> str:
+    text = str(val).strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return text
+    try:
+        return str(int(float(text)))
+    except (ValueError, TypeError):
+        return text
+
+
+def _coerce_scalar(val):
+    if isinstance(val, pd.Series):
+        if val.empty:
+            return np.nan
+        return val.iloc[0]
+    return val
+
+
+def build_meta_mapping(df: pd.DataFrame, key_col: str, value_col: str,
+                       *, key_formatter=None, value_formatter=None) -> dict:
+    ensure_cols(df, [key_col, value_col], "metadata palette table")
+    sub = df[[key_col, value_col]].copy()
+    sub = sub.dropna(how="all")
+    mapping = {}
+    for _, row in sub.iterrows():
+        raw_key = _coerce_scalar(row[key_col])
+        raw_val = _coerce_scalar(row[value_col])
+        if pd.isna(raw_key) or pd.isna(raw_val):
+            continue
+        key = key_formatter(raw_key) if key_formatter else str(raw_key).strip()
+        val = value_formatter(raw_val) if value_formatter else str(raw_val).strip()
+        if key == "" or val == "":
+            continue
+        mapping.setdefault(key, val)
+    return mapping
+
+
+def extend_digit_keys(mapping: dict) -> dict:
+    out = dict(mapping)
+    for key, val in list(mapping.items()):
+        if isinstance(key, str) and key.isdigit():
+            out[int(key)] = val
+    return out
+
+
+def build_index_map_from_table(df: pd.DataFrame, idx_col: str, label_col: str) -> dict:
+    ensure_cols(df, [idx_col, label_col], "indicator results table")
+    mapping: dict = {}
+    for idx_val, label in zip(df[idx_col], df[label_col]):
+        idx_val = _coerce_scalar(idx_val)
+        label = _coerce_scalar(label)
+        if pd.isna(idx_val) or pd.isna(label):
+            continue
+        key = _normalize_index_key(idx_val)
+        text = str(label).strip()
+        if key and text:
+            mapping.setdefault(key, text)
+    return mapping
+
+
+def build_palette_from_table(df: pd.DataFrame, label_col: str, color_col: str) -> dict:
+    ensure_cols(df, [label_col, color_col], "indicator results table")
+    mapping: dict = {}
+    for label, color in zip(df[label_col], df[color_col]):
+        label = _coerce_scalar(label)
+        color = _coerce_scalar(color)
+        if pd.isna(label) or pd.isna(color):
+            continue
+        text = str(label).strip()
+        col = str(color).strip()
+        if text and col:
+            mapping.setdefault(text, col)
+    return mapping
+
+
+def sanitize_stub(name: str, fallback: str) -> str:
+    if not name:
+        return fallback
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(name).strip()).strip("_").lower()
+    return slug or fallback
 
 
 def normalize_combo(label: str) -> str:
@@ -198,7 +297,7 @@ def plot_p_vs_stat_no_overlap(
     y_col: str,
     hue_col: str | None = None,
     style_col: str | None = None,
-    type_palette: dict | None = None,
+    color_palette: dict | None = None,
     marker_dict: dict | None = None,
     # Jitter controls (normalized units)
     min_dist_x=0.02,
@@ -280,10 +379,16 @@ def plot_p_vs_stat_no_overlap(
     # Resolve hue palette
     palette = None
     if hue_col is not None:
-        if type_palette:
+        if color_palette:
             # Use given mapping, but only for categories present
-            present = [h for h in dd[hue_col].dropna().unique().tolist() if h in type_palette]
-            palette = {k: type_palette[k] for k in present}
+            present = dd[hue_col].dropna().unique().tolist()
+            palette = {}
+            for k in present:
+                if k in color_palette:
+                    palette[k] = color_palette[k]
+                else:
+                    palette[k] = color_palette.get("not_indicator", "lightgray")
+                    warnings.warn(f"Palette missing key '{k}', using fallback color.")
         else:
             palette = None  # default seaborn
 
@@ -299,19 +404,12 @@ def plot_p_vs_stat_no_overlap(
 
     # Legend handles
     color_handles = []
-    '''
-    if show_legend and hue_col is not None:
-        levels = dd[hue_col].dropna().unique().tolist()
-        if type_palette:
-            for name in levels:
-                col = type_palette.get(name, "lightgray")
-                '''
-    for name in type_palette:
-        col = type_palette.get(name, "lightgray")
+    legend_palette = palette if palette is not None else color_palette
+    for name, col in (legend_palette or {}).items():
         color_handles.append(
-        mlines.Line2D([], [], marker="o", linestyle="None",
-                        markerfacecolor=col, markeredgecolor="black",
-                        markeredgewidth=0.5, markersize=8, label=str(name))
+            mlines.Line2D([], [], marker="o", linestyle="None",
+                          markerfacecolor=col, markeredgecolor="black",
+                          markeredgewidth=0.5, markersize=8, label=str(name))
         )
 
     marker_handles = []
@@ -417,10 +515,10 @@ def main():
     ap = argparse.ArgumentParser(
         description="Refactored ISA plotting pipeline (indicspecies -> tidy tables + figures)."
     )
-    ap.add_argument("--type-results", type=Path, required=True,
-                    help="indicspecies sign table for type_group (TSV).")
-    ap.add_argument("--status-results", type=Path, required=True,
-                    help="indicspecies sign table for status (TSV).")
+    ap.add_argument("--group1-results", type=Path, required=True,
+                    help="indicspecies sign table for the first grouping (TSV).")
+    ap.add_argument("--group2-results", type=Path, required=True,
+                    help="indicspecies sign table for the second grouping (TSV).")
     ap.add_argument("--venn", type=Path, default=None,
                     help="Optional Venn presence table (cols: grouping, ASV_ID).")
     ap.add_argument("--taxonomy", type=Path, default=None,
@@ -431,24 +529,56 @@ def main():
     # Thresholds
     ap.add_argument("--p-thresh", type=float, default=0.05, help="p-value threshold (default: 0.05).")
     ap.add_argument("--stat-thresh", type=float, default=0.0, help="stat threshold (default: 0.0).")
+    ap.add_argument("--group1-name", default="Group1", help="Friendly name for the first grouping (used in legends/output names).")
+    ap.add_argument("--group2-name", default="Group2", help="Friendly name for the second grouping (used in legends/output names).")
 
     # Index maps
-    ap.add_argument("--type-index", type=str, required=True,
-                    help='Mapping of indicspecies "index" to labels, e.g. '
-                         '"1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush"')
-    ap.add_argument("--status-index", type=str, required=True,
-                    help='Mapping for status "index", e.g. "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer"')
+    ap.add_argument("--group1-index", type=str, default="",
+                    help='Mapping of indicspecies "index" to labels for group1, e.g. '
+                         '"1=BAL,2=Lung Brush,3=Oral Rinse" (optional if metadata columns provided).')
+    ap.add_argument("--group2-index", type=str, default="",
+                    help='Mapping for group2 "index" values, e.g. "1=Cancer,2=Non-Cancer" '
+                         '(optional if metadata columns provided).')
+    ap.add_argument("--group1-label-col", default=None,
+                    help="Column in the group1 results TSV containing the human-readable label for each index.")
+    ap.add_argument("--group1-color-col", default=None,
+                    help="Column in the group1 results TSV containing colors for each label.")
+    ap.add_argument("--group2-label-col", default=None,
+                    help="Column in the group2 results TSV containing the human-readable label for each index.")
+    ap.add_argument("--group2-color-col", default=None,
+                    help="Column in the group2 results TSV containing colors for each label.")
+    ap.add_argument("--group2-marker-col", default=None,
+                    help="Column in the group2 results TSV containing marker codes for each label.")
 
     # Palettes
-    ap.add_argument("--type-palette", type=str, required=True,
-                    help='Color map for type labels, e.g. '
-                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,'
-                         'BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,'
-                         'Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000"')
-    ap.add_argument("--status-palette", type=str, required=True,
-                    help='Color map for status, e.g. "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"')
-    ap.add_argument("--status-markers", type=str, default="Cancer=X,Non-Cancer=D,Cancer+Non-Cancer=o",
-                    help='Marker styles for status, e.g. "Cancer=X,Non-Cancer=D,Cancer+Non-Cancer=o"')
+    ap.add_argument("--group1-palette", type=str, default="",
+                    help='Color map for group1 labels, e.g. '
+                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" '
+                         '(optional if metadata columns provided).')
+    ap.add_argument("--group2-palette", type=str, default="",
+                    help='Color map for group2 labels, e.g. "Cancer=#A50026,Non-Cancer=#FFFFFF" '
+                         '(optional if metadata columns provided).')
+    ap.add_argument("--group2-markers", type=str, default="",
+                    help='Marker styles for group2, e.g. "Cancer=X,Non-Cancer=D" '
+                         '(optional if metadata columns provided).')
+
+    meta_opts = ap.add_argument_group("Metadata-derived mappings")
+    meta_opts.add_argument("--metadata", type=Path, default=None,
+                           help="Optional TSV containing group label/index/color/marker columns.")
+    meta_opts.add_argument("--group1-meta-index-col", default=None,
+                           help="Column in metadata mapping to group1 indices (used instead of --group1-index).")
+    meta_opts.add_argument("--group1-meta-label-col", default=None,
+                           help="Column in metadata providing group1 labels for palettes.")
+    meta_opts.add_argument("--group1-meta-color-col", default=None,
+                           help="Column in metadata providing hex/RGB colors for group1 labels.")
+    meta_opts.add_argument("--group2-meta-index-col", default=None,
+                           help="Column in metadata mapping to group2 indices (used instead of --group2-index).")
+    meta_opts.add_argument("--group2-meta-label-col", default=None,
+                           help="Column in metadata providing group2 labels.")
+    meta_opts.add_argument("--group2-meta-color-col", default=None,
+                           help="Column in metadata providing group2 colors.")
+    meta_opts.add_argument("--group2-meta-marker-col", default=None,
+                           help="Column in metadata providing matplotlib marker codes per group2 label.")
 
     # Column names in sign tables (robustness for variants)
     ap.add_argument("--p-col", default="p.value", help="Column name for p-values in sign tables (default: p.value).")
@@ -461,22 +591,27 @@ def main():
 
     args = ap.parse_args()
 
+    group1_title = args.group1_name
+    group2_title = args.group2_name
+    group1_stub = sanitize_stub(group1_title, "group1")
+    group2_stub = sanitize_stub(group2_title, "group2")
+
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
 
     # ---- Read inputs ----
-    tdf = pd.read_csv(args.type_results, sep="\t", header=0)
-    if tdf.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
+    g1_df = pd.read_csv(args.group1_results, sep="\t", header=0)
+    if g1_df.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
         # indicspecies export often lacks ASV column name; make it explicit
-        tdf.rename(columns={tdf.columns[0]: "ASV_ID"}, inplace=True)
+        g1_df.rename(columns={g1_df.columns[0]: "ASV_ID"}, inplace=True)
     else:
-        tdf.rename(columns={tdf.columns[0]: "ASV_ID"}, inplace=True)
+        g1_df.rename(columns={g1_df.columns[0]: "ASV_ID"}, inplace=True)
 
-    sdf = pd.read_csv(args.status_results, sep="\t", header=0)
-    if sdf.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
-        sdf.rename(columns={sdf.columns[0]: "ASV_ID"}, inplace=True)
+    g2_df = pd.read_csv(args.group2_results, sep="\t", header=0)
+    if g2_df.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
+        g2_df.rename(columns={g2_df.columns[0]: "ASV_ID"}, inplace=True)
     else:
-        sdf.rename(columns={sdf.columns[0]: "ASV_ID"}, inplace=True)
+        g2_df.rename(columns={g2_df.columns[0]: "ASV_ID"}, inplace=True)
 
     venn_df = None
     if args.venn and args.venn.exists():
@@ -488,42 +623,129 @@ def main():
     if args.taxonomy:
         tax_df = read_taxonomy_table(args.taxonomy)
 
-    # ---- Parse mappings/palettes ----
-    type_index_map = parse_mapping(args.type_index)
-    status_index_map = parse_mapping(args.status_index)
-    # Allow integer keys too:
-    type_index_map.update({int(k): v for k, v in list(type_index_map.items()) if k.isdigit()})
-    status_index_map.update({int(k): v for k, v in list(status_index_map.items()) if k.isdigit()})
+    palette_meta = read_metadata_table(args.metadata)
 
-    type_palette = parse_mapping(args.type_palette)
-    status_palette = parse_mapping(args.status_palette)
-    status_markers = parse_mapping(args.status_markers)
+    # ---- Parse mappings/palettes ----
+    group1_index_map: dict = {}
+    if palette_meta is not None and args.group1_meta_index_col and args.group1_meta_label_col:
+        group1_index_map.update(
+            build_meta_mapping(
+                palette_meta,
+                key_col=args.group1_meta_index_col,
+                value_col=args.group1_meta_label_col,
+                key_formatter=_normalize_index_key,
+                value_formatter=lambda x: str(x).strip(),
+            )
+        )
+    group1_index_map.update(parse_mapping(args.group1_index))
+    if not group1_index_map and args.group1_label_col:
+        group1_index_map.update(
+            build_index_map_from_table(g1_df, args.idx_col, args.group1_label_col)
+        )
+    if not group1_index_map:
+        raise ValueError("Provide group1 index mapping via --group1-index or metadata columns.")
+    group1_index_map = extend_digit_keys(group1_index_map)
+
+    group2_index_map: dict = {}
+    if palette_meta is not None and args.group2_meta_index_col and args.group2_meta_label_col:
+        group2_index_map.update(
+            build_meta_mapping(
+                palette_meta,
+                key_col=args.group2_meta_index_col,
+                value_col=args.group2_meta_label_col,
+                key_formatter=_normalize_index_key,
+                value_formatter=lambda x: str(x).strip(),
+            )
+        )
+    group2_index_map.update(parse_mapping(args.group2_index))
+    if not group2_index_map and args.group2_label_col:
+        group2_index_map.update(
+            build_index_map_from_table(g2_df, args.idx_col, args.group2_label_col)
+        )
+    if not group2_index_map:
+        raise ValueError("Provide group2 index mapping via --group2-index or metadata columns.")
+    group2_index_map = extend_digit_keys(group2_index_map)
+
+    group1_palette: dict = {}
+    if palette_meta is not None and args.group1_meta_label_col and args.group1_meta_color_col:
+        group1_palette.update(
+            build_meta_mapping(
+                palette_meta,
+                key_col=args.group1_meta_label_col,
+                value_col=args.group1_meta_color_col,
+                value_formatter=lambda x: str(x).strip(),
+            )
+        )
+    group1_palette.update(parse_mapping(args.group1_palette))
+    if not group1_palette and args.group1_label_col and args.group1_color_col:
+        group1_palette.update(
+            build_palette_from_table(g1_df, args.group1_label_col, args.group1_color_col)
+        )
+    if not group1_palette:
+        raise ValueError("Provide group1 palette via --group1-palette or metadata columns.")
+
+    group2_palette: dict = {}
+    if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_color_col:
+        group2_palette.update(
+            build_meta_mapping(
+                palette_meta,
+                key_col=args.group2_meta_label_col,
+                value_col=args.group2_meta_color_col,
+                value_formatter=lambda x: str(x).strip(),
+            )
+        )
+    group2_palette.update(parse_mapping(args.group2_palette))
+    if not group2_palette and args.group2_label_col and args.group2_color_col:
+        group2_palette.update(
+            build_palette_from_table(g2_df, args.group2_label_col, args.group2_color_col)
+        )
+    if not group2_palette:
+        raise ValueError("Provide group2 palette via --group2-palette or metadata columns.")
+
+    group2_markers: dict = {}
+    if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_marker_col:
+        group2_markers.update(
+            build_meta_mapping(
+                palette_meta,
+                key_col=args.group2_meta_label_col,
+                value_col=args.group2_meta_marker_col,
+                value_formatter=lambda x: str(x).strip(),
+            )
+        )
+    manual_markers = parse_mapping(args.group2_markers)
+    if manual_markers:
+        group2_markers.update(manual_markers)
+    if not group2_markers and args.group2_label_col and args.group2_marker_col:
+        group2_markers.update(
+            build_palette_from_table(g2_df, args.group2_label_col, args.group2_marker_col)
+        )
 
     # ---- Build significance tables ----
-    type_sig = compute_sig_table(
-        tdf, index_map=type_index_map, palette=type_palette,
+    group1_sig = compute_sig_table(
+        g1_df, index_map=group1_index_map, palette=group1_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=False, prefix="type"
+        force_all_sig=False, prefix="group1"
     )
-    type_sig.to_csv(outdir / "type_group_ISA_enriched.tsv", sep="\t", index=False)
+    group1_sig.to_csv(outdir / f"{group1_stub}_ISA_enriched.tsv", sep="\t", index=False)
 
-    status_sig = compute_sig_table(
-        sdf, index_map=status_index_map, palette=status_palette,
+    group2_sig = compute_sig_table(
+        g2_df, index_map=group2_index_map, palette=group2_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=False, prefix="status"
+        force_all_sig=False, prefix="group2"
     )
-    status_sig.to_csv(outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
+    group2_sig.to_csv(outdir / f"{group2_stub}_ISA_enriched.tsv", sep="\t", index=False)
 
     # ---- Type plot (ISA) ----
     plot_p_vs_stat_no_overlap(
-        type_sig,
-        outdir / "type_group_ISA_plot.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="type_label",
-        type_palette=type_palette,
+        group1_sig,
+        outdir / f"{group1_stub}_ISA_plot.svg",
+        x_col="group1_stat", y_col="group1_log_p",
+        hue_col="group1_label",
+        color_palette=group1_palette,
         plot_size_in=(args.plot_width, args.plot_height),
+        legend_color_title=group1_title,
     )
 
     # ---- Type plot using Venn membership (optional; force all sig for color only) ----
@@ -532,7 +754,7 @@ def main():
         # Map Venn label -> normalized, then to index_map labels
         # Convert to the index label set used in palette (normalize for consistent keys)
         # If a Venn label isn't present in your palette, it'll fall back to lightgray.
-        v_sub = tdf.copy()
+        v_sub = g1_df.copy()
         if "ASV_ID" not in v_sub.columns:
             v_sub.rename(columns={v_sub.columns[0]: "ASV_ID"}, inplace=True)
         v_sub["ASV_ID"] = v_sub["ASV_ID"].astype(str)
@@ -542,66 +764,68 @@ def main():
             v_sub, index_map={}, palette={},  # labels come from Venn below
             p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
             p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-            force_all_sig=True, prefix="type"
+            force_all_sig=True, prefix="group1"
         )
-        venn_sig["type_label"] = venn_sig["ASV_ID"].map(vmap).map(normalize_combo).fillna("not_indicator")
+        venn_sig["group1_label"] = venn_sig["ASV_ID"].map(vmap).map(normalize_combo).fillna("not_indicator")
         # Convert Venn labels to palette keys if you used a different wording
         # Example mapping often needed:
         # "Oral Rinse + BAL" -> "BAL+Oral Rinse"
-        venn_label_to_palette_key = {normalize_combo(k): k for k in type_palette.keys()}  # identity by default
-        venn_sig["type_label"] = venn_sig["type_label"].map(lambda s: venn_label_to_palette_key.get(s, s))
-        venn_sig["type_color"] = venn_sig["type_label"].map(lambda k: type_palette.get(k, "lightgray"))
+        venn_label_to_palette_key = {normalize_combo(k): k for k in group1_palette.keys()}  # identity by default
+        venn_sig["group1_label"] = venn_sig["group1_label"].map(lambda s: venn_label_to_palette_key.get(s, s))
+        venn_sig["group1_color"] = venn_sig["group1_label"].map(lambda k: group1_palette.get(k, "lightgray"))
 
-        venn_sig.to_csv(outdir / "type_group_Venn_enriched.tsv", sep="\t", index=False)
+        venn_sig.to_csv(outdir / f"{group1_stub}_venn_enriched.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
             venn_sig,
-            outdir / "type_group_Venn_plot.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="type_label",
-            type_palette=type_palette,
+            outdir / f"{group1_stub}_Venn_plot.svg",
+            x_col="group1_stat", y_col="group1_log_p",
+            hue_col="group1_label",
+            color_palette=group1_palette,
             plot_size_in=(args.plot_width, args.plot_height),
+            legend_color_title=group1_title,
         )
 
     # ---- Status plot (ISA) ----
     plot_p_vs_stat_no_overlap(
-        status_sig,
-        outdir / "status_ISA_plot.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="status_label",
-        type_palette=status_palette,
+        group2_sig,
+        outdir / f"{group2_stub}_ISA_plot.svg",
+        x_col="group2_stat", y_col="group2_log_p",
+        hue_col="group2_label",
+        color_palette=group2_palette,
         plot_size_in=(args.plot_width, args.plot_height),
+        legend_color_title=group2_title,
     )
 
-    # ---- Combined tables/plots: join type + status on ASV ----
-    combined = pd.merge(type_sig[["ASV_ID", "type_stat", "type_p_value", "type_log_p",
-                                  "type_significance", "type_label", "type_color"]],
-                        status_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
-                                    "status_significance", "status_label"]],
+    # ---- Combined tables/plots: join group1 + group2 on ASV ----
+    combined = pd.merge(group1_sig[["ASV_ID", "group1_stat", "group1_p_value", "group1_log_p",
+                                    "group1_significance", "group1_label", "group1_color"]],
+                        group2_sig[["ASV_ID", "group2_stat", "group2_p_value", "group2_log_p",
+                                    "group2_significance", "group2_label"]],
                         on="ASV_ID", how="outer")
-    combined.to_csv(outdir / "Type_status_ISA_results.tsv", sep="\t", index=False)
+    combined.to_csv(outdir / f"{group1_stub}_{group2_stub}_ISA_results.tsv", sep="\t", index=False)
 
     plot_p_vs_stat_no_overlap(
         combined,
         outdir / "Combined_ISA_plot.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="type_label", style_col="status_label",
-        type_palette=type_palette, marker_dict=status_markers,
-        legend_color_title="Type", legend_marker_title="Status",
+        x_col="group2_stat", y_col="group2_log_p",
+        hue_col="group1_label", style_col="group2_label",
+        color_palette=group1_palette, marker_dict=group2_markers,
+        legend_color_title=group1_title, legend_marker_title=group2_title,
         plot_size_in=(args.plot_width, args.plot_height),
     )
 
     # ---- Phylum-colored variants (if taxonomy provided) ----
     if tax_df is not None:
         # For Type ISA
-        type_tax = type_sig.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
-        phyla = type_tax["Phylum"].dropna().unique().tolist()
+        group1_tax = group1_sig.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
+        phyla = group1_tax["Phylum"].dropna().unique().tolist()
         phyl_pal = {p: c for p, c in zip(phyla, sns.color_palette('tab20', len(phyla)).as_hex())}
-        type_tax.to_csv(outdir / "type_group_ISA_with_taxonomy.tsv", sep="\t", index=False)
+        group1_tax.to_csv(outdir / f"{group1_stub}_ISA_with_taxonomy.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
-            type_tax,
-            outdir / "type_group_ISA_plot_Phylum.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="Phylum", type_palette=phyl_pal,
+            group1_tax,
+            outdir / f"{group1_stub}_ISA_plot_Phylum.svg",
+            x_col="group1_stat", y_col="group1_log_p",
+            hue_col="Phylum", color_palette=phyl_pal,
             legend_color_title="Phylum",
             plot_size_in=(args.plot_width, args.plot_height),
         )
@@ -612,10 +836,10 @@ def main():
         plot_p_vs_stat_no_overlap(
             comb_tax,
             outdir / "Combined_ISA_plot_Phylum.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="Phylum", style_col="status_label",
-            type_palette=phyl_pal, marker_dict=status_markers,
-            legend_color_title="Phylum", legend_marker_title="Status",
+            x_col="group2_stat", y_col="group2_log_p",
+            hue_col="Phylum", style_col="group2_label",
+            color_palette=phyl_pal, marker_dict=group2_markers,
+            legend_color_title="Phylum", legend_marker_title=group2_title,
             plot_size_in=(args.plot_width, args.plot_height),
         )
 

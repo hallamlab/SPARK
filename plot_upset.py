@@ -3,47 +3,55 @@
 asv_overlap.py
 -------------
 Unified CLI to generate UpSet & Venn-style set intersections for ASV data.
-
 Supports:
 - Microbial and/or mitochondrial runs
 - Unique-membership UpSet (counts of ASVs)
 - Abundance-weighted UpSet with stacked bars by category
-- Venn plots (3-set via matplotlib-venn; 4–6 sets via `venn` package if available)
+- Optional Venn plots (can be disabled with --skip-venn)
 - Presence tables (exclusive membership lists) and exclusive-sum tables
+- Fully generalized grouping via metadata column
+- Color mapping from metadata Color column
 
 Examples
 --------
-# Microbial only, default 5-group set & 3-group set, SVG+PDF
+# Basic run with depth groups
 python asv_overlap.py \
-  --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
+  --data-dir /home/ryan/SeqData \
   --domain micro \
+  --group-col Depth \
+  --color-col Color \
   --formats svg,pdf
 
-# Include mito as well, custom group lists, PNG
+# Skip venn plots for many groups
 python asv_overlap.py \
   --data-dir /data/run1 \
   --domain both \
-  --five-groups "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
-  --three-groups "Oral Rinse,BAL,Lung Brush" \
+  --group-col SampleType \
+  --color-col Color \
+  --skip-venn \
   --formats png
 
-python asv_overlap.py --data-dir /data/run1 --domain micro
+# Run with subset of groups
+python asv_overlap.py \
+  --data-dir /data/run1 \
+  --domain micro \
+  --group-col Depth \
+  --color-col Color \
+  --subset-groups "10,40,60" \
+  --formats pdf
 """
-
 from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
 from itertools import combinations
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
-
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Patch
-
 import seaborn as sns
 from upsetplot import from_contents, UpSet
 
@@ -61,7 +69,6 @@ try:
 except Exception:
     pass
 
-
 # ---------- Matplotlib / seaborn defaults ----------
 mpl.rcParams['pdf.fonttype'] = 42
 mpl.rcParams['svg.fonttype'] = 'none'
@@ -69,7 +76,6 @@ mpl.rcParams['savefig.dpi'] = 600
 plt.rcParams.update({'font.size': 12, 'font.family': 'Source Sans Pro'})
 sns.set_theme()
 sns.set_style("white")
-
 
 # ---------- Utility ----------
 def split_taxa_string(taxa_str: str, delimiter: str = ';') -> Dict[str, Optional[str]]:
@@ -83,10 +89,8 @@ def split_taxa_string(taxa_str: str, delimiter: str = ';') -> Dict[str, Optional
         out[lvl] = parts[i] if i < len(parts) else None
     return out
 
-
 def ensure_dir(path: str | Path) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
-
 
 def to_bool_series(members: Mapping[str, set], elements: Iterable[str]) -> pd.DataFrame:
     """
@@ -100,7 +104,6 @@ def to_bool_series(members: Mapping[str, set], elements: Iterable[str]) -> pd.Da
         data[:, j] = [e in s for e in elements]
     df = pd.DataFrame(data, index=elements, columns=cols)
     return df
-
 
 def exclusive_sets(name_to_set: Mapping[str, set]) -> Dict[Tuple[str, ...], List[str]]:
     """
@@ -123,21 +126,18 @@ def exclusive_sets(name_to_set: Mapping[str, set]) -> Dict[Tuple[str, ...], List
                 out[tuple(combo)] = sorted(members)
     return out
 
-
-def composite_color(colors: Sequence[str], alpha: float = 0.6) -> str:
-    """
-    Simple alpha compositing of a sequence of colors (front-to-back, last on top).
-    """
-    rgba = np.array([mcolors.to_rgba(c, alpha=alpha) for c in colors])
-    # start with back-most:
-    acc_rgb = rgba[0, :3]
-    acc_a = rgba[0, 3]
-    for over in rgba[1:]:
-        a_o = over[3]
-        acc_rgb = over[:3] * a_o + acc_rgb * (1 - a_o)
-        acc_a = a_o + acc_a * (1 - a_o)
-    return mcolors.to_hex(acc_rgb, keep_alpha=False)
-
+def sort_groups(groups: Sequence[str]) -> List[str]:
+    """Sort groups - numerically if possible, otherwise alphabetically."""
+    try:
+        # Try to sort as integers
+        return sorted(groups, key=lambda x: int(x))
+    except (ValueError, TypeError):
+        try:
+            # Try to sort as floats
+            return sorted(groups, key=lambda x: float(x))
+        except (ValueError, TypeError):
+            # Fall back to string sorting
+            return sorted(groups, key=str)
 
 # ---------- IO layer ----------
 class Inputs:
@@ -156,13 +156,13 @@ class Inputs:
             self.asv_final = self.data_dir / subdir / "ASVs" / "ASV_final.micro.tsv"
             self.meta = self.data_dir / subdir / "metadata" / "metadata_updated_micro.tsv"
             # taxonomy shared across domains by default
-            self.tax = taxonomy_path or (self.data_dir / subdir / "metadata" / "taxonomy_updated.tsv")
+            self.tax = taxonomy_path or (self.data_dir / subdir / "taxonomy" / "ASV_SILVA_tax.full-length.vsearch.tsv")
             self.out_base = self.data_dir / subdir / "metadata"
         elif domain == "mito":
             self.asv_raw = self.data_dir / subdir / "mito" / "ASVs" / "ASV_target.mito.tsv"
             self.asv_final = self.data_dir / subdir / "mito" / "ASVs" / "ASV_final.mito.tsv"
             self.meta = self.data_dir / subdir / "mito" / "metadata" / "metadata_updated_mito.tsv"
-            self.tax = taxonomy_path or (self.data_dir / subdir / "metadata" / "taxonomy_updated.tsv")
+            self.tax = taxonomy_path or (self.data_dir / subdir / "taxonomy" / "ASV_SILVA_tax.full-length.vsearch.tsv")
             self.out_base = self.data_dir / subdir / "mito" / "metadata"
         else:
             raise ValueError("domain must be 'micro' or 'mito'")
@@ -170,18 +170,18 @@ class Inputs:
     def __repr__(self) -> str:
         return f"Inputs(domain={self.domain}, raw={self.asv_raw}, final={self.asv_final}, meta={self.meta}, tax={self.tax})"
 
-
 def read_asv_table(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", index_col=0)
     # Normalize sample names (drop paths and read pair endings)
-    df.columns = [str(c).split('/')[-1].rsplit('_', 2)[0] for c in df.columns]
     return df
 
-
-def read_metadata(path: Path) -> pd.DataFrame:
+def read_metadata(path: Path, group_col: str, color_col: str) -> pd.DataFrame:
     md = pd.read_csv(path, sep="\t", dtype=str)
+    # Validate required columns
+    for col in [group_col, color_col]:
+        if col not in md.columns:
+            raise ValueError(f"Metadata missing required column: '{col}'. Available: {list(md.columns)}")
     return md
-
 
 def read_taxonomy(path: Path) -> pd.DataFrame:
     tx = pd.read_csv(path, sep="\t")
@@ -195,7 +195,6 @@ def read_taxonomy(path: Path) -> pd.DataFrame:
         raise ValueError("taxonomy file must have ASV_ID or Feature ID column")
     return tx
 
-
 def attach_taxonomy(long_df: pd.DataFrame, tax_df: pd.DataFrame) -> pd.DataFrame:
     merged = long_df.merge(tax_df, how="left", left_on="ASV_ID", right_index=True)
     # expand taxon string if present
@@ -205,12 +204,10 @@ def attach_taxonomy(long_df: pd.DataFrame, tax_df: pd.DataFrame) -> pd.DataFrame
         merged = pd.concat([merged, tax_exp], axis=1)
     return merged
 
-
 # ---------- UpSet builders ----------
 def build_upset_unique(group_sets: Mapping[str, set]) -> pd.Series:
     """Series with MultiIndex booleans -> counts (unique elements)."""
     return from_contents(group_sets)  # direct counts
-
 
 def build_upset_weighted_rows(
     group_sets: Mapping[str, set],
@@ -220,7 +217,6 @@ def build_upset_weighted_rows(
     """
     Build a DataFrame suitable for UpSet(..., sum_over='count') and
     .add_stacked_bars(by='group', sum_over='count').
-
     Rows are ASV×group (only where ASV in that group's set).
     Columns are membership indicators for ALL groups (booleans),
     and two extra columns: 'group' and 'count'.
@@ -242,20 +238,19 @@ def build_upset_weighted_rows(
     df = df[[*group_order, 'ASV_ID', 'group', 'count']]
     return df
 
-
 # ---------- Plotters ----------
 def savefig_multi(fig: plt.Figure, out_path_base: Path, name: str, formats: Sequence[str]) -> None:
     for ext in formats:
         fig.savefig(out_path_base.with_name(f"{out_path_base.stem}_{name}.{ext}"), bbox_inches="tight")
     plt.close(fig)
 
-
 def plot_upset_unique(
     group_sets: Mapping[str, set],
     colors: Mapping[str, str],
     title: str,
     out_base: Path,
-    formats: Sequence[str]
+    formats: Sequence[str],
+    group_col: str
 ) -> None:
     rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
     data = build_upset_unique(rev_grp_sets)
@@ -275,9 +270,8 @@ def plot_upset_unique(
     fig.suptitle(title, y=0.98)
     # legend
     handles = [Patch(facecolor=colors[g], edgecolor="black", label=g) for g in group_sets.keys()]
-    fig.legend(handles=handles, title='Type', bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
+    fig.legend(handles=handles, title=group_col, bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
     savefig_multi(fig, out_base, "upset", formats)
-
 
 def plot_upset_weighted(
     group_sets: Mapping[str, set],
@@ -286,17 +280,17 @@ def plot_upset_weighted(
     colors: Mapping[str, str],
     title: str,
     out_base: Path,
-    formats: Sequence[str]
+    formats: Sequence[str],
+    group_col: str
 ) -> None:
     rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
     df = build_upset_weighted_rows(rev_grp_sets, per_group_values, group_order)
     contents = {c: set(df.loc[df[c].astype(bool), 'ASV_ID']) for c in group_order[::-1]}
     weights = df.groupby(['ASV_ID', 'group'])['count'].sum().reset_index().set_index('ASV_ID')
-    # ★ Force custom stacking order here
+    # Force custom stacking order here
     weights['group'] = pd.Categorical(weights['group'],
                                       categories=list(group_order),
                                       ordered=True)
-
     ser = from_contents(contents, data=weights)
     upset = UpSet(
         ser, sum_over='count', subset_size='sum',
@@ -306,7 +300,7 @@ def plot_upset_weighted(
     )
     for g, c in colors.items():
         upset.style_categories([g], bar_facecolor=c, bar_edgecolor="black")
-    upset.add_stacked_bars(by="group", sum_over="count", colors=colors, title="Abundance by Type", elements=10)
+    upset.add_stacked_bars(by="group", sum_over="count", colors=colors, title=f"Abundance by {group_col}", elements=10)
     fig = plt.figure(figsize=(12, 8))
     mpl.rcParams["font.size"] = 6
     axes = upset.plot(fig=fig)
@@ -317,10 +311,9 @@ def plot_upset_weighted(
         order = list(group_order)
         handles = [handles[labels.index(o)] for o in order if o in labels]
         labels = [o for o in order if o in labels]
-        ax_extra.legend(handles, labels, title='Type', bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
+        ax_extra.legend(handles, labels, title=group_col, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
     fig.suptitle(title, y=1.02)
     savefig_multi(fig, out_base, "upset_weighted", formats)
-
 
 def plot_venn(
     group_sets: Mapping[str, set],
@@ -336,7 +329,7 @@ def plot_venn(
     """
     names = list(group_sets.keys())
     sets = [group_sets[n] for n in names]
-
+    
     if len(names) == 2 and _HAVE_MPL_VENN:
         fig = plt.figure(figsize=(6, 6))
         venn2([sets[0], sets[1]], tuple(names),
@@ -344,7 +337,7 @@ def plot_venn(
         plt.title(title)
         savefig_multi(fig, out_base, "venn", formats)
         return
-
+    
     if len(names) == 3 and _HAVE_MPL_VENN:
         fig = plt.figure(figsize=(6, 6))
         if weighted_labels is None:
@@ -352,7 +345,6 @@ def plot_venn(
                   set_colors=(colors[names[0]], colors[names[1]], colors[names[2]]), alpha=0.6)
         else:
             # matplotlib-venn supports dict 'subsets' with binary keys like '100','010',...
-            # Build mapping
             label_map = {
                 (names[0],): '100',
                 (names[1],): '010',
@@ -372,35 +364,27 @@ def plot_venn(
         plt.title(title)
         savefig_multi(fig, out_base, "venn", formats)
         return
-
+    
     if 4 <= len(names) <= 6 and _HAVE_VENN:
-        # Make sure each entry is a Python set
         labels2sets = {n: set(s) for n, s in zip(names, sets)}
-
-        # Optional: bail if everything is empty to avoid blank plots
         if not any(len(s) for s in labels2sets.values()):
             print("All Venn sets are empty; skipping Venn plot.")
         else:
             fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
-
-            # Draw into the Axes we just created
             ax = venn(
                 labels2sets,
                 ax=ax,
-                cmap=[colors[n] for n in names],  # works with the `venn` package
+                cmap=[colors[n] for n in names],
                 fontsize=8,
                 alpha=0.45,
             )
             ax.set_title(title)
-
             savefig_multi(fig, out_base, "venn", formats)
             plt.close(fig)
             return
-
-
-    # Fallback: skip venn if no backend
-    print(f"[WARN] Venn plotting not available for {len(names)} sets (matplotlib-venn or venn not installed). Skipping.")
-
+    
+    # Fallback: skip venn if no backend or too many groups
+    print(f"[WARN] Venn plotting not available for {len(names)} sets (matplotlib-venn or venn not installed, or >6 sets). Skipping.")
 
 def write_presence_and_sums(
     name_to_set: Mapping[str, set],
@@ -426,180 +410,188 @@ def write_presence_and_sums(
     sums = pd.DataFrame(rows2, columns=["grouping", "Sum_count"])
     sums.to_csv(out_base.with_name(f"{out_base.stem}_{fname_prefix}_venn_sum_table.tsv"), sep="\t", index=False)
 
-
 # ---------- Pipeline per domain ----------
 def run_domain(
     inp: Inputs,
-    five_groups: Sequence[str],
-    three_groups: Sequence[str],
-    do_composite_oral_lung: bool,
+    id_col: str,
+    group_col: str,
+    color_col: str,
+    subset_groups: Optional[Sequence[str]],
+    use_raw: bool,
+    use_final: bool,
+    skip_venn: bool,
     formats: Sequence[str],
-    palette_5: Mapping[str, str],
-    palette_3: Mapping[str, str],
 ) -> None:
     ensure_dir(inp.out_base)
-
+    
     # Read
-    raw_df = read_asv_table(inp.asv_raw)
-    final_df = read_asv_table(inp.asv_final)
-    md = read_metadata(inp.meta)
+    raw_df = read_asv_table(inp.asv_raw) if use_raw else None
+    final_df = read_asv_table(inp.asv_final) if use_final else None
+    md = read_metadata(inp.meta, group_col, color_col)
     tx = read_taxonomy(inp.tax)
-
-    # Long (raw + final) and merge
+    
+    # Build palette from metadata (group -> color mapping)
+    palette_df = md[[group_col, color_col]].drop_duplicates()
+    palette = dict(zip(palette_df[group_col], palette_df[color_col]))
+    
+    # Sort groups
+    all_groups = sort_groups(list(palette.keys()))
+    
+    # Filter to subset if specified
+    if subset_groups:
+        all_groups = [g for g in all_groups if g in subset_groups]
+        palette = {g: palette[g] for g in all_groups if g in palette}
+    
+    print(f"[{inp.domain}] Groups (in order): {all_groups}")
+    print(f"[{inp.domain}] Palette: {palette}")
+    
+    # Long format helper
     def melt_counts(count_df: pd.DataFrame) -> pd.DataFrame:
         st = count_df.stack().reset_index()
-        st.columns = ['ASV_ID', 'sample', 'count']
+        st.columns = ['ASV_ID', id_col, 'count']
         return st
-
-    raw_long = melt_counts(raw_df)
-    final_long = melt_counts(final_df)
-
-    # Merge with metadata
-    raw_long = raw_long.merge(md, how="left", on="sample")
-    final_long = final_long.merge(md, how="left", on="sample")
-
-    # Filter positives
-    raw_pos = raw_long[raw_long['count'] > 0].copy()
-    final_pos = final_long[final_long['count'] > 0].copy()
-
-    # Taxonomy
-    raw_tx = attach_taxonomy(raw_pos, tx)
-    fin_tx = attach_taxonomy(final_pos, tx)
-
-    # Per-ASV totals and per-(group, ASV) totals
-    raw_asv_total = raw_tx.groupby("ASV_ID")["count"].sum().to_dict()
-    fin_asv_total = fin_tx.groupby("ASV_ID")["count"].sum().to_dict()
-    raw_type_asv_total = raw_tx.groupby(["type_group", "ASV_ID"])["count"].sum().to_dict()
-    fin_type_asv_total = fin_tx.groupby(["type_group", "ASV_ID"])["count"].sum().to_dict()
-
-    # ---------------- Five-group suite (raw) ----------------
-    five_present = [g for g in five_groups if g in set(raw_tx['type_group'].unique())]
-    five_sets = {g: set(raw_tx.loc[raw_tx['type_group'] == g, 'ASV_ID']) for g in five_present}
-    if len(five_sets) >= 2:
-        base = inp.out_base / f"All_types_{inp.domain}"
-        # UpSet unique
-        plot_upset_unique(five_sets, {g: palette_5[g] for g in five_present},
-                          "ASV Membership by Type", base, formats)
-        # UpSet weighted (raw-type totals)
-        plot_upset_weighted(five_sets, raw_type_asv_total, five_present,
-                            {g: palette_5[g] for g in five_present},
-                            "ASV Abundance by Type", base, formats)
-        # Venn (cardinalities)
-        plot_venn(five_sets, {g: palette_5[g] for g in five_present},
-                  "Venn: ASV Membership (Top-level Types)", base, formats)
-        # Tables
-        write_presence_and_sums(five_sets, raw_asv_total, base, "All_types")
-    else:
-        print(f"[{inp.domain}] Skipping 5-group suite (need ≥2 present groups).")
-
-    # ---------------- Three-group suite (final) ----------------
-    three_present = [g for g in three_groups if g in set(fin_tx['type_group'].unique())]
-    three_sets = {g: set(fin_tx.loc[fin_tx['type_group'] == g, 'ASV_ID']) for g in three_present}
-    if len(three_sets) >= 2:
-        base = inp.out_base / f"Three_types_{inp.domain}"
-        # UpSet unique
-        plot_upset_unique(three_sets, {g: palette_3[g] for g in three_present},
-                          "ASV Membership by Type", base, formats)
-        # UpSet weighted (final-type totals)
-        plot_upset_weighted(three_sets, fin_type_asv_total, three_present,
-                            {g: palette_3[g] for g in three_present},
-                            "ASV Abundance by Type", base, formats)
-        # Venn (cardinalities)
-        plot_venn(three_sets, {g: palette_3[g] for g in three_present},
-                  "Venn: ASV Membership (Three Types)", base, formats)
-        # Tables
-        write_presence_and_sums(three_sets, fin_asv_total, base, "Three_types")
-    else:
-        print(f"[{inp.domain}] Skipping 3-group suite (need ≥2 present groups).")
-
-    # ---------------- Composite Oral/Lung vs Skin vs Scope (raw) ------------
-    if do_composite_oral_lung:
-        comp_map = {'Oral Rinse': 'Oral/Lung', 'BAL': 'Oral/Lung', 'Lung Brush': 'Oral/Lung'}
-        comp_palette = {
-            'Skin Brush': '#CC79A7',
-            'Scope Flush': '#E69F00',
-            'Oral/Lung': composite_color(['#6A3D9A', '#0072B2', '#009E73'], alpha=0.6),
-        }
-        comp_tx = raw_tx.copy()
-        comp_tx['type_group'] = comp_tx['type_group'].replace(comp_map)
-        comp_groups = ['Skin Brush', 'Scope Flush', 'Oral/Lung']
-        comp_present = [g for g in comp_groups if g in set(comp_tx['type_group'].unique())]
-        comp_sets = {g: set(comp_tx.loc[comp_tx['type_group'] == g, 'ASV_ID']) for g in comp_present}
-        if len(comp_sets) >= 2:
-            base = inp.out_base / f"Three_vs_controls_{inp.domain}"
-            plot_upset_unique(comp_sets, {g: comp_palette[g] for g in comp_present},
-                              "ASV Membership by Type", base, formats)
-            # weighted with raw per-type sums *after* replace
-            comp_totals = comp_tx.groupby(["type_group", "ASV_ID"])["count"].sum().to_dict()
-            plot_upset_weighted(comp_sets, comp_totals, comp_present,
-                                {g: comp_palette[g] for g in comp_present},
-                                "ASV Abundance by Type", base, formats)
-            plot_venn(comp_sets, {g: comp_palette[g] for g in comp_present},
-                      "Venn: Skin vs Scope vs Oral/Lung", base, formats)
-            write_presence_and_sums(comp_sets, raw_asv_total, base, "Three_vs_controls")
+    
+    # Process raw data
+    if use_raw and raw_df is not None:
+        raw_long = melt_counts(raw_df)
+        raw_long = raw_long.merge(md, how="left", on=id_col)
+        raw_pos = raw_long[raw_long['count'] > 0].copy()
+        raw_tx = attach_taxonomy(raw_pos, tx)
+        
+        # Per-ASV totals and per-(group, ASV) totals
+        raw_asv_total = raw_tx.groupby("ASV_ID")["count"].sum().to_dict()
+        raw_group_asv_total = raw_tx.groupby([group_col, "ASV_ID"])["count"].sum().to_dict()
+        
+        # Build sets
+        groups_present = [g for g in all_groups if g in set(raw_tx[group_col].unique())]
+        group_sets = {g: set(raw_tx.loc[raw_tx[group_col] == g, 'ASV_ID']) for g in groups_present}
+        
+        if len(group_sets) >= 2:
+            base = inp.out_base / f"raw_{inp.domain}"
+            
+            # UpSet unique
+            plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
+                            f"ASV Membership by {group_col} (Raw)", base, formats, group_col)
+            
+            # UpSet weighted
+            plot_upset_weighted(group_sets, raw_group_asv_total, groups_present,
+                              {g: palette[g] for g in groups_present},
+                              f"ASV Abundance by {group_col} (Raw)", base, formats, group_col)
+            
+            # Venn (optional)
+            if not skip_venn:
+                plot_venn(group_sets, {g: palette[g] for g in groups_present},
+                         f"Venn: ASV Membership (Raw)", base, formats)
+            
+            # Tables
+            write_presence_and_sums(group_sets, raw_asv_total, base, "raw")
         else:
-            print(f"[{inp.domain}] Skipping composite suite (need ≥2 present groups).")
+            print(f"[{inp.domain}] Skipping raw suite (need ≥2 present groups).")
+    
+    # Process final data
+    if use_final and final_df is not None:
+        final_long = melt_counts(final_df)
+        final_long = final_long.merge(md, how="left", on=id_col)
+        final_pos = final_long[final_long['count'] > 0].copy()
+        fin_tx = attach_taxonomy(final_pos, tx)
+        
+        # Per-ASV totals and per-(group, ASV) totals
+        fin_asv_total = fin_tx.groupby("ASV_ID")["count"].sum().to_dict()
+        fin_group_asv_total = fin_tx.groupby([group_col, "ASV_ID"])["count"].sum().to_dict()
+        
+        # Build sets
+        groups_present = [g for g in all_groups if g in set(fin_tx[group_col].unique())]
+        group_sets = {g: set(fin_tx.loc[fin_tx[group_col] == g, 'ASV_ID']) for g in groups_present}
+        
+        if len(group_sets) >= 2:
+            base = inp.out_base / f"final_{inp.domain}"
+            
+            # UpSet unique
+            plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
+                            f"ASV Membership by {group_col} (Final)", base, formats, group_col)
+            
+            # UpSet weighted
+            plot_upset_weighted(group_sets, fin_group_asv_total, groups_present,
+                              {g: palette[g] for g in groups_present},
+                              f"ASV Abundance by {group_col} (Final)", base, formats, group_col)
+            
+            # Venn (optional)
+            if not skip_venn:
+                plot_venn(group_sets, {g: palette[g] for g in groups_present},
+                         f"Venn: ASV Membership (Final)", base, formats)
+            
+            # Tables
+            write_presence_and_sums(group_sets, fin_asv_total, base, "final")
+        else:
+            print(f"[{inp.domain}] Skipping final suite (need ≥2 present groups).")
 
 # ---------- CLI ----------
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="ASV overlap (UpSet & Venn) plotter")
     ap.add_argument("--data-dir", required=True, help="Project root directory")
-    ap.add_argument("--subdir", default="spark_combined_output", help="Root subdir with outputs")
+    ap.add_argument("--subdir", default="spark_output", help="Root subdir with outputs")
     ap.add_argument("--domain", choices=["micro", "mito", "both"], default="micro",
                     help="Which domain(s) to run")
     ap.add_argument("--taxonomy-path", default=None,
-                    help="Optional path to taxonomy_updated.tsv (defaults to <subdir>/metadata/taxonomy_updated.tsv)")
+                    help="Optional path to taxonomy, should point to <subdir>/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv")
+    
+    # Grouping and colors
+    ap.add_argument("--sample-id-col", default="sampleID", help="Metadata column with sample IDs")
+    ap.add_argument("--group-col", required=True, help="Metadata column for grouping (e.g., Depth, SampleType)")
+    ap.add_argument("--color-col", default="Color", help="Metadata column with color values (hex codes)")
+    ap.add_argument("--subset-groups", default=None,
+                    help="Optional comma-separated list of groups to include (subset of all groups)")
+    
+    # Data selection
+    ap.add_argument("--use-raw", action="store_true", default=True, help="Process raw ASV data")
+    ap.add_argument("--use-final", action="store_true", default=True, help="Process final ASV data")
+    ap.add_argument("--raw-only", action="store_true", help="Only process raw data (shortcut)")
+    ap.add_argument("--final-only", action="store_true", help="Only process final data (shortcut)")
+    
+    # Plotting options
+    ap.add_argument("--skip-venn", action="store_true",
+                    help="Skip Venn diagram generation (useful for >3-5 groups)")
     ap.add_argument("--formats", default="svg,pdf",
                     help="Comma-separated figure formats: e.g., svg,pdf,png")
-    ap.add_argument("--five-groups", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush",
-                    help="Comma list for the 5-group suite (raw ASVs)")
-    ap.add_argument("--three-groups", default="Oral Rinse,BAL,Lung Brush",
-                    help="Comma list for the 3-group suite (final ASVs)")
-    ap.add_argument("--do-composite-oral-lung", action="store_true",
-                    help="Also make Skin vs Scope vs Oral/Lung composite (raw)")
-    # Colors (defaults match your originals)
-    ap.add_argument("--color-skin", default="#CC79A7")
-    ap.add_argument("--color-scope", default="#E69F00")
-    ap.add_argument("--color-oral", default="#6A3D9A")
-    ap.add_argument("--color-bal", default="#0072B2")
-    ap.add_argument("--color-lung", default="#009E73")
+    
     return ap.parse_args()
-
 
 def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir)
     taxonomy_path = Path(args.taxonomy_path) if args.taxonomy_path else None
     formats = [f.strip().lstrip(".") for f in args.formats.split(",") if f.strip()]
-
-    five_groups = [g.strip() for g in args.five_groups.split(",") if g.strip()]
-    three_groups = [g.strip() for g in args.three_groups.split(",") if g.strip()]
-
-    palette_5 = {
-        'Skin Brush': args.color_skin,
-        'Scope Flush': args.color_scope,
-        'Oral Rinse': args.color_oral,
-        'BAL': args.color_bal,
-        'Lung Brush': args.color_lung,
-    }
-    palette_3 = {
-        'Oral Rinse': args.color_oral,
-        'BAL': args.color_bal,
-        'Lung Brush': args.color_lung,
-    }
-
+    
+    # Parse subset groups if provided
+    subset_groups = None
+    if args.subset_groups:
+        subset_groups = [g.strip() for g in args.subset_groups.split(",") if g.strip()]
+    
+    # Determine which data to process
+    use_raw = args.use_raw
+    use_final = args.use_final
+    if args.raw_only:
+        use_raw = True
+        use_final = False
+    elif args.final_only:
+        use_raw = False
+        use_final = True
+    
     domains = ["micro", "mito"] if args.domain == "both" else [args.domain]
+    
     for dom in domains:
         inp = Inputs(data_dir=data_dir, subdir=args.subdir, domain=dom, taxonomy_path=taxonomy_path)
         print(f"[INFO] Running {inp}")
         run_domain(
             inp=inp,
-            five_groups=five_groups,
-            three_groups=three_groups,
-            do_composite_oral_lung=args.do_composite_oral_lung,
+            id_col=args.sample_id_col,
+            group_col=args.group_col,
+            color_col=args.color_col,
+            subset_groups=subset_groups,
+            use_raw=use_raw,
+            use_final=use_final,
+            skip_venn=args.skip_venn,
             formats=formats,
-            palette_5=palette_5,
-            palette_3=palette_3,
         )
         print(f"[OK] Finished {dom}")
 

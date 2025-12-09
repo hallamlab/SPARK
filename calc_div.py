@@ -75,14 +75,14 @@ def load_counts(
 
 
 def write_square_matrix(df: pd.DataFrame, out_path: Path) -> None:
-    df.index.name = "sample"
+    df.index.name = "sampleID"
     df.to_csv(out_path, sep="\t")
 
 
 def shannon_per_sample(counts_df: pd.DataFrame) -> pd.DataFrame:
     vals = {s: float(skbio_shannon(counts_df.loc[s].values)) for s in counts_df.index}
     out = pd.DataFrame.from_dict(vals, orient="index", columns=["Shannon"])
-    out.index.name = "sample"
+    out.index.name = "sampleID"
     return out
 
 

@@ -17,9 +17,9 @@ python data_loss_sankey.py \
   --type-col type_group \
   --samp-col lmp_id \
   --keep-types "Oral Rinse,Lung Brush,BAL,Skin Brush,Scope Flush" \
-  --fastq-stats stats/fastq_stats.tsv --fastq-id-suffix-underscores 4 \
-  --filtered-stats stats/filtered_fastqs.tsv --filtered-id-suffix-underscores 2 \
-  --asv-raw ASVs/ASV_counts.tsv --asv-id-suffix-underscores 2 \
+  --fastq-stats stats/fastq_stats.tsv --fastq-id-prefix-underscores 2 \
+  --filtered-stats stats/filtered_fastqs.tsv --filtered-id-prefix-underscores 2 \
+  --asv-raw ASVs/ASV_counts.tsv --asv-id-prefix-underscores 2 \
   --asv-decon ASVs/ASV_target.decon.tsv \
   --asv-micro ASVs/ASV_target.micro.tsv \
   --palette "Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
@@ -91,13 +91,13 @@ def parse_steps_csv(s: str) -> Tuple[List[str], List[int]]:
     return list(d.keys()), list(d.values())
 
 
-def extract_sample_id_from_path(path_str: str, suffix_underscores: Optional[int] = None,
+def extract_sample_id_from_path(path_str: str, prefix_underscores: Optional[int] = None,
                                 regex: Optional[str] = None) -> str:
     """
     Extract a sample id from a file path.
     - If regex is provided: return first capturing group.
-    - Else if suffix_underscores is provided: chop that many underscore-delimited tokens from end.
-      e.g., name='ABC_1_2_3_4.fastq.gz', n=4 -> 'ABC'
+    - Else if prefix_underscores is provided: keep the first N underscore-delimited tokens.
+      e.g., name='ABC_1_2_3_4.fastq.gz', n=2 -> 'ABC_1'
     - Else return basename without extension(s).
     """
     import re as _re
@@ -107,16 +107,23 @@ def extract_sample_id_from_path(path_str: str, suffix_underscores: Optional[int]
         if not m or not m.groups():
             raise ValueError(f"Regex did not match or capture a group: {regex} for {path_str}")
         return m.group(1)
-    if suffix_underscores is not None:
+    if prefix_underscores is not None:
         stem = base
-        # Remove common extensions
-        for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq', '.gz', '.tsv', '.csv', '.txt'):
+        # Remove common extensions (include fasta so filtered FASTA paths behave)
+        for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq',
+                    '.fasta.gz', '.fasta', '.fa.gz', '.fa',
+                    '.gz', '.tsv', '.csv', '.txt'):
             if stem.endswith(ext):
                 stem = stem[: -len(ext)]
         parts = stem.split('_')
-        if len(parts) <= suffix_underscores:
-            return parts[0]
-        return '_'.join(parts[: len(parts) - suffix_underscores])
+        # If we don't have more than prefix_underscores tokens, keep the full stem
+        if prefix_underscores <= 0:
+            return stem
+        if len(parts) <= prefix_underscores:
+            return stem
+        # Otherwise, keep the first prefix_underscores tokens
+        stem = '_'.join(parts[: prefix_underscores]).split('-', 1)[0]
+        return stem
     # Fallback: strip extensions
     if '.' in base:
         return base.split('.')[0]
@@ -144,20 +151,23 @@ def read_metadata(path: Path, samp_col: str, type_col: str,
 
 
 def read_fastq_stats(path: Path, samp_col: str,
-                     id_suffix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
+                     id_prefix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
     """
     Expects columns: file, num_seqs
+    Collapses replicates by sample ID via groupby+sum.
     """
     df = pd.read_csv(path, sep='\t', header=0)
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
-    df[samp_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x, id_suffix_underscores, id_regex))
+    df[samp_col] = df['file'].apply(
+        lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex)
+    )
     out = df.groupby(samp_col, as_index=False)['num_seqs'].sum()
     return out
 
 
 def read_asv_matrix(path: Path, samp_col: str,
-                    id_suffix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
+                    id_prefix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
     """
     Input: wide matrix (rows=ASVs, columns=samples), counts.
     Returns long: [ASV_ID, samp_col, count] with count>0
@@ -166,13 +176,19 @@ def read_asv_matrix(path: Path, samp_col: str,
     long_df = df.stack().reset_index()
     long_df.columns = ['ASV_ID', 'sample_raw', 'count']
     long_df = long_df[long_df['count'] > 0].copy()
-    long_df[samp_col] = long_df['sample_raw'].apply(lambda x: extract_sample_id_from_path(x, id_suffix_underscores, id_regex))
+    long_df[samp_col] = long_df['sample_raw'].apply(
+        lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex)
+    )
     long_df.drop(columns=['sample_raw'], inplace=True)
     return long_df
 
 
 def group_counts_by_type(long_counts: pd.DataFrame, metadata: pd.DataFrame,
                          samp_col: str, type_col: str) -> pd.DataFrame:
+    """
+    Merge counts with metadata and sum by type_col.
+    Replicates with the same sample ID and type are naturally summed.
+    """
     merged = long_counts.merge(metadata[[samp_col, type_col]], on=samp_col, how='inner')
     grp = merged.groupby(type_col, as_index=False)['count'].sum()
     grp.rename(columns={'count': 'num_reads'}, inplace=True)
@@ -189,57 +205,100 @@ def build_sankey(steps: List[str], counts: List[int],
     """
     Build and save a Plotly HTML sankey.
     """
+    # Helper to safely get color with black as fallback
+    def get_color(key: str) -> str:
+        color = palette.get(key, "black")
+        return color if color else "black"
+
     nodes: List[Dict[str, str]] = []
     links: List[Dict[str, int]] = []
-    node_idx: Dict[Tuple[str, str], int] = {}  # (name, role) -> idx
+    node_idx: Dict[Tuple[str, str], int] = {}
     link_colors: List[str] = []
+    node_x: List[float] = []
+    node_y: List[float] = []
 
-    # Input-type nodes
-    for k, v in lmp_in.items():
-        nodes.append({"label": f"{k} ({v})" if labeled else "", "color": palette.get(k, "black")})
+    # Input-type nodes (left side, x=0.01)
+    n_inputs = len(lmp_in)
+    for i, (k, v) in enumerate(lmp_in.items()):
+        nodes.append({"label": f"{k} ({v})" if labeled else "", "color": get_color(k)})
         node_idx[(k, "in")] = len(nodes) - 1
+        node_x.append(0.01)
+        # Give more vertical space - use power function to spread them out
+        y_pos = (i / max(n_inputs - 1, 1)) ** 0.8  # Exponent < 1 spreads them more
+        node_y.append(y_pos)
 
-    # Process nodes
-    for step, cnt in zip(steps, counts):
-        nodes.append({"label": f"{step} ({cnt})" if labeled else "", "color": "black"})
+    # Process nodes (middle, evenly spaced)
+    n_steps = len(steps)
+    for i, (step, cnt) in enumerate(zip(steps, counts)):
+        nodes.append({"label": f"{step}<br>({cnt})" if labeled else "", "color": "black"})
         node_idx[(step, "proc")] = len(nodes) - 1
+        node_x.append(0.2 + (i / max(n_steps - 1, 1)) * 0.6)  # Spread from 0.2 to 0.8
+        node_y.append(0.5)  # Center vertically
 
-    # Output-type nodes
-    for k, v in lmp_out.items():
-        nodes.append({"label": f"{k} ({v})" if labeled else "", "color": palette.get(k, "black")})
+    # Output-type nodes (right side, x=0.99)
+    n_outputs = len(lmp_out)
+    for i, (k, v) in enumerate(lmp_out.items()):
+        nodes.append({"label": f"{k} ({v})" if labeled else "", "color": get_color(k)})
         node_idx[(k, "out")] = len(nodes) - 1
+        node_x.append(0.99)
+        node_y.append(i / max(n_outputs - 1, 1))  # Evenly space from 0 to 1
 
     # Links: input -> first step
     first_step = steps[0]
     for k, v in lmp_in.items():
-        links.append({"source": node_idx[(k, "in")], "target": node_idx[(first_step, "proc")], "value": v})
+        links.append({
+            "source": node_idx[(k, "in")],
+            "target": node_idx[(first_step, "proc")],
+            "value": v
+        })
         link_colors.append("grey")
 
     # Links: step -> next step (+ loss nodes)
     for i in range(len(steps) - 1):
         s, t = steps[i], steps[i + 1]
-        links.append({"source": node_idx[(s, "proc")], "target": node_idx[(t, "proc")], "value": counts[i + 1]})
+        # main flow to next step
+        links.append({
+            "source": node_idx[(s, "proc")],
+            "target": node_idx[(t, "proc")],
+            "value": counts[i + 1]
+        })
         link_colors.append("grey")
 
+        # loss from this step
         if counts[i] > counts[i + 1]:
             loss_val = counts[i] - counts[i + 1]
-            loss_label = f"Loss after {s} ({loss_val})" if labeled else ""
+            loss_label = f"{loss_val} removed" if labeled else ""
             nodes.append({"label": loss_label, "color": "lightgrey"})
             loss_idx = len(nodes) - 1
-            links.append({"source": node_idx[(s, "proc")], "target": loss_idx, "value": loss_val})
+            node_x.append(0.2 + (i / max(n_steps - 1, 1)) * 0.6 + 0.05)  # Slightly offset
+            node_y.append(0.9)  # Position loss nodes at bottom
+            links.append({
+                "source": node_idx[(s, "proc")],
+                "target": loss_idx,
+                "value": loss_val
+            })
             link_colors.append("lightgrey")
 
     # Links: last step -> outputs
     last_step = steps[-1]
     for k, v in lmp_out.items():
-        links.append({"source": node_idx[(last_step, "proc")], "target": node_idx[(k, "out")], "value": v})
+        links.append({
+            "source": node_idx[(last_step, "proc")],
+            "target": node_idx[(k, "out")],
+            "value": v
+        })
         link_colors.append("grey")
 
     fig = go.Figure(data=[go.Sankey(
+        arrangement='snap',
         node=dict(
-            pad=15, thickness=20, line=dict(color="black", width=0.5),
+            pad=10,
+            thickness=20,
+            line=dict(color="black", width=0.5),
             label=[n["label"] for n in nodes],
             color=[n["color"] for n in nodes],
+            x=node_x,  # Explicit x positions
+            y=node_y,  # Explicit y positions
         ),
         link=dict(
             source=[l["source"] for l in links],
@@ -263,11 +322,6 @@ def get_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # --- Mode selection (manual vs compute)
-    p.add_argument("--steps", default="", help="Manual mode: 'StepA:100,StepB:90,...' (order preserved)")
-    p.add_argument("--lmp-in", default="", help="Manual mode: input groups 'Type:count,TypeB:count,...'")
-    p.add_argument("--lmp-out", default="", help="Manual mode: output groups 'Type:count,TypeB:count,...'")
-
     # --- Compute mode inputs
     io = p.add_argument_group("Compute Mode Inputs")
     io.add_argument("--data-dir", type=Path, help="Project root (used to resolve defaults)")
@@ -275,25 +329,26 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--metadata", type=Path, help="TSV with sample metadata")
     io.add_argument("--samp-col", default="lmp_id", help="Sample column name in metadata")
     io.add_argument("--type-col", default="type_group", help="Grouping column in metadata")
-    io.add_argument("--keep-types", default="Oral Rinse,Lung Brush,BAL,Skin Brush,Scope Flush",
+    io.add_argument("--color-col", default="Color", help="Color column in metadata")
+    io.add_argument("--keep-types", default="",
                     help="Comma-separated list; if empty, keep all types")
 
     io.add_argument("--fastq-stats", default="stats/fastq_stats.tsv",
                     help="Path (relative to sub-dir or absolute) to raw fastq stats TSV")
-    io.add_argument("--fastq-id-suffix-underscores", type=int, default=4,
-                    help="Chop N underscore tokens from end to form sample id (raw fastq)")
+    io.add_argument("--fastq-id-prefix-underscores", type=int,
+                    help="Keep first N underscore tokens for sample id (raw fastq)")
     io.add_argument("--fastq-id-regex", default="",
                     help="Regex with one capture group to extract sample id from raw fastq 'file' path")
 
     io.add_argument("--filtered-stats", default="stats/filtered_fastqs.tsv",
                     help="Path to filtered fastq stats TSV")
-    io.add_argument("--filtered-id-suffix-underscores", type=int, default=2,
-                    help="Chop N underscore tokens (filtered reads)")
+    io.add_argument("--filtered-id-prefix-underscores", type=int,
+                    help="Keep first N underscore tokens (filtered reads)")
     io.add_argument("--filtered-id-regex", default="", help="Regex for filtered sample id extraction")
 
     io.add_argument("--asv-raw", default="ASVs/ASV_counts.tsv", help="Wide ASV counts matrix")
-    io.add_argument("--asv-id-suffix-underscores", type=int, default=2,
-                    help="Chop N underscore tokens (ASV matrices)")
+    io.add_argument("--asv-id-prefix-underscores", type=int,
+                    help="Keep first N underscore tokens (ASV matrices)")
     io.add_argument("--asv-id-regex", default="", help="Regex for ASV sample id extraction")
 
     io.add_argument("--asv-decon", default="ASVs/ASV_target.decon.tsv", help="Wide ASV after decontamination")
@@ -301,8 +356,6 @@ def get_parser() -> argparse.ArgumentParser:
 
     # --- Appearance / output
     out = p.add_argument_group("Output")
-    out.add_argument("--palette", default="Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
-                     help="Comma-separated 'Group:#HEX' list")
     out.add_argument("--title", default="Data Loss Flow", help="Plot title")
     out.add_argument("--output-prefix", default="metadata/data_loss_sankey",
                      help="Output prefix ('.html' appended automatically)")
@@ -317,25 +370,6 @@ def get_parser() -> argparse.ArgumentParser:
 
 def main():
     args = get_parser().parse_args()
-
-    # Palette
-    palette = parse_kv_csv(args.palette, val_cast=None) if args.palette else {}
-
-    # If manual steps passed, run manual mode
-    manual_mode = bool(args.steps.strip())
-    if manual_mode:
-        steps, counts = parse_steps_csv(args.steps)
-        lmp_in = parse_kv_csv(args.lmp_in, val_cast=int)
-        lmp_out = parse_kv_csv(args.lmp_out, val_cast=int)
-        if not args.make_labeled and not args.make_unlabeled:
-            args.make_labeled = True  # default to at least one output
-
-        out_pref = Path(args.output_prefix)
-        if args.make_labeled:
-            build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".label.html"), True)
-        if args.make_unlabeled:
-            build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".html"), False)
-        return
 
     # ---- Compute mode ----
     if not args.data_dir:
@@ -366,61 +400,134 @@ def main():
         print(f"[i] ASV decon: {asv_decon_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
 
-    # Read metadata and filter by types
-    meta = read_metadata(metadata_path, args.samp_col, args.type_col, keep_types)
-
-    # Raw reads (pairs): sum num_seqs across files, then /2
-    raw_df = read_fastq_stats(fastq_stats_path, args.samp_col,
-                              args.fastq_id_suffix_underscores,
-                              args.fastq_id_regex or None)
-    raw_reads_total = int(raw_df['num_seqs'].sum() // 2)
-
-    # Filtered reads (already single-end counts in your script)
-    filt_df = read_fastq_stats(filtered_stats_path, args.samp_col,
-                               args.filtered_id_suffix_underscores,
-                               args.filtered_id_regex or None)
-    filt_reads_total = int(filt_df['num_seqs'].sum())
-
     # ASV matrices -> long -> merge -> sum
-    asv_raw_long = read_asv_matrix(asv_raw_path, args.samp_col,
-                                   args.asv_id_suffix_underscores, args.asv_id_regex or None)
-    asv_decon_long = read_asv_matrix(asv_decon_path, args.samp_col,
-                                     args.asv_id_suffix_underscores, args.asv_id_regex or None)
-    asv_micro_long = read_asv_matrix(asv_micro_path, args.samp_col,
-                                     args.asv_id_suffix_underscores, args.asv_id_regex or None)
+    # Use consistent sample ID parsing across all ASV matrices
+    asv_micro_long = read_asv_matrix(
+        asv_micro_path,
+        args.samp_col,
+        args.asv_id_prefix_underscores or None,
+        args.asv_id_regex or None,
+    )
 
-    # Sum by type (group)
-    raw_by_type = raw_df.merge(meta[[args.samp_col, args.type_col]], on=args.samp_col, how='inner') \
-                        .groupby(args.type_col, as_index=False)['num_seqs'].sum()
+    sample_list = asv_micro_long[args.samp_col].unique().tolist()
+
+    asv_raw_long = read_asv_matrix(
+        asv_raw_path,
+        args.samp_col,
+        args.asv_id_prefix_underscores or None,
+        args.asv_id_regex or None,
+    )
+    asv_raw_long = asv_raw_long[asv_raw_long[args.samp_col].isin(sample_list)].copy()
+
+    asv_decon_long = read_asv_matrix(
+        asv_decon_path,
+        args.samp_col,
+        args.asv_id_prefix_underscores or None,
+        args.asv_id_regex or None,
+    )
+    asv_decon_long = asv_decon_long[asv_decon_long[args.samp_col].isin(sample_list)].copy()
+
+    # Read metadata and filter by types, then restrict to samples with ASV micro data
+    meta = read_metadata(metadata_path, args.samp_col, args.type_col, keep_types)
+    meta = meta[meta[args.samp_col].isin(sample_list)].copy()
+
+    # Raw reads (pairs): sum num_seqs across files, then /2, with replicates collapsed
+    raw_df = read_fastq_stats(
+        fastq_stats_path,
+        args.samp_col,
+        args.fastq_id_prefix_underscores or None,
+        args.fastq_id_regex or None
+    )
+
+    raw_df = raw_df[raw_df[args.samp_col].isin(sample_list)].copy()
+
+    # Filtered reads (already single-end counts in your script), replicates collapsed
+    filt_df = read_fastq_stats(
+        filtered_stats_path,
+        args.samp_col,
+        args.filtered_id_prefix_underscores or None,
+        args.filtered_id_regex or None
+    )
+    filt_df = filt_df[filt_df[args.samp_col].isin(sample_list)].copy()
+
+    # Build palette from metadata: type_col -> color, with string keys
+    palette = {str(t): str(c) for t, c in zip(meta[args.type_col], meta[args.color_col])}
+
+    # Sort palette deterministically (numeric if possible, else lexical)
+    try:
+        palette = dict(sorted(palette.items(), key=lambda x: float(x[0])))
+    except (ValueError, TypeError):
+        palette = dict(sorted(palette.items()))
+
+    # Sum by type (group) — this implicitly respects keep_types and drops samples without metadata
+    raw_by_type = raw_df.merge(meta[[args.samp_col, args.type_col]],
+                               on=args.samp_col, how='inner') #\
+                        #.groupby(args.type_col, as_index=False)['num_seqs'].sum()    
+    
     raw_by_type['num_reads'] = (raw_by_type['num_seqs'] // 2).astype(int)
-
-    filt_by_type = filt_df.merge(meta[[args.samp_col, args.type_col]], on=args.samp_col, how='inner') \
+    print(raw_by_type['num_reads'].sum())
+    
+    filt_by_type = filt_df.merge(meta[[args.samp_col, args.type_col]],
+                                 on=args.samp_col, how='inner') \
                           .groupby(args.type_col, as_index=False)['num_seqs'].sum()
     filt_by_type['num_reads'] = filt_by_type['num_seqs'].astype(int)
+    
+    # Override step totals so node labels use exactly the subset represented in the ribbons
+    raw_reads_total = int(raw_by_type['num_reads'].sum())
+    filt_reads_total = int(filt_by_type['num_reads'].sum())
 
     asv_raw_by_type = group_counts_by_type(asv_raw_long, meta, args.samp_col, args.type_col)
     asv_decon_by_type = group_counts_by_type(asv_decon_long, meta, args.samp_col, args.type_col)
     asv_micro_by_type = group_counts_by_type(asv_micro_long, meta, args.samp_col, args.type_col)
 
-    # Totals (match original semantics)
+    # Totals for remaining steps
     asv_raw_reads = int(asv_raw_by_type['num_reads'].sum())
     asv_decon_reads = int(asv_decon_by_type['num_reads'].sum())
     asv_micro_reads = int(asv_micro_by_type['num_reads'].sum())
 
-    # Steps & counts
-    steps = ['Quality Control', 'Error Correction', 'Decontamination',
-             'Off-Target Filtering', 'Finished Data']
-    counts = [raw_reads_total, filt_reads_total, asv_raw_reads, asv_decon_reads, asv_micro_reads]
+    # Steps & counts (used for node labels and loss computation)
+    steps = [
+        'Quality Control',
+        'Error Correction',
+        'Decontamination',
+        'Off-Target Filtering',
+        'Finished Data'
+    ]
+    counts = [
+        raw_reads_total,
+        filt_reads_total,
+        asv_raw_reads,
+        asv_decon_reads,
+        asv_micro_reads
+    ]
 
-    # Groups to carry through (types)
     if keep_types:
         types = keep_types
     else:
-        types = list(sorted(meta[args.type_col].unique()))
+        unique_types = meta[args.type_col].unique()
+        # Sort numerically if possible, otherwise alphabetically
+        try:
+            types = sorted(unique_types, key=lambda x: float(x))
+        except (ValueError, TypeError):
+            types = sorted(unique_types)
 
-    # Input and output dicts for sankey ends
-    lmp_in = {t: int(raw_by_type.loc[raw_by_type[args.type_col] == t, 'num_reads'].sum()) for t in types}
-    lmp_out = {t: int(asv_micro_by_type.loc[asv_micro_by_type[args.type_col] == t, 'num_reads'].sum()) for t in types}
+    # Input and output dicts for sankey ends (string keys to match palette)
+    lmp_in = {
+        str(t): int(raw_by_type.loc[raw_by_type[args.type_col] == t, 'num_reads'].sum())
+        for t in types
+    }
+    lmp_out = {
+        str(t): int(asv_micro_by_type.loc[asv_micro_by_type[args.type_col] == t, 'num_reads'].sum())
+        for t in types
+    }
+
+    # Sort by key (numeric if possible)
+    try:
+        lmp_in = dict(sorted(lmp_in.items(), key=lambda x: float(x[0])))
+        lmp_out = dict(sorted(lmp_out.items(), key=lambda x: float(x[0])))
+    except (ValueError, TypeError):
+        lmp_in = dict(sorted(lmp_in.items()))
+        lmp_out = dict(sorted(lmp_out.items()))
 
     if args.verbose:
         print("[i] Steps:")
@@ -437,9 +544,15 @@ def main():
         args.make_unlabeled = True
 
     if args.make_labeled:
-        build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".label.html"), True)
+        build_sankey(
+            steps, counts, lmp_in, lmp_out, palette,
+            args.title, out_pref.with_suffix(".label.html"), True
+        )
     if args.make_unlabeled:
-        build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".html"), False)
+        build_sankey(
+            steps, counts, lmp_in, lmp_out, palette,
+            args.title, out_pref.with_suffix(".html"), False
+        )
 
 
 if __name__ == "__main__":
