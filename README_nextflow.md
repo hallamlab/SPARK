@@ -113,16 +113,14 @@ Nextflow reads `environments.main` and applies it to every process via the `cond
    mamba create -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
    mamba activate nextflow
    ```
-3. **Tell Nextflow to use Mamba for pipeline processes (and keep cache/work dirs on a local disk):**  
+3. **Prepare a local working area:**  
    ```bash
-   export NXF_CONDA_EXE="$(command -v mamba)"
-   export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # writable local path
-   mkdir -p /home/ryan/.nextflow/{cache,work}
-   export NXF_HOME=/home/ryan/.nextflow
+   mkdir -p /home/ryan/.nextflow/work
    ```
+   Keeping the work directory on a local filesystem avoids NFS locking issues.
 4. **Copy the config:** `cp asv_pipeline_nextflow.yml my_run.yml` and edit the `paths` + `environments` blocks to fit your dataset.  
-5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
-6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates. Keeping the work directory on a local filesystem prevents NFS lock errors like `Can't open cache DB`.
+5. **Dry run:** `nextflow run asv_pipeline.nf -c my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
+6. **Launch for real:** `nextflow run asv_pipeline.nf -c my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
 
 Once you’ve done this once, the cached environment makes subsequent runs nearly instant to start.
 
@@ -134,16 +132,12 @@ Once you’ve done this once, the cached environment makes subsequent runs nearl
 - **Mamba** (preferred) or **Micromamba/Conda** reachable on your `PATH`.
 - Optional: a base shell environment for running ancillary scripts or visualizations.
 
-### 2. Point Nextflow at your package manager (and set local cache/work dirs)
+### 2. Ensure Nextflow can find your package manager and set a local work dir
 
-```bash
-export NXF_CONDA_EXE=$(command -v mamba || command -v micromamba || command -v conda)
-export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable local directory
-mkdir -p /home/ryan/.nextflow/{cache,work}
-export NXF_HOME=/home/ryan/.nextflow
-```
+- Make sure `mamba` (or `conda`) is on your `PATH`. If you used the Quick Start above, activating the `nextflow` environment is sufficient.
+- Create a local work directory (once): `mkdir -p /home/ryan/.nextflow/work`
 
-Nextflow now provisions the env described in `environments.main` for every process—no manual activation needed. Because all cache + work paths reside on a local disk, you avoid advisory-lock failures that occur on some network-mounted shares.
+Nextflow now provisions the env described in `environments.main` for every process—no manual activation needed beyond starting the runner environment. Using a local `-work-dir` prevents advisory-lock failures that can happen on shared filesystems.
 
 ### 3. Copy & edit the YAML config
 
@@ -157,7 +151,7 @@ Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is wr
 ### 4. Run a dry run (optional but recommended)
 
 ```bash
-nextflow run asv_pipeline.nf --config my_run.yml \
+nextflow run asv_pipeline.nf -c my_run.yml \
     -preview \
     -work-dir /home/ryan/.nextflow/work
 ```
@@ -167,7 +161,7 @@ The `-preview` switch validates the config, prints the plan, and ensures all req
 ### 5. Launch the pipeline (with automatic env provisioning)
 
 ```bash
-nextflow run asv_pipeline.nf --config my_run.yml \
+nextflow run asv_pipeline.nf -c my_run.yml \
     -with-conda \
     -profile standard \
     -work-dir /home/ryan/.nextflow/work \
@@ -196,7 +190,7 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 
 ### 8. Troubleshooting
 
-- **Missing tools**: Double-check `envs/asv_pipeline.yml` includes the binaries you need and that `-with-conda` plus `NXF_CONDA_EXE` are set.
+- **Missing tools**: Double-check `envs/asv_pipeline.yml` includes the binaries you need and that `mamba`/`conda` is available on `PATH` when you pass `-with-conda`.
 - **No FASTQs detected**: Verify `filename_patterns` match your naming scheme (especially `R1/R2` tokens).
 - **swarm not installed**: Either install it or set `steps.skip_swarm: true`.
 - **Custom filter script**: Point `table_filter.script` to your Python script (relative paths are resolved from the YAML directory).
@@ -208,10 +202,10 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 nextflow run asv_pipeline.nf -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Alternate config + limited CPUs
-nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf -c configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Resume partial run and skip swarm
-nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf -c my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
 ```
 
 ## Why Nextflow?
