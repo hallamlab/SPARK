@@ -81,26 +81,65 @@ Additional sections include:
 - `swarm`: `enabled` and `distance`.
 - `table_filter`: thresholds and override path for the filtering script.
 - `filename_patterns`: regex tokens used to identify R1/R2 files and sanitize sample names.
+- `environments`: map of logical names to Conda/Mamba YAML definitions under `SPARK/envs/`.
 
 **Tips**
 - Use absolute paths or relative paths evaluated from the YAML file’s directory.
 - `steps.*` booleans let you resume from intermediate artifacts without touching the main channel definitions.
 - Set `resources.threads` if you want to cap CPU usage rather than letting Nextflow use all available cores.
 
+## Environment YAMLs (`envs/`)
+
+All runtime environments used by Nextflow live under `SPARK/envs/`. The default file `envs/asv_pipeline.yml` mirrors the legacy `environment.yml`, so every process can run `fastp`, `vsearch`, `swarm`, Python tooling, etc. To introduce alternative stacks (e.g., a chimera-only env), drop a YAML file into `envs/` and reference it via the new `environments` block:
+
+```yaml
+environments:
+  main: envs/asv_pipeline.yml
+  chimera_freeze: envs/chimera.yml
+```
+
+Nextflow reads `environments.main` and applies it to every process via the `conda` directive, creating the env on demand (with Mamba/Micromamba/Conda) and caching it for reuse. This removes the need for manual `mamba env create` steps while keeping all future env specs centralized.
+
+## Quick Start
+
+1. **Install Mamba (strongly recommended):**  
+   ```bash
+   curl -L -O https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh
+   bash Mambaforge-Linux-x86_64.sh -b -p $HOME/mambaforge
+   export PATH="$HOME/mambaforge/bin:$PATH"
+   ```
+2. **Create a lightweight Nextflow runner env (one-time):**  
+   ```bash
+   mamba create -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
+   mamba activate nextflow
+   ```
+3. **Tell Nextflow to use Mamba for pipeline processes:**  
+   ```bash
+   export NXF_CONDA_EXE="$(command -v mamba)"
+   export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable cache directory
+   ```
+4. **Copy the config:** `cp asv_pipeline_nextflow.yml my_run.yml` and edit the `paths` + `environments` blocks to fit your dataset.  
+5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview` to confirm wiring.  
+6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
+
+Once you’ve done this once, the cached environment makes subsequent runs nearly instant to start.
+
 ## Usage Tutorial
 
 ### 1. Install prerequisites
 
 - **Nextflow** ≥ 23.x (`curl -s https://get.nextflow.io | bash`).
-- **Conda/Mamba environment** matching `environment.yml` (already handled by your existing setup).
-- Toolchain availability (`fastp`, `vsearch`, `swarm`, `python`) inside that environment.
+- **Mamba** (preferred) or **Micromamba/Conda** reachable on your `PATH`.
+- Optional: a base shell environment for running ancillary scripts or visualizations.
 
-### 2. Prepare the environment
+### 2. Point Nextflow at your package manager
 
 ```bash
-cd /home/ryan/SABer_dat/SI_data/SI_ASV/SPARK
-mamba activate asv-py   # or your preferred env
+export NXF_CONDA_EXE=$(command -v mamba || command -v micromamba || command -v conda)
+export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable cache directory
 ```
+
+Nextflow now provisions the env described in `environments.main` for every process—no manual activation needed.
 
 ### 3. Copy & edit the YAML config
 
@@ -109,20 +148,21 @@ cp asv_pipeline_nextflow.yml my_run.yml
 # Edit paths, skip flags, thresholds, etc.
 ```
 
-Make sure `paths.input_dir` points to the folder containing FASTQ files and `paths.output_dir` is an empty (or resumable) destination.
+Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is writable (or resumable), and adjust `environments.main` if you want to test a different YAML in `envs/`.
 
 ### 4. Run a dry run (optional but recommended)
 
 ```bash
-nextflow run asv_pipeline.nf --config my_run.yml -n
+nextflow run asv_pipeline.nf --config my_run.yml -preview
 ```
 
-`-n` (`-dry-run`) validates the config, prints the plan, and ensures all required scripts exist.
+The `-preview` switch validates the config, prints the plan, and ensures all required scripts exist without launching tasks.
 
-### 5. Launch the pipeline
+### 5. Launch the pipeline (with automatic env provisioning)
 
 ```bash
 nextflow run asv_pipeline.nf --config my_run.yml \
+    -with-conda \
     -profile standard \
     -with-report reports/asv_report.html \
     -with-trace reports/asv_trace.txt
@@ -149,7 +189,7 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 
 ### 8. Troubleshooting
 
-- **Missing tools**: Ensure the Conda environment is activated before running Nextflow.
+- **Missing tools**: Double-check `envs/asv_pipeline.yml` includes the binaries you need and that `-with-conda` plus `NXF_CONDA_EXE` are set.
 - **No FASTQs detected**: Verify `filename_patterns` match your naming scheme (especially `R1/R2` tokens).
 - **swarm not installed**: Either install it or set `steps.skip_swarm: true`.
 - **Custom filter script**: Point `table_filter.script` to your Python script (relative paths are resolved from the YAML directory).
@@ -158,13 +198,13 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 
 ```bash
 # Default config in place
-nextflow run asv_pipeline.nf
+nextflow run asv_pipeline.nf -with-conda
 
 # Alternate config + limited CPUs
-nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8
+nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda
 
 # Resume partial run and skip swarm
-nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume
+nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda
 ```
 
 ## Why Nextflow?

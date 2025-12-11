@@ -56,6 +56,16 @@ def dirMap = [
 new File(dirMap.concat).mkdirs()
 new File(dirMap.logs).mkdirs()
 
+def envConfigPath = config.environments?.main
+def resolvedEnvPath = envConfigPath ? resolveOptionalPath(envConfigPath, configRoot) : null
+def defaultEnvPath = new File("${projectDir}/envs/asv_pipeline.yml").canonicalPath
+def condaEnvPath = resolvedEnvPath ?: defaultEnvPath
+def condaEnvFile = file(condaEnvPath)
+if( !condaEnvFile.exists() ) {
+    exit 1, "Conda environment YAML not found: ${condaEnvPath}"
+}
+log.info "Using Conda/Mamba env definition: ${condaEnvPath}"
+
 def steps = config.steps ?: [:]
 boolean skipFastp   = (steps.skip_fastp   ?: false) as boolean
 boolean skipMerge   = (steps.skip_merge   ?: false) as boolean
@@ -127,6 +137,7 @@ workflow {
 process FASTP_QC {
     tag { meta.sample_id }
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.fastp, mode: 'copy', pattern: '*', saveAs: { filename ->
         if( filename == 'R1.fastq.gz' ) {
             return "${meta.sample_id}_R1.fastq.gz"
@@ -179,6 +190,7 @@ fastp \\
 process MERGE_READS {
     tag { meta.sample_id }
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.merge, mode: 'copy', saveAs: { filename ->
         filename == 'merged.fastq' ? "${meta.sample_id}.merged.fastq" : filename
     }
@@ -217,6 +229,7 @@ fi
 process FILTER_READS {
     tag { meta.sample_id }
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.filter, mode: 'copy', saveAs: { filename ->
         filename == 'filtered.fasta' ? "${meta.sample_id}.filtered.fasta" : filename
     }
@@ -240,6 +253,7 @@ vsearch --fastx_filter "${merged_fastq}" \\
 
 process RELABEL_FASTA {
     tag { meta.sample_id }
+    conda "${condaEnvPath}"
     publishDir dirMap.filter, mode: 'copy', saveAs: { filename ->
         filename == 'relabeled.fasta' ? "${meta.sample_id}.relabeled.fasta" : filename
     }
@@ -270,6 +284,7 @@ PY
 
 process DEREPLICATE {
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.derep, mode: 'copy', pattern: '*'
 
     input:
@@ -290,6 +305,7 @@ vsearch --derep_fulllength "${concat_fasta}" \\
 
 process DENOISE {
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.denoise, mode: 'copy', pattern: '*'
 
     input:
@@ -312,6 +328,7 @@ vsearch --cluster_unoise "${derep_fasta}" \\
 
 process CHIMERA_CHECK {
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.nochi, mode: 'copy', pattern: '*'
 
     input:
@@ -332,6 +349,7 @@ vsearch --uchime3_denovo "${centroids}" \\
 
 process SWARM_CLUSTER {
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.swarm, mode: 'copy', pattern: '*'
 
     input:
@@ -359,6 +377,7 @@ swarm -d ${swarmCfg.distance ?: 1} -f -t ${task.cpus} -z \\
 
 process CREATE_COUNT_MATRIX {
     cpus pipelineThreads
+    conda "${condaEnvPath}"
     publishDir dirMap.asv, mode: 'copy', pattern: '*'
 
     input:
@@ -380,6 +399,7 @@ vsearch --usearch_global "${concat_fasta}" \\
 }
 
 process FILTER_TABLE {
+    conda "${condaEnvPath}"
     publishDir dirMap.asv, mode: 'copy', pattern: '*'
 
     input:

@@ -20,9 +20,9 @@ steps:
 
 fastp:
   trim_front_r1: 19
-  trim_tail_r1: 80
+  trim_tail_r1: 20
   trim_front_r2: 20
-  trim_tail_r2: 80
+  trim_tail_r2: 20
 
 merge:
   max_diffs: 20
@@ -60,3 +60,6 @@ filename_patterns:
     - "\\.fastq$"
     - "\\.fq$"
   sample_strip_regex: "(_S[0-9]+)?(_L[0-9]{3})?(_R[12])?(_[12])?(_001)?$"
+
+environments:
+  main: envs/asv_pipeline.yml
