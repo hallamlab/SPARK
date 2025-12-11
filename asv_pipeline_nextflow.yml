@@ -1,0 +1,62 @@
+paths:
+  input_dir: /home/ryan/SABer_dat/SI_data/SI_ASV/V4_ncbi_input
+  output_dir: /home/ryan/SABer_dat/SI_data/SI_ASV/V4_ncbi_output
+
+resources:
+  threads:
+  single_end: false
+
+steps:
+  skip_fastp: false
+  skip_merge: false
+  skip_filter: false
+  skip_concat: false
+  skip_derep: false
+  skip_denoise: false
+  skip_chimera: false
+  skip_swarm: false
+  skip_count: false
+  skip_tabfilt: false
+
+fastp:
+  trim_front_r1: 19
+  trim_tail_r1: 80
+  trim_front_r2: 20
+  trim_tail_r2: 80
+
+merge:
+  max_diffs: 20
+  min_overlap: 5
+  trunc_quality: 5
+  allow_stagger: true
+
+filter:
+  max_ee: 1.0
+  min_len: 245
+  max_len: 1500
+
+unoise:
+  min_size: 3
+
+swarm:
+  enabled: true
+  distance: 1
+
+table_filter:
+  min_sample_sum: 5000
+  min_asv_sum: 0.01
+  script: filter_ASV_table.py
+
+filename_patterns:
+  r1_tokens:
+    - R1
+    - 1
+  r2_tokens:
+    - R2
+    - 2
+  ext_patterns:
+    - "\\.fastq\\.gz$"
+    - "\\.fq\\.gz$"
+    - "\\.fastq$"
+    - "\\.fq$"
+  sample_strip_regex: "(_S[0-9]+)?(_L[0-9]{3})?(_R[12])?(_[12])?(_001)?$"
