@@ -113,14 +113,16 @@ Nextflow reads `environments.main` and applies it to every process via the `cond
    mamba create -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
    mamba activate nextflow
    ```
-3. **Tell Nextflow to use Mamba for pipeline processes:**  
+3. **Tell Nextflow to use Mamba for pipeline processes (and keep cache/work dirs on a local disk):**  
    ```bash
    export NXF_CONDA_EXE="$(command -v mamba)"
-   export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable cache directory
+   export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # writable local path
+   mkdir -p /home/ryan/.nextflow/{cache,work}
+   export NXF_HOME=/home/ryan/.nextflow
    ```
 4. **Copy the config:** `cp asv_pipeline_nextflow.yml my_run.yml` and edit the `paths` + `environments` blocks to fit your dataset.  
-5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview` to confirm wiring.  
-6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
+5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
+6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates. Keeping the work directory on a local filesystem prevents NFS lock errors like `Can't open cache DB`.
 
 Once you’ve done this once, the cached environment makes subsequent runs nearly instant to start.
 
@@ -132,14 +134,16 @@ Once you’ve done this once, the cached environment makes subsequent runs nearl
 - **Mamba** (preferred) or **Micromamba/Conda** reachable on your `PATH`.
 - Optional: a base shell environment for running ancillary scripts or visualizations.
 
-### 2. Point Nextflow at your package manager
+### 2. Point Nextflow at your package manager (and set local cache/work dirs)
 
 ```bash
 export NXF_CONDA_EXE=$(command -v mamba || command -v micromamba || command -v conda)
-export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable cache directory
+export NXF_CONDA_CACHEDIR=/home/ryan/.conda/envs/nextflow-cache   # pick any writable local directory
+mkdir -p /home/ryan/.nextflow/{cache,work}
+export NXF_HOME=/home/ryan/.nextflow
 ```
 
-Nextflow now provisions the env described in `environments.main` for every process—no manual activation needed.
+Nextflow now provisions the env described in `environments.main` for every process—no manual activation needed. Because all cache + work paths reside on a local disk, you avoid advisory-lock failures that occur on some network-mounted shares.
 
 ### 3. Copy & edit the YAML config
 
@@ -153,10 +157,12 @@ Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is wr
 ### 4. Run a dry run (optional but recommended)
 
 ```bash
-nextflow run asv_pipeline.nf --config my_run.yml -preview
+nextflow run asv_pipeline.nf --config my_run.yml \
+    -preview \
+    -work-dir /home/ryan/.nextflow/work
 ```
 
-The `-preview` switch validates the config, prints the plan, and ensures all required scripts exist without launching tasks.
+The `-preview` switch validates the config, prints the plan, and ensures all required scripts exist without launching tasks. Supplying `-work-dir` keeps temporary files on the local disk even if the repo lives on a shared filesystem.
 
 ### 5. Launch the pipeline (with automatic env provisioning)
 
@@ -164,6 +170,7 @@ The `-preview` switch validates the config, prints the plan, and ensures all req
 nextflow run asv_pipeline.nf --config my_run.yml \
     -with-conda \
     -profile standard \
+    -work-dir /home/ryan/.nextflow/work \
     -with-report reports/asv_report.html \
     -with-trace reports/asv_trace.txt
 ```
@@ -198,13 +205,13 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 
 ```bash
 # Default config in place
-nextflow run asv_pipeline.nf -with-conda
+nextflow run asv_pipeline.nf -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Alternate config + limited CPUs
-nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda
+nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Resume partial run and skip swarm
-nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda
+nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
 ```
 
 ## Why Nextflow?
