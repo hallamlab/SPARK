@@ -122,8 +122,8 @@ Nextflow reads `environments.main` and applies it to every process via the `cond
    ```
    By symlinking the repository’s `.nextflow` folder to your home directory, Nextflow writes its cache metadata to local disk automatically—no environment variables or extra flags per run.
 4. **Copy the config:** `cp asv_pipeline_nextflow.yml my_run.yml` and edit the `paths` + `environments` blocks to fit your dataset.  
-5. **Dry run:** `nextflow run asv_pipeline.nf --params-file my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
-6. **Launch for real:** `nextflow run asv_pipeline.nf --params-file my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
+5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
+6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
 
 Once you’ve done this once, the cached environment makes subsequent runs nearly instant to start.
 
@@ -147,12 +147,12 @@ cp asv_pipeline_nextflow.yml my_run.yml
 # Edit paths, skip flags, thresholds, etc.
 ```
 
-Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is writable (or resumable), and adjust `environments.main` if you want to test a different YAML in `envs/`.
+Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is writable (or resumable), and adjust `environments.main` if you want to test a different YAML in `envs/`. The `--config my_run.yml` CLI flag simply sets `params.config` to your chosen file; avoid `--params-file` because that overrides the entire `params.*` map and prevents the pipeline from loading its own config.
 
 ### 4. Run a dry run (optional but recommended)
 
 ```bash
-nextflow run asv_pipeline.nf --params-file my_run.yml \
+nextflow run asv_pipeline.nf --config my_run.yml \
     -preview \
     -work-dir /home/ryan/.nextflow/work
 ```
@@ -162,7 +162,7 @@ The `-preview` switch validates the config, prints the plan, and ensures all req
 ### 5. Launch the pipeline (with automatic env provisioning)
 
 ```bash
-nextflow run asv_pipeline.nf --params-file my_run.yml \
+nextflow run asv_pipeline.nf --config my_run.yml \
     -with-conda \
     -profile standard \
     -work-dir /home/ryan/.nextflow/work \
@@ -203,10 +203,10 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 nextflow run asv_pipeline.nf -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Alternate config + limited CPUs
-nextflow run asv_pipeline.nf --params-file configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
 
 # Resume partial run and skip swarm
-nextflow run asv_pipeline.nf --params-file my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
 ```
 
 ## Why Nextflow?
