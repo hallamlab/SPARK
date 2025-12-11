@@ -59,6 +59,18 @@ warnings.filterwarnings('ignore')
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
 
+BIOCHEM_COLOR_MAP = {
+    'Oxygen': 'black',
+    'Nitrogen Oxides': "#E7298A",
+    'Nitrate': "#1B9E77",
+    'Nitrite': "#66A61E",
+    'Nitrous Oxide': "#0C5196",
+    'Ammonium': "#7570B3",
+    'Hydrogen Sulfide': "#D95F02",
+    'Methane': "violet"
+}
+
+BIOCHEM_METADATA = list(BIOCHEM_COLOR_MAP.keys())
 
 def load_and_pivot_data(
     input_file: Path,
@@ -84,7 +96,7 @@ def load_and_pivot_data(
     """
     print(f"[INFO] Reading {input_file}...")
     df = pd.read_csv(input_file, sep='\t')
-    
+
     print(f"[INFO] Loaded {len(df)} rows")
     print(f"[INFO] Columns: {list(df.columns)}")
     
@@ -407,6 +419,121 @@ def plot_umap_scatter(
     plt.close()
 
 
+def plot_biochem_scatter(
+    embedding: np.ndarray,
+    values: pd.Series,
+    meta: str,
+    color: str,
+    output_file: Path,
+    figsize: Tuple[float, float],
+    dpi: int,
+    alpha: float,
+    size_min: float = 20,
+    size_max: float = 200,
+    missing_size: float = 12
+) -> None:
+    """Plot UMAP scatter with marker size encoding biomeasurements."""
+    numeric_values = pd.to_numeric(values, errors='coerce')
+    plot_df = pd.DataFrame({
+        'UMAP1': embedding[:, 0],
+        'UMAP2': embedding[:, 1],
+        'value': numeric_values
+    })
+    
+    valid_mask = plot_df['value'].notna()
+    missing_mask = ~valid_mask
+    
+    if valid_mask.sum() == 0:
+        print(f"[WARN] Skipping {meta} plot: no non-missing values")
+        return
+    
+    valid_values = plot_df.loc[valid_mask, 'value'].astype(float)
+    val_min = valid_values.min()
+    val_max = valid_values.max()
+    
+    if np.isclose(val_min, val_max):
+        plot_df.loc[valid_mask, 'size'] = (size_min + size_max) / 2
+    else:
+        norm = (valid_values - val_min) / (val_max - val_min)
+        plot_df.loc[valid_mask, 'size'] = size_min + norm * (size_max - size_min)
+    
+    plot_df.loc[missing_mask, 'size'] = missing_size
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    ax.scatter(
+        plot_df.loc[valid_mask, 'UMAP1'],
+        plot_df.loc[valid_mask, 'UMAP2'],
+        c=color,
+        s=plot_df.loc[valid_mask, 'size'],
+        alpha=alpha,
+        edgecolors='gray',
+        linewidths=0.5,
+        label=meta
+    )
+    
+    if missing_mask.any():
+        ax.scatter(
+            plot_df.loc[missing_mask, 'UMAP1'],
+            plot_df.loc[missing_mask, 'UMAP2'],
+            c='lightgray',
+            s=plot_df.loc[missing_mask, 'size'],
+            alpha=alpha,
+            edgecolors='gray',
+            linewidths=0.5,
+            label='Missing'
+        )
+    
+    ax.set_xlabel("UMAP1", fontsize=14, fontweight='bold')
+    ax.set_ylabel("UMAP2", fontsize=14, fontweight='bold')
+    ax.set_title(f"UMAP Colored by {meta} (size encodes value)", fontsize=16, fontweight='bold')
+    
+    size_labels = []
+    size_handles = []
+    
+    if np.isclose(val_min, val_max):
+        value_levels = [val_min]
+    else:
+        value_levels = [val_min, (val_min + val_max) / 2, val_max]
+    
+    for val in value_levels:
+        if np.isclose(val_min, val_max):
+            size = (size_min + size_max) / 2
+        else:
+            size = size_min + ((val - val_min) / (val_max - val_min)) * (size_max - size_min)
+        handle = ax.scatter([], [], c=color, alpha=alpha, s=size)
+        size_handles.append(handle)
+        size_labels.append(f"{val:.2f}")
+    
+    if missing_mask.any():
+        handle = ax.scatter([], [], c='lightgray', alpha=alpha, s=missing_size)
+        size_handles.append(handle)
+        size_labels.append("Missing")
+    
+    legend = ax.legend(
+        size_handles,
+        size_labels,
+        title=meta,
+        scatterpoints=1,
+        labelspacing=1,
+        title_fontsize=13,
+        fontsize=11,
+        loc='upper right',
+        bbox_to_anchor=(1.3, 1)
+    )
+    
+    plt.setp(legend.get_title(), fontweight='bold')
+    plt.tight_layout()
+    
+    if output_file.suffix == '.png':
+        plt.savefig(output_file, dpi=dpi, bbox_inches='tight')
+    else:
+        plt.savefig(output_file, bbox_inches='tight')
+    
+    print(f"[OK] Saved: {output_file}")
+    plt.close()
+
+
 # ---------- CLI ----------
 
 def parse_args() -> argparse.Namespace:
@@ -510,10 +637,14 @@ def main():
     # Metadata columns to preserve
     metadata_cols = [
         args.depth_col, args.month_col, args.color_col,
-        'Year', 'Cruise', 'Temperature (deg C)', 'Salinity (PSU)',
-        'Oxygen SBE (mL/L)', 'sample_code', 'longID'
-    ]
-    
+        'Year', 'Cruise', 'Salinity (PSU)', 'sample_code',
+        'Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species',
+        'plateID', 'Temperature', 'Oxygen',
+        'Phosphate', 'Silicate', 'Nitrogen Oxides', 'Nitrate',
+        'Nitrite', 'Ammonium', 'Hydrogen Sulfide', 'Fe (nM)', 'Methane',
+        'Nitrous Oxide', 'Dimethyl Sulfide'
+        ]
+
     # Load and pivot data
     count_matrix, metadata_df = load_and_pivot_data(
         input_file=args.input,
@@ -646,6 +777,42 @@ def main():
             alpha=args.alpha,
             point_size=args.point_size
         )
+    
+    # Plot 4: Biochemistry metadata with size encoding
+    biochem_available = [col for col in BIOCHEM_METADATA if col in metadata_df.columns]
+    
+    if biochem_available:
+        print("\n[INFO] Creating UMAP scatters for biochemistry metadata...")
+        
+        for meta in biochem_available:
+            series = metadata_df[meta]
+            if series.notna().sum() == 0:
+                print(f"[WARN] Skipping {meta} plot: column has only missing values")
+                continue
+            
+            color = BIOCHEM_COLOR_MAP.get(meta, 'gray')
+            slug = (
+                meta.lower()
+                .replace(' ', '_')
+                .replace('(', '')
+                .replace(')', '')
+                .replace('/', '_')
+            )
+            
+            for fmt in formats:
+                output_file = output_prefix.parent / f"{output_prefix.stem}_{slug}.{fmt}"
+                plot_biochem_scatter(
+                    embedding=embedding,
+                    values=series,
+                    meta=meta,
+                    color=color,
+                    output_file=output_file,
+                    figsize=figsize,
+                    dpi=args.dpi,
+                    alpha=args.alpha
+                )
+    else:
+        print("\n[WARN] Skipping biochemistry plots: none of the configured columns present")
     
     print("\n" + "="*60)
     print("[OK] Pipeline complete!")

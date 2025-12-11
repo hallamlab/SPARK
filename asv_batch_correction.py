@@ -1820,6 +1820,8 @@ def main():
                         help="Path to ASV table (TSV, ASVs in rows, samples in columns)")
     parser.add_argument("--metadata", type=str, required=True,
                         help="Path to metadata TSV")
+    parser.add_argument("--asv-meta", type=str, required=True,
+                        help="Path to asv + metadata TSV")    
     parser.add_argument("--meta-index-col", default="sample",
                         help="Sample ID column in metadata")
     parser.add_argument("--batch-col", required=True,
@@ -1912,6 +1914,9 @@ def main():
     asv_raw = load_asv_table(asv_path, args.asv_orientation)
     metadata = load_metadata(meta_path, args.meta_index_col)
     
+    asv_meta = pd.read_csv(args.asv_meta, sep="\t", header=0)
+
+
     # Align
     print("[2/8] Aligning samples...")
     asv_raw, metadata = align_data(asv_raw, metadata)
@@ -2002,7 +2007,13 @@ def main():
     asv_clr_before.to_csv(out_dir / "asv_clr_before_correction.tsv", sep="\t")
     asv_clr_after.to_csv(out_dir / "asv_clr_after_correction.tsv", sep="\t")
     print(f"  [✓] Saved CLR-transformed data (before/after)")
+    asv_clr_after_stack =  asv_clr_after.stack().reset_index()
+    asv_clr_after_stack.columns = ['longID', 'ASV_ID', 'batch_corrected_clr']
     
+    asv_clr_after_stack = asv_meta.merge(asv_clr_after_stack, on=['ASV_ID', 'longID'], how='left')
+    asv_clr_after_stack.to_csv(out_dir / "asv_clr_after_correction_with_metadata.tsv", sep="\t", index=False)
+    print(f"  [✓] Saved CLR-transformed data with ASV metadata")
+
     # UMAP + HDBSCAN
     print("[5/8] Computing UMAP embeddings and HDBSCAN clusters for samples...")
     
