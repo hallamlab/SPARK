@@ -1,0 +1,18 @@
+name: asv_batch_correction_env
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - seaborn
+  - matplotlib-base
+  - scikit-learn
+  - scikit-bio
+  - umap-learn
+  - hdbscan
+  - scipy
+  - pip
+  - pip:
+      - pycombat

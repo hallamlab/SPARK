@@ -9,7 +9,6 @@ Usage:
   python stratification_timeseries_anomaly.py \
     --integrated-data compartment_analysis/integrated_data.tsv \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --date-col Date \
     --month-col Month \
     --year-col Year \
@@ -42,6 +41,8 @@ plt.rcParams.update({
     'figure.dpi': 150,
 })
 sns.set_style("white")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ============================================================================
@@ -600,8 +601,6 @@ def main():
                        help="Integrated data TSV (samples × features)")
     parser.add_argument("--metadata", type=Path, required=True,
                        help="Metadata TSV file")
-    parser.add_argument("--meta-index-col", default="sample",
-                       help="Column name for sample index")
     parser.add_argument("--date-col", required=True,
                        help="Column name for date/time")
     parser.add_argument("--month-col", required=True,
@@ -627,7 +626,10 @@ def main():
     # Load data
     print("\n[1/6] Loading data...")
     integrated_data = pd.read_csv(args.integrated_data, sep="\t", index_col=0)
-    metadata = pd.read_csv(args.metadata, sep="\t").set_index(args.meta_index_col)
+    metadata_df = pd.read_csv(args.metadata, sep="\t")
+    if SAMPLE_ID_COL not in metadata_df.columns:
+        raise ValueError(f"Metadata column '{SAMPLE_ID_COL}' not found in {args.metadata}")
+    metadata = metadata_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
     
     common = integrated_data.index.intersection(metadata.index)
     integrated_data = integrated_data.loc[common]

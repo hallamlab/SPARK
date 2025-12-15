@@ -1,0 +1,9 @@
+name: asv_mitomaster_env
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.11
+  - requests
+  - seqkit
+  - blast

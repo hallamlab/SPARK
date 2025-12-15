@@ -476,7 +476,7 @@ dereplicate_sequences(){
 
 denoise_asv(){
   log "Step 6: UNOISE denoise"
-  vsearch --cluster_unoise "${DEREP_DIR}/derep.fasta" \
+  vsearch --cluster_unoise "${DEREP_DIR}/derep_trim_V4.fasta" \
           --centroids "${DEN_DIR}/centroids.fasta" \
           --sizein --sizeout --relabel ASV \
           --minsize "${UNOISE_MINSIZE}" \

@@ -2,23 +2,22 @@
 """
 asv_summary_and_plots.py
 Project-independent CLI to build ASV master tables and plots (microbial & mitochondrial),
-with configurable paths, sample ID parsing, palettes, and plot toggles.
+with configurable paths, palettes, and plot toggles.
 
 Quickstart (mirrors your current layout):
   python asv_summary_and_plots.py \
     --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
     --sub-dir spark_combined_output \
     --metadata ref_db/spark_metadata.tsv \
-    --meta-sample-col sample \
     --keep-types "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
-    --fastq-stats stats/fastq_stats.tsv --fastq-id-prefix-underscores 4 \
+    --fastq-stats stats/fastq_stats.tsv \
     --asv-micro ASVs/ASV_target.micro.tsv --asv-mito mito/ASVs/ASV_target.mito.tsv \
     --taxonomy taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv \
     --make-micro --make-mito
 
 Notes:
 - Outputs go to <data-dir>/<sub-dir>/{metadata,mito/metadata} and <data-dir>/<sub-dir>/{ASVs,mito/ASVs}.
-- Use --*_id_regex to provide a custom regex (one capture group) to extract sample IDs from file/column names.
+- Sample IDs are assumed to match those defined in the manifest/metadata.
 """
 
 from __future__ import annotations
@@ -48,6 +47,8 @@ plt.rcParams.update({'font.size': 12})
 plt.rcParams['font.family'] = 'Source Sans Pro'
 sns.set_theme()
 sns.set_style("white")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ========= Utilities =========
@@ -101,27 +102,20 @@ def parse_rank_filters(items: Sequence[str]) -> Dict[str, set[str]]:
     return filters
 
 
-def extract_sample_id_from_path(path_str: str, prefix_underscores: Optional[int], regex: Optional[str]) -> str:
+def extract_sample_id_from_path(path_str: str) -> str:
     """
-    - If regex provided: return first capture group.
-    - Else, remove extensions and chop N underscore tokens from end.
+    Remove common sequencing extensions/suffixes to recover the sample ID.
     """
     base = os.path.basename(path_str)
-    if regex:
-        m = re.search(regex, path_str)
-        if not m or not m.groups():
-            raise ValueError(f"Regex did not match/capture: {regex} for {path_str}")
-        return m.group(1)
     stem = base
-    for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq', '.tsv', '.csv', '.txt', '.gz'):
+    for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq',
+                '.fasta.gz', '.fasta', '.fa.gz', '.fa',
+                '.tsv', '.csv', '.txt', '.gz'):
         if stem.endswith(ext):
             stem = stem[: -len(ext)]
-    if prefix_underscores is None:
-        return stem
-    parts = stem.split('_')
-    if len(parts) <= prefix_underscores:
-        return parts[0]
-    return '_'.join(parts[: prefix_underscores]).split('-', 1)[0]
+    stem = re.sub(r'(\.filtered|\.merged|\.trimmed)$', '', stem)
+    stem = re.sub(r'(_R[12]|_[12])?(_001)?$', '', stem)
+    return stem
 
 
 def split_taxa_string(taxa_str: str, delimiter=';') -> Dict[str, Optional[str]]:
@@ -175,16 +169,15 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
         df = df[cols]
     # Ensure meta_sample_col exists
     if meta_sample_col not in df.columns:
-        raise ValueError(f"--meta-sample-col '{meta_sample_col}' not found in metadata columns: {df.columns.tolist()}")
+        raise ValueError(f"Metadata column '{meta_sample_col}' not found; expected column matching manifest sample IDs.")
     return df
 
 
-def read_fastq_stats(path: Path, meta_sample_col: str, id_prefix_underscores: Optional[int],
-                     id_regex: Optional[str]) -> pd.DataFrame:
+def read_fastq_stats(path: Path, meta_sample_col: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', header=0)
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
-    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex))
+    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x))
     return df.groupby(meta_sample_col, as_index=False)['num_seqs'].sum()
 
 
@@ -197,14 +190,11 @@ def read_taxonomy_table(path: Path) -> pd.DataFrame:
 
 
 def read_asv_wide_to_long(path: Path, meta_sample_col: str,
-                          asv_id_prefix_underscores: Optional[int],
-                          asv_id_regex: Optional[str],
                           tax_index: Optional[pd.Index] = None) -> pd.DataFrame:
     wide = pd.read_csv(path, sep='\t', header=0, index_col=0)
     if tax_index is not None:
         wide = wide.loc[[a for a in wide.index if a in set(tax_index)]]
-    cols_parsed = [extract_sample_id_from_path(c, asv_id_prefix_underscores, asv_id_regex) for c in wide.columns]
-    wide.columns = cols_parsed
+    wide.columns = [c.strip() for c in wide.columns]
     long = wide.stack().reset_index()
     long.columns = ['ASV_ID', meta_sample_col, 'count']
     long = long[long['count'] > 0].copy()
@@ -416,8 +406,6 @@ def compute_and_save_block(
     type_palette: Dict[str, str],
     keep_types: Sequence[str],
     fastq_stats_df: pd.DataFrame,
-    id_prefix_underscores_asv: Optional[int],
-    id_regex_asv: Optional[str],
     dashed_line_y: Optional[float] = None,   # Only used in mito box+swarm
     include_rank_filters: Optional[Dict[str, set[str]]] = None,
 ) -> None:
@@ -425,7 +413,7 @@ def compute_and_save_block(
     ensure_dir(asv_out_root)
 
     # Long ASV
-    long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, id_prefix_underscores_asv, id_regex_asv, tax_df.index)
+    long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, tax_df.index)
     print(f"[i] {mode_name} ASV long shape: {long_asv.shape}")
     if long_asv.empty:
         print(f"No ASV counts found in {asv_path}, moving on...")
@@ -554,22 +542,17 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--taxonomy", type=Path, required=True, help="SILVA taxonomy TSV (Feature ID, Taxon)")
 
     cols = p.add_argument_group("Columns / Groups")
-    cols.add_argument("--meta-sample-col", default="sample", help="Sample column name in metadata")
     cols.add_argument("--type-col", default="type_group", help="Sample type column in metadata")
     cols.add_argument("--color-col", default="Color", help="Color column in metadata")
     cols.add_argument("--keep-types", default="",
                       help="Comma-separated list of types to keep (order honored)")
 
-    reads = p.add_argument_group("Read Stats & ID Parsing")
+    reads = p.add_argument_group("Read Stats")
     reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
-    reads.add_argument("--fastq-id-prefix-underscores", type=int, default=2, help="Chop N underscore tokens from end for fastq IDs")
-    reads.add_argument("--fastq-id-regex", default="", help="Regex with one capture group for fastq IDs")
 
-    asv = p.add_argument_group("ASV Matrices & ID Parsing")
+    asv = p.add_argument_group("ASV Matrices")
     asv.add_argument("--asv-micro", type=Path, required=True, help="ASV_target.micro.tsv")
     asv.add_argument("--asv-mito", type=Path, required=True, help="ASV_target.mito.tsv")
-    asv.add_argument("--asv-id-prefix-underscores", type=int, default=None, help="Chop N underscore tokens from end for ASV column IDs")
-    asv.add_argument("--asv-id-regex", default="", help="Regex with one capture group for ASV column IDs")
 
     tax = p.add_argument_group("Taxonomy Filters")
     tax.add_argument(
@@ -621,7 +604,8 @@ def main():
         print(f"[i] ASV mito : {asv_mito_path}")
 
     # Read data
-    meta = read_metadata(meta_path, args.meta_sample_col, keep_types)
+    meta_sample_col = SAMPLE_ID_COL
+    meta = read_metadata(meta_path, meta_sample_col, keep_types)
 
     # set palette
     palette = {k[0]: k[1] for k in zip(meta[args.type_col], meta[args.color_col])}
@@ -631,9 +615,7 @@ def main():
     tax_df = read_taxonomy_table(taxonomy_path)
     fastq_df = read_fastq_stats(
         fastq_stats_path,
-        args.meta_sample_col,
-        args.fastq_id_prefix_underscores,
-        args.fastq_id_regex or None
+        meta_sample_col,
     )
 
     # Output roots
@@ -656,13 +638,11 @@ def main():
             asv_out_root=asv_root,
             meta=meta.copy(),
             tax_df=tax_df,
-            meta_sample_col=args.meta_sample_col,
+            meta_sample_col=meta_sample_col,
             type_col=args.type_col,
             type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),
-            id_prefix_underscores_asv=args.asv_id_prefix_underscores,
-            id_regex_asv=args.asv_id_regex or None,
             dashed_line_y=None,
             include_rank_filters=include_rank_filters,
         )
@@ -677,13 +657,11 @@ def main():
             asv_out_root=mito_asv_root,
             meta=meta.copy(),
             tax_df=tax_df,
-            meta_sample_col=args.meta_sample_col,
+            meta_sample_col=meta_sample_col,
             type_col=args.type_col,
             type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),
-            id_prefix_underscores_asv=args.asv_id_prefix_underscores,
-            id_regex_asv=args.asv_id_regex or None,
             dashed_line_y=(args.mito_threshold_line if args.mito_threshold_line >= 0 else None),
             include_rank_filters=include_rank_filters,
         )

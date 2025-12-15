@@ -1,0 +1,12 @@
+name: trajectory_analysis_env
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - seaborn
+  - matplotlib-base
+  - scikit-learn
+  - scipy

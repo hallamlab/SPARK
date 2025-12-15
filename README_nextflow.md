@@ -15,14 +15,14 @@ The workflow mirrors the ten stages from the Bash script while embracing Nextflo
 | 5 | `DEREPLICATE` | Global dereplication via `vsearch --derep_fulllength`, emitting `derep/derep.fasta` and a log. | `derep/derep.fasta`, `logs/derep.log` |
 | 6 | `DENOISE` | UNOISE clustering (`vsearch --cluster_unoise`) with `--minsize` control and ASV relabeling. | `denoise/centroids.fasta`, `logs/denoise.log` |
 | 7 | `CHIMERA_CHECK` | Runs `vsearch --uchime3_denovo` to remove chimeras. | `nochimeras/nochimeras.fasta`, `logs/nochimera.log` |
-| 8 | `SWARM_CLUSTER` *(optional)* | Executes `swarm` for additional OTU-style clustering. Controlled by the YAML `swarm.enabled` and `steps.skip_swarm` switches. | `swarm/swarms` + reports |
+| 8 | `SWARM_CLUSTER` | Executes `swarm` for additional OTU-style clustering using `swarm -d <distance>` while emitting the companion stats/network outputs. | `swarm/swarms` + reports |
 | 9 | `CREATE_COUNT_MATRIX` | Copies non-chimeric centroids to `ASVs.fasta` and maps concatenated reads back with `vsearch --usearch_global` to form an ASV count table. | `ASVs/ASV_counts.tsv`, `ASVs/ASVs.fasta`, `logs/count.log` |
 | 10 | `FILTER_TABLE` | Runs the Python filter script on the ASV table and FASTA to enforce abundance thresholds. | `ASVs/ASV_filtered.tsv`, `ASVs/ASVs_filtered.fasta` |
 
 ### Channel wiring at a glance
 1. Input FASTQ files → `FASTP_QC` (optional) → `MERGE_READS` → `FILTER_READS` → `RELABEL_FASTA`
 2. Relabeled FASTA files are concatenated using `collectFile` (Nextflow DSL2 `storeDir`) into `concat/concat.fasta`.
-3. Downstream processes (`DEREPLICATE`, `DENOISE`, `CHIMERA_CHECK`, `SWARM_CLUSTER`, `CREATE_COUNT_MATRIX`, `FILTER_TABLE`) consume fan-out copies of the concatenated and filtered datasets. Skip flags short-circuit the corresponding processes while keeping channel compatibility.
+3. Downstream processes (`DEREPLICATE`, `DENOISE`, `CHIMERA_CHECK`, `SWARM_CLUSTER`, `CREATE_COUNT_MATRIX`, `FILTER_TABLE`) consume fan-out copies of the concatenated and filtered datasets. Nextflow’s caching (`-resume`) handles restarts instead of manual skip toggles.
 
 ## Directory Layout
 
@@ -33,7 +33,7 @@ output_dir/
 ├── fastp/
 ├── merged/
 ├── filtered/
-├── concat/            # concat.fasta
+├── concat/            # concat.fasta, concat_counts.fasta
 ├── derep/
 ├── denoise/
 ├── nochimeras/
@@ -57,10 +57,6 @@ resources:
   threads:            # optional override, defaults to host CPUs
   single_end: false
 
-steps:
-  skip_fastp: false
-  ...                 # toggles for each process
-
 fastp:
   trim_front_r1: 19
   trim_tail_r1: 80
@@ -78,14 +74,14 @@ Additional sections include:
 
 - `filter`: Expected errors + length cutoffs.
 - `unoise`: `min_size`.
-- `swarm`: `enabled` and `distance`.
+- `swarm`: `distance` parameter for the optional OTU-style clustering radius.
 - `table_filter`: thresholds and override path for the filtering script.
 - `filename_patterns`: regex tokens used to identify R1/R2 files and sanitize sample names.
 - `environments`: map of logical names to Conda/Mamba YAML definitions under `SPARK/envs/`.
+- `config_root` *(optional when using `--params-file`)*: base directory to resolve relative paths in the inline configuration (defaults to the repository root).
 
 **Tips**
 - Use absolute paths or relative paths evaluated from the YAML file’s directory.
-- `steps.*` booleans let you resume from intermediate artifacts without touching the main channel definitions.
 - Set `resources.threads` if you want to cap CPU usage rather than letting Nextflow use all available cores.
 
 ## Environment YAMLs (`envs/`)
@@ -122,8 +118,17 @@ Nextflow reads `environments.main` and applies it to every process via the `cond
    ```
    By symlinking the repository’s `.nextflow` folder to your home directory, Nextflow writes its cache metadata to local disk automatically—no environment variables or extra flags per run.
 4. **Copy the config:** `cp asv_pipeline_nextflow.yml my_run.yml` and edit the `paths` + `environments` blocks to fit your dataset.  
-5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview -work-dir /home/ryan/.nextflow/work` to confirm wiring.  
-6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -with-conda -profile standard -work-dir /home/ryan/.nextflow/work`. Add `-resume` when re-running after tweaks, and use the skip flags in `steps.*` to reuse intermediates.
+5. **Dry run:** `nextflow run asv_pipeline.nf --config my_run.yml -preview` to confirm wiring (you can also use `--params-file my_run.yml` now that inline configs are supported). Thanks to the repo-level defaults, the work directory automatically points to `/home/ryan/.nextflow/work`.  
+6. **Launch for real:** `nextflow run asv_pipeline.nf --config my_run.yml -profile standard`. The bundled `nextflow.config` already enables Mamba/Conda, so passing `-with-conda` is optional. Add `-resume` when re-running after tweaks to reuse cached process outputs.
+
+### Repository defaults (`nextflow.config`)
+
+`SPARK/nextflow.config` enforces two behaviors out of the box:
+
+- `workDir = /home/ryan/.nextflow/work` unless you override it via `-work-dir` or `NXF_WORK`.
+- `conda.enabled = true`, `conda.useMamba = true`, and `conda.mamba = bin/nxf_mamba.sh`, which mirrors running every command with `-with-conda` while routing the solver through a wrapper that translates Nextflow’s `--yes` flag for older Mamba builds.
+
+You can still override either behavior per run (e.g., different work dir, disable Conda entirely), but the defaults allow `nextflow run asv_pipeline.nf --config my_run.yml` to “just work”.
 
 Once you’ve done this once, the cached environment makes subsequent runs nearly instant to start.
 
@@ -138,34 +143,31 @@ Once you’ve done this once, the cached environment makes subsequent runs nearl
 ### 2. Ensure Nextflow can find your package manager and local cache/work dirs
 
 - Make sure `mamba` (or `conda`) is on your `PATH`. If you used the Quick Start above, activating the `nextflow` environment is sufficient.
-- Run the one-time symlink step from the Quick Start (Step 3). After that, the repository’s `.nextflow` directory will automatically point to your local cache, so no environment variables or extra flags are required beyond `-work-dir`.
+- Run the one-time symlink step from the Quick Start (Step 3). After that, the repository’s `.nextflow` directory will automatically point to your local cache, and the bundled `nextflow.config` keeps the work directory local without additional flags.
 
 ### 3. Copy & edit the YAML config
 
 ```bash
 cp asv_pipeline_nextflow.yml my_run.yml
-# Edit paths, skip flags, thresholds, etc.
+# Edit paths, thresholds, env overrides, etc.
 ```
 
-Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is writable (or resumable), and adjust `environments.main` if you want to test a different YAML in `envs/`. The `--config my_run.yml` CLI flag simply sets `params.config` to your chosen file; avoid `--params-file` because that overrides the entire `params.*` map and prevents the pipeline from loading its own config.
+Ensure `paths.input_dir` points to the FASTQ directory, `paths.output_dir` is writable (or resumable), and adjust `environments.main` if you want to test a different YAML in `envs/`. Use `--config my_run.yml` when you want the pipeline to load that file directly, or pass the YAML via `--params-file my_run.yml` if you prefer to inline the parameters—the workflow detects inline configs automatically (set `config_root` in the YAML if you need relative paths to resolve from somewhere other than the project directory).
 
 ### 4. Run a dry run (optional but recommended)
 
 ```bash
 nextflow run asv_pipeline.nf --config my_run.yml \
-    -preview \
-    -work-dir /home/ryan/.nextflow/work
+    -preview
 ```
 
-The `-preview` switch validates the config, prints the plan, and ensures all required scripts exist without launching tasks. Supplying `-work-dir` keeps temporary files on the local disk even if the repo lives on a shared filesystem.
+The `-preview` switch validates the config, prints the plan, and ensures all required scripts exist without launching tasks. Override `-work-dir` only when you need to place intermediates somewhere other than the default `/home/ryan/.nextflow/work`.
 
 ### 5. Launch the pipeline (with automatic env provisioning)
 
 ```bash
 nextflow run asv_pipeline.nf --config my_run.yml \
-    -with-conda \
     -profile standard \
-    -work-dir /home/ryan/.nextflow/work \
     -with-report reports/asv_report.html \
     -with-trace reports/asv_trace.txt
 ```
@@ -173,13 +175,9 @@ nextflow run asv_pipeline.nf --config my_run.yml \
 - Use `-resume` to restart from cached results if the run fails or you tweak non-breaking parameters.
 - Override work/output locations with `-work-dir` or custom YAML paths when needed.
 
-### 6. Skipping or resuming stages
+### 6. Resume with caching
 
-To reuse existing QC outputs, you can either:
-1. Flip the relevant option in `my_run.yml` (`steps.skip_fastp: true`), **or**
-2. Pass `--steps.skip_fastp true` on the CLI via Nextflow parameter overrides (e.g., `nextflow run ... --steps.skip_fastp true`).
-
-Skipped stages expect their downstream inputs to exist already in the output folder—identical to the Bash pipeline’s behavior.
+Nextflow automatically checkpoints every process result inside the `work/` directory. When a run stops (intentionally or due to failure), simply re-launch the same command with `-resume` and Nextflow will reuse every completed step instead of re-running the process. No manual skip toggles are needed—channel wiring remains identical regardless of how many stages restart.
 
 ### 7. Inspect outputs
 
@@ -191,22 +189,22 @@ Skipped stages expect their downstream inputs to exist already in the output fol
 
 ### 8. Troubleshooting
 
-- **Missing tools**: Double-check `envs/asv_pipeline.yml` includes the binaries you need and that `mamba`/`conda` is available on `PATH` when you pass `-with-conda`.
+- **Missing tools**: Double-check `envs/asv_pipeline.yml` includes the binaries you need and that `mamba`/`conda` is on your `PATH` (the repo defaults enable Conda automatically).
 - **No FASTQs detected**: Verify `filename_patterns` match your naming scheme (especially `R1/R2` tokens).
-- **swarm not installed**: Either install it or set `steps.skip_swarm: true`.
+- **swarm not installed**: Ensure the `envs/asv_pipeline.yml` (or overridden env) includes `swarm`, or install it into your active Conda/Mamba base environment.
 - **Custom filter script**: Point `table_filter.script` to your Python script (relative paths are resolved from the YAML directory).
 
 ## Example Command Cheatsheet
 
 ```bash
 # Default config in place
-nextflow run asv_pipeline.nf -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf
 
 # Alternate config + limited CPUs
-nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8 -with-conda -work-dir /home/ryan/.nextflow/work
+nextflow run asv_pipeline.nf --config configs/v4_batch.yml --resources.threads 8
 
-# Resume partial run and skip swarm
-nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume -with-conda -work-dir /home/ryan/.nextflow/work
+# Resume partial run with cached steps
+nextflow run asv_pipeline.nf --config my_run.yml -resume
 ```
 
 ## Why Nextflow?
@@ -214,6 +212,6 @@ nextflow run asv_pipeline.nf --config my_run.yml --steps.skip_swarm true -resume
 - **Reproducibility**: Parameterization via YAML + immutable publish directories.
 - **Portability**: Seamlessly scale from local workstation to HPC/backends.
 - **Traceability**: Built-in reports (`-with-trace`, `-with-report`) complement the existing log files.
-- **Modularity**: Each process can be toggled or extended without editing the main script.
+- **Modularity**: Each process remains isolated in DSL2 modules, so extending parameters or swapping tools does not require editing the downstream logic.
 
 Use this README as a dedicated reference for the Nextflow version while continuing to rely on `README.md` for the Bash workflow. Both pipelines share the same data-handling principles, so you can choose whichever orchestration layer suits the current task.

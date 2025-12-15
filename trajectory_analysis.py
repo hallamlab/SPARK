@@ -11,7 +11,6 @@ Usage:
     --umap-results spark_combined_output/batch_correction/umap_hdbscan_results.tsv \
     --asv-data spark_combined_output/batch_correction/asv_clr_after_correction.tsv \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --month-col Month \
     --group-cols Depth,cluster_after \
     --output-dir spark_combined_output/trajectory_analysis \
@@ -42,6 +41,8 @@ plt.rcParams.update({
     'figure.dpi': 150,
 })
 sns.set_style("white")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ============================================================================
@@ -705,8 +706,6 @@ def main():
                         help="Path to metadata TSV")
     
     # Column specifications
-    parser.add_argument("--meta-index-col", default="sample",
-                        help="Sample ID column")
     parser.add_argument("--month-col", required=True,
                         help="Month column name (1-12)")
     parser.add_argument("--group-cols", required=True,
@@ -748,8 +747,10 @@ def main():
     print("[1/8] Loading data...")
     umap_df = pd.read_csv(args.umap_results, sep="\t", index_col=0)
     asv_data = pd.read_csv(args.asv_data, sep="\t", index_col=0)
-    metadata = pd.read_csv(args.metadata, sep="\t")
-    metadata = metadata.set_index(args.meta_index_col)
+    metadata_df = pd.read_csv(args.metadata, sep="\t")
+    if SAMPLE_ID_COL not in metadata_df.columns:
+        raise ValueError(f"Metadata column '{SAMPLE_ID_COL}' not found in {args.metadata}")
+    metadata = metadata_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
     
     print(f"  UMAP data: {umap_df.shape}")
     print(f"  ASV data: {asv_data.shape}")

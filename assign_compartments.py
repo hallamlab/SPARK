@@ -14,7 +14,6 @@ Usage:
     --asv-counts spark_combined_output/combined_asv_table.tsv \
     --asv-fasta spark_combined_output/combined_asv_seqs.fasta \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --depth-col Depth \
     --month-col Month \
     --biochem-cols "Temperature,Oxygen,Phosphate,Silicate,Nitrogen Oxides,Nitrate,Nitrite,Ammonium,Hydrogen Sulfide,Iron,Methane,Nitrous Oxide,Dimethyl Sulfide,Fluorescence,PAR/Irradiance" \
@@ -47,6 +46,8 @@ plt.rcParams.update({
     'figure.dpi': 150,
 })
 sns.set_style("white")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ============================================================================
@@ -2212,8 +2213,6 @@ def main():
                        help="ASV sequences in FASTA format (for GC content)")
     parser.add_argument("--metadata", type=Path, required=True,
                        help="Sample metadata")
-    parser.add_argument("--meta-index-col", default="sample",
-                       help="Sample ID column in metadata")
     
     # Metadata columns
     parser.add_argument("--depth-col", default="Depth",
@@ -2256,7 +2255,10 @@ def main():
     print("\n[1/9] Loading data...")
     asv_clr = pd.read_csv(args.asv_clr, sep="\t", index_col=0)
     asv_counts = pd.read_csv(args.asv_counts, sep="\t", index_col=0).T
-    metadata = pd.read_csv(args.metadata, sep="\t").set_index(args.meta_index_col)
+    metadata_df = pd.read_csv(args.metadata, sep="\t")
+    if SAMPLE_ID_COL not in metadata_df.columns:
+        raise ValueError(f"Metadata column '{SAMPLE_ID_COL}' not found in {args.metadata}")
+    metadata = metadata_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
     
     # CLEAN BIOCHEMICAL DATA TYPES
     print("  Cleaning biochemical data types...")

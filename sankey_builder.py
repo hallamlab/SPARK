@@ -14,12 +14,12 @@ python data_loss_sankey.py \
   --data-dir /path/to/project \
   --sub-dir spark_combined_output \
   --metadata /path/to/project/ref_db/spark_metadata.tsv \
-  --type-col type_group \
+  --group1-col type_group \
   --samp-col lmp_id \
   --keep-types "Oral Rinse,Lung Brush,BAL,Skin Brush,Scope Flush" \
-  --fastq-stats stats/fastq_stats.tsv --fastq-id-prefix-underscores 2 \
-  --filtered-stats stats/filtered_fastqs.tsv --filtered-id-prefix-underscores 2 \
-  --asv-raw ASVs/ASV_counts.tsv --asv-id-prefix-underscores 2 \
+  --fastq-stats stats/fastq_stats.tsv \
+  --filtered-stats stats/filtered_fastqs.tsv \
+  --asv-raw ASVs/ASV_counts.tsv \
   --asv-decon ASVs/ASV_target.decon.tsv \
   --asv-micro ASVs/ASV_target.micro.tsv \
   --palette "Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Sequence, Optional
 
@@ -91,43 +92,22 @@ def parse_steps_csv(s: str) -> Tuple[List[str], List[int]]:
     return list(d.keys()), list(d.values())
 
 
-def extract_sample_id_from_path(path_str: str, prefix_underscores: Optional[int] = None,
-                                regex: Optional[str] = None) -> str:
+def extract_sample_id_from_path(path_str: str) -> str:
     """
     Extract a sample id from a file path.
-    - If regex is provided: return first capturing group.
-    - Else if prefix_underscores is provided: keep the first N underscore-delimited tokens.
-      e.g., name='ABC_1_2_3_4.fastq.gz', n=2 -> 'ABC_1'
-    - Else return basename without extension(s).
+    Returns the basename without common sequencing extensions.
     """
-    import re as _re
     base = os.path.basename(path_str)
-    if regex:
-        m = _re.search(regex, path_str)
-        if not m or not m.groups():
-            raise ValueError(f"Regex did not match or capture a group: {regex} for {path_str}")
-        return m.group(1)
-    if prefix_underscores is not None:
-        stem = base
-        # Remove common extensions (include fasta so filtered FASTA paths behave)
-        for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq',
-                    '.fasta.gz', '.fasta', '.fa.gz', '.fa',
-                    '.gz', '.tsv', '.csv', '.txt'):
-            if stem.endswith(ext):
-                stem = stem[: -len(ext)]
-        parts = stem.split('_')
-        # If we don't have more than prefix_underscores tokens, keep the full stem
-        if prefix_underscores <= 0:
-            return stem
-        if len(parts) <= prefix_underscores:
-            return stem
-        # Otherwise, keep the first prefix_underscores tokens
-        stem = '_'.join(parts[: prefix_underscores]).split('-', 1)[0]
-        return stem
     # Fallback: strip extensions
-    if '.' in base:
-        return base.split('.')[0]
-    return base
+    stem = base
+    for ext in ('.fastq.gz', '.fq.gz', '.fastq', '.fq',
+                '.fasta.gz', '.fasta', '.fa.gz', '.fa',
+                '.gz', '.tsv', '.csv', '.txt'):
+        if stem.endswith(ext):
+            stem = stem[: -len(ext)]
+    stem = re.sub(r'(\.filtered|\.merged|\.trimmed)$', '', stem)
+    stem = re.sub(r'(_R[12]|_[12])?(_001)?$', '', stem)
+    return stem
 
 
 def safe_int(x) -> int:
@@ -140,18 +120,17 @@ def safe_int(x) -> int:
 # =========================
 # I/O readers (compute mode)
 # =========================
-def read_metadata(path: Path, samp_col: str, type_col: str,
-                  keep_types: Optional[Sequence[str]]) -> pd.DataFrame:
+def read_metadata(path: Path, samp_col: str, group_col: str,
+                  keep_groups: Optional[Sequence[str]]) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', header=0)
-    if keep_types:
-        df = df[df[type_col].isin(keep_types)].copy()
+    if keep_groups:
+        df = df[df[group_col].isin(keep_groups)].copy()
     # Make sure sample ids are strings
     df[samp_col] = df[samp_col].astype(str)
     return df
 
 
-def read_fastq_stats(path: Path, samp_col: str,
-                     id_prefix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
+def read_fastq_stats(path: Path, samp_col: str) -> pd.DataFrame:
     """
     Expects columns: file, num_seqs
     Collapses replicates by sample ID via groupby+sum.
@@ -160,14 +139,13 @@ def read_fastq_stats(path: Path, samp_col: str,
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
     df[samp_col] = df['file'].apply(
-        lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex)
+        lambda x: extract_sample_id_from_path(x)
     )
     out = df.groupby(samp_col, as_index=False)['num_seqs'].sum()
     return out
 
 
-def read_asv_matrix(path: Path, samp_col: str,
-                    id_prefix_underscores: Optional[int], id_regex: Optional[str]) -> pd.DataFrame:
+def read_asv_matrix(path: Path, samp_col: str) -> pd.DataFrame:
     """
     Input: wide matrix (rows=ASVs, columns=samples), counts.
     Returns long: [ASV_ID, samp_col, count] with count>0
@@ -176,21 +154,19 @@ def read_asv_matrix(path: Path, samp_col: str,
     long_df = df.stack().reset_index()
     long_df.columns = ['ASV_ID', 'sample_raw', 'count']
     long_df = long_df[long_df['count'] > 0].copy()
-    long_df[samp_col] = long_df['sample_raw'].apply(
-        lambda x: extract_sample_id_from_path(x, id_prefix_underscores, id_regex)
-    )
+    long_df[samp_col] = long_df['sample_raw'].astype(str)
     long_df.drop(columns=['sample_raw'], inplace=True)
     return long_df
 
 
-def group_counts_by_type(long_counts: pd.DataFrame, metadata: pd.DataFrame,
-                         samp_col: str, type_col: str) -> pd.DataFrame:
+def group_counts_by_group(long_counts: pd.DataFrame, metadata: pd.DataFrame,
+                          samp_col: str, group_col: str) -> pd.DataFrame:
     """
-    Merge counts with metadata and sum by type_col.
-    Replicates with the same sample ID and type are naturally summed.
+    Merge counts with metadata and sum by the chosen grouping column.
+    Replicates with the same sample ID and group are naturally summed.
     """
-    merged = long_counts.merge(metadata[[samp_col, type_col]], on=samp_col, how='inner')
-    grp = merged.groupby(type_col, as_index=False)['count'].sum()
+    merged = long_counts.merge(metadata[[samp_col, group_col]], on=samp_col, how='inner')
+    grp = merged.groupby(group_col, as_index=False)['count'].sum()
     grp.rename(columns={'count': 'num_reads'}, inplace=True)
     return grp
 
@@ -328,28 +304,18 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--sub-dir", default="spark_combined_output", help="Subdir under data-dir for outputs/stats")
     io.add_argument("--metadata", type=Path, help="TSV with sample metadata")
     io.add_argument("--samp-col", default="lmp_id", help="Sample column name in metadata")
-    io.add_argument("--type-col", default="type_group", help="Grouping column in metadata")
+    io.add_argument("--group1-col", default="group1", help="Grouping column in metadata")
     io.add_argument("--color-col", default="Color", help="Color column in metadata")
     io.add_argument("--keep-types", default="",
                     help="Comma-separated list; if empty, keep all types")
 
     io.add_argument("--fastq-stats", default="stats/fastq_stats.tsv",
                     help="Path (relative to sub-dir or absolute) to raw fastq stats TSV")
-    io.add_argument("--fastq-id-prefix-underscores", type=int,
-                    help="Keep first N underscore tokens for sample id (raw fastq)")
-    io.add_argument("--fastq-id-regex", default="",
-                    help="Regex with one capture group to extract sample id from raw fastq 'file' path")
 
     io.add_argument("--filtered-stats", default="stats/filtered_fastqs.tsv",
                     help="Path to filtered fastq stats TSV")
-    io.add_argument("--filtered-id-prefix-underscores", type=int,
-                    help="Keep first N underscore tokens (filtered reads)")
-    io.add_argument("--filtered-id-regex", default="", help="Regex for filtered sample id extraction")
 
     io.add_argument("--asv-raw", default="ASVs/ASV_counts.tsv", help="Wide ASV counts matrix")
-    io.add_argument("--asv-id-prefix-underscores", type=int,
-                    help="Keep first N underscore tokens (ASV matrices)")
-    io.add_argument("--asv-id-regex", default="", help="Regex for ASV sample id extraction")
 
     io.add_argument("--asv-decon", default="ASVs/ASV_target.decon.tsv", help="Wide ASV after decontamination")
     io.add_argument("--asv-micro", default="ASVs/ASV_target.micro.tsv", help="Wide ASV microbial (finished)")
@@ -405,8 +371,6 @@ def main():
     asv_micro_long = read_asv_matrix(
         asv_micro_path,
         args.samp_col,
-        args.asv_id_prefix_underscores or None,
-        args.asv_id_regex or None,
     )
 
     sample_list = asv_micro_long[args.samp_col].unique().tolist()
@@ -414,29 +378,23 @@ def main():
     asv_raw_long = read_asv_matrix(
         asv_raw_path,
         args.samp_col,
-        args.asv_id_prefix_underscores or None,
-        args.asv_id_regex or None,
     )
     asv_raw_long = asv_raw_long[asv_raw_long[args.samp_col].isin(sample_list)].copy()
 
     asv_decon_long = read_asv_matrix(
         asv_decon_path,
         args.samp_col,
-        args.asv_id_prefix_underscores or None,
-        args.asv_id_regex or None,
     )
     asv_decon_long = asv_decon_long[asv_decon_long[args.samp_col].isin(sample_list)].copy()
 
     # Read metadata and filter by types, then restrict to samples with ASV micro data
-    meta = read_metadata(metadata_path, args.samp_col, args.type_col, keep_types)
+    meta = read_metadata(metadata_path, args.samp_col, args.group1_col, keep_types)
     meta = meta[meta[args.samp_col].isin(sample_list)].copy()
 
     # Raw reads (pairs): sum num_seqs across files, then /2, with replicates collapsed
     raw_df = read_fastq_stats(
         fastq_stats_path,
         args.samp_col,
-        args.fastq_id_prefix_underscores or None,
-        args.fastq_id_regex or None
     )
 
     raw_df = raw_df[raw_df[args.samp_col].isin(sample_list)].copy()
@@ -445,13 +403,11 @@ def main():
     filt_df = read_fastq_stats(
         filtered_stats_path,
         args.samp_col,
-        args.filtered_id_prefix_underscores or None,
-        args.filtered_id_regex or None
     )
     filt_df = filt_df[filt_df[args.samp_col].isin(sample_list)].copy()
 
-    # Build palette from metadata: type_col -> color, with string keys
-    palette = {str(t): str(c) for t, c in zip(meta[args.type_col], meta[args.color_col])}
+    # Build palette from metadata: grouping column -> color, with string keys
+    palette = {str(t): str(c) for t, c in zip(meta[args.group1_col], meta[args.color_col])}
 
     # Sort palette deterministically (numeric if possible, else lexical)
     try:
@@ -459,26 +415,24 @@ def main():
     except (ValueError, TypeError):
         palette = dict(sorted(palette.items()))
 
-    # Sum by type (group) — this implicitly respects keep_types and drops samples without metadata
-    raw_by_type = raw_df.merge(meta[[args.samp_col, args.type_col]],
-                               on=args.samp_col, how='inner') #\
-                        #.groupby(args.type_col, as_index=False)['num_seqs'].sum()    
-    
+    # Sum by group — this implicitly respects keep_types and drops samples without metadata
+    raw_by_type = raw_df.merge(meta[[args.samp_col, args.group1_col]],
+                               on=args.samp_col, how='inner') \
+                        .groupby(args.group1_col, as_index=False)['num_seqs'].sum()
     raw_by_type['num_reads'] = (raw_by_type['num_seqs'] // 2).astype(int)
-    print(raw_by_type['num_reads'].sum())
     
-    filt_by_type = filt_df.merge(meta[[args.samp_col, args.type_col]],
+    filt_by_type = filt_df.merge(meta[[args.samp_col, args.group1_col]],
                                  on=args.samp_col, how='inner') \
-                          .groupby(args.type_col, as_index=False)['num_seqs'].sum()
+                          .groupby(args.group1_col, as_index=False)['num_seqs'].sum()
     filt_by_type['num_reads'] = filt_by_type['num_seqs'].astype(int)
     
     # Override step totals so node labels use exactly the subset represented in the ribbons
     raw_reads_total = int(raw_by_type['num_reads'].sum())
     filt_reads_total = int(filt_by_type['num_reads'].sum())
 
-    asv_raw_by_type = group_counts_by_type(asv_raw_long, meta, args.samp_col, args.type_col)
-    asv_decon_by_type = group_counts_by_type(asv_decon_long, meta, args.samp_col, args.type_col)
-    asv_micro_by_type = group_counts_by_type(asv_micro_long, meta, args.samp_col, args.type_col)
+    asv_raw_by_type = group_counts_by_group(asv_raw_long, meta, args.samp_col, args.group1_col)
+    asv_decon_by_type = group_counts_by_group(asv_decon_long, meta, args.samp_col, args.group1_col)
+    asv_micro_by_type = group_counts_by_group(asv_micro_long, meta, args.samp_col, args.group1_col)
 
     # Totals for remaining steps
     asv_raw_reads = int(asv_raw_by_type['num_reads'].sum())
@@ -504,7 +458,7 @@ def main():
     if keep_types:
         types = keep_types
     else:
-        unique_types = meta[args.type_col].unique()
+        unique_types = meta[args.group1_col].unique()
         # Sort numerically if possible, otherwise alphabetically
         try:
             types = sorted(unique_types, key=lambda x: float(x))
@@ -513,11 +467,11 @@ def main():
 
     # Input and output dicts for sankey ends (string keys to match palette)
     lmp_in = {
-        str(t): int(raw_by_type.loc[raw_by_type[args.type_col] == t, 'num_reads'].sum())
+        str(t): int(raw_by_type.loc[raw_by_type[args.group1_col] == t, 'num_reads'].sum())
         for t in types
     }
     lmp_out = {
-        str(t): int(asv_micro_by_type.loc[asv_micro_by_type[args.type_col] == t, 'num_reads'].sum())
+        str(t): int(asv_micro_by_type.loc[asv_micro_by_type[args.group1_col] == t, 'num_reads'].sum())
         for t in types
     }
 

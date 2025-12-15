@@ -15,7 +15,6 @@ Quickstart:
     --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
     --asv spark_combined_output/ASVs/ASV_final.micro.tsv \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --batch-col batch \
     --output-dir spark_combined_output/batch_correction \
     --biological-covariates type_group,status \
@@ -54,6 +53,8 @@ plt.rcParams.update({
     'figure.dpi': 150,
 })
 sns.set_style("white")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ============================================================================
@@ -1822,8 +1823,6 @@ def main():
                         help="Path to metadata TSV")
     parser.add_argument("--asv-meta", type=str, required=True,
                         help="Path to asv + metadata TSV")    
-    parser.add_argument("--meta-index-col", default="sample",
-                        help="Sample ID column in metadata")
     parser.add_argument("--batch-col", required=True,
                         help="Batch column name in metadata")
     parser.add_argument("--output-dir", type=str, required=True,
@@ -1912,7 +1911,8 @@ def main():
     # Load data
     print("[1/8] Loading data...")
     asv_raw = load_asv_table(asv_path, args.asv_orientation)
-    metadata = load_metadata(meta_path, args.meta_index_col)
+    meta_index_col = SAMPLE_ID_COL
+    metadata = load_metadata(meta_path, meta_index_col)
     
     asv_meta = pd.read_csv(args.asv_meta, sep="\t", header=0)
 

@@ -31,7 +31,6 @@ CLI
 python collectors_curves.py \
   --counts asv_counts.tsv \
   --meta sample_metadata.tsv \
-  --sample-id-col sample_id \
   --group-col sample_type \
   --permutations 512 \
   --palette tab10 \
@@ -59,6 +58,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
 
 plt.switch_backend("Agg")
+
+SAMPLE_ID_COL = 'sampleid'
 
 
 # ----------------------------- IO & Prep ------------------------------------
@@ -322,8 +323,6 @@ def main():
                     help="TSV (optionally .gz) with ASVs as rows and samples as columns.")
     ap.add_argument("--meta", required=True,
                     help="TSV (optionally .gz) metadata file.")
-    ap.add_argument("--sample-id-col", default="sample_id",
-                    help="Metadata column with IDs matching count-table columns.")
     ap.add_argument("--group-col", default="sample_type",
                     help="Metadata column for hue/facets (e.g., sample_type).")
     ap.add_argument("--permutations", type=int, default=256,
@@ -356,7 +355,7 @@ def main():
 
     args = ap.parse_args()
 
-    counts, meta = read_inputs(args.counts, args.meta, args.sample_id_col, args.group_col)
+    counts, meta = read_inputs(args.counts, args.meta, SAMPLE_ID_COL, args.group_col)
 
     # Convert group_col to integers for proper sorting
     meta[args.group_col] = meta[args.group_col].astype(int)
@@ -378,7 +377,7 @@ def main():
     all_groups_order = resolve_group_order(meta[args.group_col], groups_order)
     curves, groups_order = build_group_curves(
         counts, meta,
-        sample_id_col=args.sample_id_col,
+        sample_id_col=SAMPLE_ID_COL,
         group_col=args.group_col,
         groups_order=all_groups_order,
         n_perm=args.permutations,

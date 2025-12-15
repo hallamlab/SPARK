@@ -9,7 +9,6 @@ Quickstart (original workflow with raw counts):
     --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
     --asv spark_combined_output/ASVs/ASV_final.micro.tsv \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --group-cols none,type_group \
     --output-dir spark_combined_output/metadata \
     --transform clr --hdbscan-min-cluster-size 5 --svm-nu 0.1 \
@@ -20,7 +19,6 @@ Quickstart (with batch-corrected CLR data):
     --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
     --asv spark_combined_output/batch_correction/asv_clr_after_correction.tsv \
     --metadata spark_combined_output/metadata/metadata_updated.tsv \
-    --meta-index-col sample \
     --group-cols none,type_group \
     --output-dir spark_combined_output/outlier_detection_corrected \
     --asv-orientation samples_rows \
@@ -59,6 +57,8 @@ from hdbscan import approximate_predict
 # Optional compositional transforms (CLR)
 from skbio.stats.composition import clr, multiplicative_replacement
 
+SAMPLE_ID_COL = 'sampleid'
+
 
 # -----------------------------
 # Helpers
@@ -71,7 +71,7 @@ def resolve_path(root: Optional[Path], rel_or_abs: str) -> Path:
 def load_metadata(path: Path, index_col: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", header=0)
     if index_col not in df.columns:
-        raise ValueError(f"--meta-index-col '{index_col}' not found in metadata columns: {df.columns.tolist()}")
+        raise ValueError(f"Metadata column '{index_col}' not found in columns: {df.columns.tolist()}")
     df = df.drop_duplicates(subset=[index_col]).set_index(index_col)
     return df
 
@@ -277,7 +277,6 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--asv", type=str, required=True, 
                     help="Path to ASV table (TSV). Can be raw counts or batch-corrected CLR data.")
     io.add_argument("--metadata", type=str, required=True, help="Path to metadata TSV")
-    io.add_argument("--meta-index-col", default="sample", help="Column in metadata to use as index (sample ID)")
     io.add_argument("--output-dir", type=str, required=True, help="Directory to write outputs")
 
     fmt = p.add_argument_group("Data formatting")
@@ -339,7 +338,7 @@ def main():
         args.transform = "none"
 
     # load data
-    meta = load_metadata(resolve_path(root, args.metadata), args.meta_index_col)
+    meta = load_metadata(resolve_path(root, args.metadata), SAMPLE_ID_COL)
     asv = load_asv_table(resolve_path(root, args.asv), args.asv_orientation)
     asv = align_and_filter(asv, meta, pre_transformed=args.pre_transformed)
 

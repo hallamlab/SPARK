@@ -1,22 +1,14 @@
 paths:
-  input_dir: /home/ryan/SABer_dat/SI_data/SI_ASV/V4_ncbi_input
-  output_dir: /home/ryan/SABer_dat/SI_data/SI_ASV/V4_ncbi_output
+  input_dir: /cephfs/rjm_work/si_asv/V4_ncbi_input
+  output_dir: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output
+  manifest: /cephfs/rjm_work/si_asv/ref_db/sample_manifest.tsv
+  work_dir: /cephfs/rjm_work/si_asv/nf_work
+  conda_cache_dir: /cephfs/rjm_work/si_asv/conda_cache
+    # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
-  threads:
+  threads: 1          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
   single_end: false
-
-steps:
-  skip_fastp: false
-  skip_merge: false
-  skip_filter: false
-  skip_concat: false
-  skip_derep: false
-  skip_denoise: false
-  skip_chimera: false
-  skip_swarm: false
-  skip_count: false
-  skip_tabfilt: false
 
 fastp:
   trim_front_r1: 19
@@ -39,8 +31,210 @@ unoise:
   min_size: 3
 
 swarm:
-  enabled: true
   distance: 1
+
+sina:
+  reference:
+  reference_url: https://www.arb-silva.de/fileadmin/silva_databases/release_138_2/ARB_files/SILVA_138.2_SSURef_NR99_03_07_24_opt.arb.gz
+  download_subdir: sina_reference
+  regions:
+    - V4
+  trim_to: V4
+  batch_size: 1000000
+  keep_gaps: false
+  threads: 16
+  verbose: false
+
+taxonomy:
+  ref_taxonomy:
+  ref_taxonomy_url: https://data.qiime2.org/2024.10/common/silva-138-99-tax.qza
+  ref_taxonomy_filename: silva-138_2-ssu-nr99-tax.qza
+  ref_sequences:
+  ref_sequences_url: https://data.qiime2.org/2024.10/common/silva-138-99-seqs.qza
+  ref_sequences_filename: silva-138_2-ssu-nr99-seqs-DNA.qza
+  download_subdir: taxonomy_reference
+  output_tsv: ASV_SILVA_tax.full-length.vsearch.tsv
+  stats_tsv: ASV_SILVA_stats.full-length.vsearch.tsv
+  uppercase_fasta: ASVs.upper.fasta
+  threads: 16
+
+mito:
+  enabled: true
+  chunk_dir:
+  chunk_size: 10
+  mitomaster_workers: 8
+  mitomaster_retries: 4
+  mitomaster_timeout: 90
+  mitomaster_header_mode: first
+  output_dir: mito/mitomap
+  prefix: nontarget
+  formats: svg,pdf
+  min_pident: 97.0
+  min_percov: 51.0
+  mitochondria_substring: mitochondria
+  feature_col: "Feature ID"
+  taxon_col: Taxon
+  consensus_col: Consensus
+  steps: "BioFactorial,Qiime_NB_FULL,MITOMASTER,BLAST_mito"
+  host_first_step: BioFactorial
+  figsize: 10x6
+  style: whitegrid
+  dpi: 300
+  no_plots: false
+  blast_threads: 16
+  mito_db: ../ref_db/mito_ncbi
+  biof_db: ../ref_db/ssu_pipeline_contaminants
+
+filter_counts:
+  enabled: true
+  metadata: ../ref_db/asv_cruise_metadata.tsv
+  output: ASV_target.tsv
+  group_col: Depth
+  min_group_size: 3
+  abundance_threshold: 0.005
+  sample_id_col: longID
+  min_consensus: 0.0
+  taxon_col: Taxon
+  consensus_col: Consensus
+  biofactorial_col: BioFactorial
+  mito_cols:
+    - MITOMASTER
+    - BLAST_mito
+  save_intermediates: true
+  mito_output_dir: mito/ASVs
+
+general_stats:
+  enabled: true
+
+sankey:
+  enabled: true
+  metadata: ../ref_db/asv_cruise_metadata.tsv
+  sub_dir: .
+  sample_col: lmp_id
+  group1_col: group1
+  color_col: Color
+  keep_types:
+    - Oral Rinse
+    - Lung Brush
+    - BAL
+    - Skin Brush
+    - Scope Flush
+  output_prefix: metadata/data_loss_sankey
+  title: Data Loss Flow
+  make_labeled: true
+  make_unlabeled: true
+
+metadata_plots:
+  enabled: true
+  metadata: ../ref_db/asv_cruise_metadata.tsv
+  sub_dir: .
+  type_col: Depth
+  color_col: Color
+  keep_types:
+    - Oral Rinse
+    - Lung Brush
+    - BAL
+    - Skin Brush
+    - Scope Flush
+  include_rank: []
+  mito_threshold_line: 1000
+  run_micro: true
+  run_mito: true
+
+batch_correction:
+  enabled: true
+  output_dir: batch_correction
+  batch_col: plateID
+  asv_orientation: features_rows
+  biological_covariates:
+  biological_color_col: Depth,Month
+  color_palette_col: Color
+  umap_neighbors: 15
+  umap_min_dist: 0.1
+  hdbscan_min_cluster_size: 5
+  hdbscan_min_samples:
+  hdbscan_selection_method: eom
+  optimize_clustering: false
+  target_clusters: 3-8
+  n_features_plot: 5
+  random_state: 42
+
+assign_compartments:
+  enabled: true
+  output_dir: compartments
+  depth_col: Depth
+  month_col: Month
+  biochem_cols:
+    - Temperature
+    - Oxygen
+    - Nitrogen Oxides
+    - Nitrate
+    - Nitrite
+    - Ammonium
+    - Nitrous Oxide
+    - Hydrogen Sulfide
+    - Dimethyl Sulfide
+    - Methane
+    - Phosphate
+    - Silicate
+  use_integrated: true
+  verbose: true
+
+trajectory_analysis:
+  enabled: true
+  output_dir: trajectory_analysis
+  month_col: Month
+  group_cols:
+    - Depth
+    - cluster_after
+  color_col: Color
+  top_taxa: 10
+
+stratification:
+  enabled: true
+  output_dir: stratification_timeseries_analysis
+  date_col: Date
+  month_col: Month
+  year_col: Year
+  depth_col: Depth
+  consensus_threshold: 2
+
+outlier_detection:
+  enabled: true
+  output_dir: outliers_corrected
+  group_cols:
+    - Depth
+  transform: none
+  asv_orientation: samples_rows
+  pre_transformed: true
+  scale: false
+  use_iso: true
+  use_svm: true
+  use_hdb: true
+  vote_threshold: 3
+  iso_contamination: auto
+  iso_estimators: 200
+  iso_random_state: 42
+  svm_kernel: rbf
+  svm_gamma: scale
+  svm_nu: 0.1
+  hdbscan_min_cluster_size: 5
+  hdbscan_min_samples: 5
+  hdbscan_metric: euclidean
+
+collectors_curve:
+  enabled: true
+  group_col: Depth
+  color_col: Color
+  permutations: 999
+  seed: 42
+  out_prefix: metadata/collectors_curve
+  title: "Collector's Curves"
+  formats: pdf,svg
+  xpad: 0.5
+  max_cols: 3
+  show_perms: 10
+  presence_threshold: 0.0
 
 table_filter:
   min_sample_sum: 5000
@@ -63,3 +257,17 @@ filename_patterns:
 
 environments:
   main: envs/asv_pipeline.yml
+  sina: envs/sina.yml
+  taxonomy: envs/qiime2.yml
+  mitomaster: envs/mitomaster.yml
+  mito_checker: envs/mito_checker.yml
+  filter_counts: envs/filter_counts.yml
+  general_stats: envs/general_stats.yml
+  sankey: envs/sankey.yml
+  plot_metadata: envs/plot_metadata.yml
+  batch_correction: envs/asv_batch_correction.yml
+  assign_compartments: envs/assign_compartments.yml
+  trajectory_analysis: envs/trajectory_analysis.yml
+  stratification: envs/stratification.yml
+  outlier_checker: envs/outlier_checker.yml
+  collectors_curve: envs/collectors_curve.yml
