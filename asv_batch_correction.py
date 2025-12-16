@@ -899,7 +899,7 @@ def plot_umap_comparison(
             ax.grid(alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(f"{output_prefix}_umap_comparison.pdf", bbox_inches='tight', dpi=300)
+    plt.savefig(f"{output_prefix}_umap_comparison.png", bbox_inches='tight', dpi=300)
     plt.savefig(f"{output_prefix}_umap_comparison.svg", bbox_inches='tight')
     plt.close()
     
@@ -1311,7 +1311,7 @@ def plot_feature_batch_effect_scatter(
     # SAVE FIGURE
     # =================================================================
     
-    plt.savefig(f"{output_prefix}_batch_effect_scatter.pdf", bbox_inches='tight', dpi=300)
+    plt.savefig(f"{output_prefix}_batch_effect_scatter.png", bbox_inches='tight', dpi=300)
     plt.savefig(f"{output_prefix}_batch_effect_scatter.svg", bbox_inches='tight')
     plt.close()
     
@@ -1506,7 +1506,7 @@ def plot_batch_swarm_comparison(
                  title='Batch', bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True)
     
     plt.tight_layout()
-    plt.savefig(f"{output_prefix}_batch_swarm_PC1.pdf", bbox_inches='tight', dpi=300)
+    plt.savefig(f"{output_prefix}_batch_swarm_PC1.png", bbox_inches='tight', dpi=300)
     plt.savefig(f"{output_prefix}_batch_swarm_PC1.svg", bbox_inches='tight')
     plt.close()
     
@@ -1730,10 +1730,10 @@ def diagnose_batch_correction(
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(f"{output_prefix}_correction_diagnostics.pdf", bbox_inches='tight', dpi=300)
+    plt.savefig(f"{output_prefix}_correction_diagnostics.png", bbox_inches='tight', dpi=300)
     plt.close()
     
-    print(f"[✓] Saved diagnostic plots to: {output_prefix}_correction_diagnostics.pdf\n")
+    print(f"[✓] Saved diagnostic plots to: {output_prefix}_correction_diagnostics.png\n")
 
 
 def compute_batch_statistics(
@@ -1888,6 +1888,7 @@ def main():
     root = args.data_dir
     asv_path = root / args.asv if not Path(args.asv).is_absolute() else Path(args.asv)
     meta_path = root / args.metadata if not Path(args.metadata).is_absolute() else Path(args.metadata)
+    asv_meta_path = root / args.asv_meta if not Path(args.asv_meta).is_absolute() else Path(args.asv_meta)
     out_dir = root / args.output_dir if not Path(args.output_dir).is_absolute() else Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1914,8 +1915,7 @@ def main():
     meta_index_col = SAMPLE_ID_COL
     metadata = load_metadata(meta_path, meta_index_col)
     
-    asv_meta = pd.read_csv(args.asv_meta, sep="\t", header=0)
-
+    asv_meta = pd.read_csv(asv_meta_path, sep="\t", header=0)
 
     # Align
     print("[2/8] Aligning samples...")
@@ -2052,10 +2052,10 @@ def main():
     if args.optimize_clustering:
         if opt_results_before is not None:
             opt_results_before.to_csv(out_dir / "clustering_optimization_before.tsv", sep="\t", index=False)
-            plot_optimization_results(opt_results_before, out_dir / "clustering_optimization_before.pdf")
+            plot_optimization_results(opt_results_before, out_dir / "clustering_optimization_before.png")
         if opt_results_after is not None:
             opt_results_after.to_csv(out_dir / "clustering_optimization_after.tsv", sep="\t", index=False)
-            plot_optimization_results(opt_results_after, out_dir / "clustering_optimization_after.pdf")
+            plot_optimization_results(opt_results_after, out_dir / "clustering_optimization_after.png")
     
         # Save embeddings and clusters
     results_df = pd.DataFrame({
@@ -2118,9 +2118,9 @@ def main():
     print(f"  - asv_clr_before_correction.tsv (samples x features)")
     print(f"  - asv_clr_after_correction.tsv (samples x features, batch-corrected)")
     print(f"  - umap_hdbscan_results.tsv")
-    print(f"  - batch_correction_umap_comparison.pdf/svg")
-    print(f"  - batch_correction_batch_swarm_PC1.pdf/svg")
-    print(f"  - batch_correction_batch_swarm_features.pdf/svg")
+    print(f"  - batch_correction_umap_comparison.png/svg")
+    print(f"  - batch_correction_batch_swarm_PC1.png/svg")
+    print(f"  - batch_correction_batch_swarm_features.png/svg")
     print(f"  - batch_correction_statistics.tsv")
     if args.optimize_clustering:
         print(f"  - clustering_optimization_before.tsv/pdf")

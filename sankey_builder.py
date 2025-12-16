@@ -130,7 +130,42 @@ def read_metadata(path: Path, samp_col: str, group_col: str,
     return df
 
 
-def read_fastq_stats(path: Path, samp_col: str) -> pd.DataFrame:
+def load_sample_manifest(path: Path) -> Dict[str, str]:
+    """
+    Build a lookup from FASTQ file path (or basename) to sample ID.
+    Manifest columns: sample_id, fastq_r1, fastq_r2 (no header).
+    """
+    df = pd.read_csv(path, sep='\t', header=None, names=['sample_id', 'r1', 'r2'])
+    mapping: Dict[str, str] = {}
+    for _, row in df.iterrows():
+        sample_id = str(row['sample_id']).strip()
+        if not sample_id:
+            continue
+        for col in ('r1', 'r2'):
+            fastq_path = str(row[col]).strip()
+            if not fastq_path or fastq_path.lower() == 'nan':
+                continue
+            candidates = {
+                fastq_path,
+                os.path.basename(fastq_path),
+            }
+            try:
+                candidates.add(str(Path(fastq_path).resolve()))
+            except Exception:
+                pass
+            for cand in candidates:
+                if cand in mapping and mapping[cand] != sample_id:
+                    raise ValueError(
+                        f"FASTQ '{cand}' maps to multiple sample IDs ({mapping[cand]} vs {sample_id})"
+                    )
+                mapping[cand] = sample_id
+    if not mapping:
+        raise ValueError(f"No FASTQ entries were parsed from manifest: {path}")
+    return mapping
+
+
+def read_fastq_stats(path: Path, samp_col: str,
+                     manifest_map: Optional[Dict[str, str]] = None) -> pd.DataFrame:
     """
     Expects columns: file, num_seqs
     Collapses replicates by sample ID via groupby+sum.
@@ -138,9 +173,30 @@ def read_fastq_stats(path: Path, samp_col: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep='\t', header=0)
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
-    df[samp_col] = df['file'].apply(
-        lambda x: extract_sample_id_from_path(x)
-    )
+    stats_dir = path.parent
+
+    def lookup_sample(file_path: str) -> str:
+        if manifest_map:
+            candidates = [
+                file_path,
+                os.path.basename(file_path),
+                extract_sample_id_from_path(file_path),
+            ]
+            rel_path = (stats_dir / file_path)
+            candidates.append(str(rel_path))
+            candidates.append(os.path.basename(rel_path))
+            try:
+                candidates.append(str(rel_path.resolve()))
+            except Exception:
+                pass
+            for cand in candidates:
+                if cand in manifest_map:
+                    return manifest_map[cand]
+            print(candidates)
+            raise ValueError(f"File '{file_path}' not found in manifest")
+        return extract_sample_id_from_path(file_path)
+
+    df[samp_col] = df['file'].apply(lookup_sample)
     out = df.groupby(samp_col, as_index=False)['num_seqs'].sum()
     return out
 
@@ -303,6 +359,8 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--data-dir", type=Path, help="Project root (used to resolve defaults)")
     io.add_argument("--sub-dir", default="spark_combined_output", help="Subdir under data-dir for outputs/stats")
     io.add_argument("--metadata", type=Path, help="TSV with sample metadata")
+    io.add_argument("--sample-manifest", type=Path,
+                    help="TSV with columns: sample_id, fastq_r1, fastq_r2")
     io.add_argument("--samp-col", default="lmp_id", help="Sample column name in metadata")
     io.add_argument("--group1-col", default="group1", help="Grouping column in metadata")
     io.add_argument("--color-col", default="Color", help="Color column in metadata")
@@ -350,6 +408,7 @@ def main():
         return data_dir / args.sub_dir / rel_or_abs
 
     metadata_path = args.metadata or (data_dir / "ref_db" / "spark_metadata.tsv")
+    manifest_path = args.sample_manifest or (data_dir / "ref_db" / "sample_manifest.tsv")
     fastq_stats_path = resolve(args.fastq_stats)
     filtered_stats_path = resolve(args.filtered_stats)
     asv_raw_path = resolve(args.asv_raw)
@@ -360,6 +419,7 @@ def main():
 
     if args.verbose:
         print(f"[i] Metadata: {metadata_path}")
+        print(f"[i] Sample manifest: {manifest_path}")
         print(f"[i] Raw fastq stats: {fastq_stats_path}")
         print(f"[i] Filtered stats: {filtered_stats_path}")
         print(f"[i] ASV raw: {asv_raw_path}")
@@ -391,18 +451,22 @@ def main():
     meta = read_metadata(metadata_path, args.samp_col, args.group1_col, keep_types)
     meta = meta[meta[args.samp_col].isin(sample_list)].copy()
 
+    manifest_map = load_sample_manifest(manifest_path)
+    filter_map = {extract_sample_id_from_path(k): v for k, v in manifest_map.items() if v in sample_list}
+    
     # Raw reads (pairs): sum num_seqs across files, then /2, with replicates collapsed
     raw_df = read_fastq_stats(
         fastq_stats_path,
         args.samp_col,
+        manifest_map,
     )
-
     raw_df = raw_df[raw_df[args.samp_col].isin(sample_list)].copy()
 
     # Filtered reads (already single-end counts in your script), replicates collapsed
     filt_df = read_fastq_stats(
         filtered_stats_path,
         args.samp_col,
+        filter_map,
     )
     filt_df = filt_df[filt_df[args.samp_col].isin(sample_list)].copy()
 

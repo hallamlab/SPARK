@@ -43,6 +43,40 @@ plt.rcParams.update({
 sns.set_style("white")
 
 SAMPLE_ID_COL = 'sampleid'
+SEASON_ORDER = ['Winter', 'Spring', 'Summer', 'Fall']  # retained for reference
+
+
+def format_temporal_label(value) -> str:
+    """
+    Format temporal values (which we keep as ints) for plotting.
+    """
+    if pd.isna(value):
+        return ''
+    return str(int(value))
+
+
+def standardize_temporal_column(metadata: pd.DataFrame, month_col: str) -> Tuple[List, Dict]:
+    """
+    Coerce the temporal column to integers and return ordering.
+    """
+    series = pd.to_numeric(metadata[month_col], errors='coerce')
+    if series.isna().any():
+        raise ValueError(f"Month column '{month_col}' must be numeric; found non-numeric entries.")
+    series = series.astype(int)
+    metadata[month_col] = series
+    ordered = sorted(series.dropna().unique())
+    rank_map = {val: idx + 1 for idx, val in enumerate(ordered)}
+    return ordered, rank_map
+
+
+def normalize_group_labels(series: pd.Series) -> pd.Series:
+    """
+    Normalize grouping labels (Depth, clusters) to consistent numeric values when possible.
+    """
+    numeric = pd.to_numeric(series, errors='coerce')
+    if numeric.notna().sum() == series.notna().sum():
+        return numeric.astype(int)
+    return series.astype(str).str.strip()
 
 
 # ============================================================================
@@ -54,6 +88,7 @@ def aggregate_monthly_data(
     metadata: pd.DataFrame,
     month_col: str,
     group_col: str,
+    temporal_order: Optional[List] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Aggregate data by group and month, treating years as replicates.
@@ -80,11 +115,16 @@ def aggregate_monthly_data(
     """
     # Combine data with metadata
     combined = data.copy()
-    combined['month'] = metadata[month_col].values
+    if temporal_order:
+        combined['month'] = pd.Categorical(metadata[month_col].values,
+                                           categories=temporal_order,
+                                           ordered=True)
+    else:
+        combined['month'] = metadata[month_col].values
     combined['group'] = metadata[group_col].values
     
     # Group by group and month
-    grouped = combined.groupby(['group', 'month'])
+    grouped = combined.groupby(['group', 'month'], observed=True)
     
     # Calculate statistics
     mean_data = grouped.mean().reset_index()
@@ -97,6 +137,7 @@ def aggregate_monthly_data(
 def calculate_seasonal_trajectory_metrics(
     coords_mean: pd.DataFrame,
     coords_std: pd.DataFrame,
+    month_rank_map: Dict,
     group_col: str = 'group',
 ) -> pd.DataFrame:
     """
@@ -121,8 +162,16 @@ def calculate_seasonal_trajectory_metrics(
     metrics = []
     
     for grp in coords_mean[group_col].unique():
-        grp_data = coords_mean[coords_mean[group_col] == grp].sort_values('month')
-        grp_std = coords_std[coords_std[group_col] == grp].sort_values('month')
+        grp_data = coords_mean[coords_mean[group_col] == grp].copy()
+        grp_std = coords_std[coords_std[group_col] == grp].copy()
+        if month_rank_map:
+            grp_data['month_order'] = grp_data['month'].map(month_rank_map)
+            grp_std['month_order'] = grp_std['month'].map(month_rank_map)
+            grp_data = grp_data.sort_values('month_order')
+            grp_std = grp_std.sort_values('month_order')
+        else:
+            grp_data = grp_data.sort_values('month')
+            grp_std = grp_std.sort_values('month')
         
         if len(grp_data) < 2:
             print(f"    [!] Skipping group '{grp}': insufficient months (n={len(grp_data)})")
@@ -176,6 +225,8 @@ def identify_seasonal_marker_taxa(
     month_col: str,
     group_col: str,
     top_n: int = 20,
+    temporal_order: Optional[List] = None,
+    month_rank_map: Optional[Dict] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Identify taxa that show seasonal patterns within each group.
@@ -211,7 +262,13 @@ def identify_seasonal_marker_taxa(
         
         # Get data for this group
         grp_asv = asv_data.loc[mask]
-        grp_month = metadata.loc[mask, month_col].astype(int)
+        grp_month_raw = metadata.loc[mask, month_col]
+        if month_rank_map:
+            grp_month = pd.to_numeric(grp_month_raw.map(month_rank_map), errors='coerce')
+            period_divisor = max(len(month_rank_map), 1)
+        else:
+            grp_month = pd.to_numeric(grp_month_raw, errors='coerce')
+            period_divisor = 12
         
         # Calculate correlation with month for each ASV
         correlations = []
@@ -221,7 +278,7 @@ def identify_seasonal_marker_taxa(
             
             # Also calculate circular correlation (treating months as circular)
             # Convert months to radians
-            months_rad = grp_month * 2 * np.pi / 12
+            months_rad = grp_month * 2 * np.pi / period_divisor
             
             correlations.append({
                 'asv': asv,
@@ -256,6 +313,7 @@ def compare_grouping_methods(
     metadata: pd.DataFrame,
     month_col: str,
     group_cols: List[str],
+    temporal_order: Optional[List] = None,
 ) -> pd.DataFrame:
     """
     Compare how well different grouping methods capture seasonal variation.
@@ -268,7 +326,7 @@ def compare_grouping_methods(
     
     for group_col in group_cols:
         # Calculate between-group variance
-        months = metadata[month_col].unique()
+        months = temporal_order if temporal_order else metadata[month_col].unique()
         
         between_var = 0
         within_var = 0
@@ -324,6 +382,7 @@ def plot_seasonal_trajectories(
     group_col: str,
     output_path: Path,
     title: str = "Seasonal Community Trajectories",
+    month_rank_map: Optional[Dict] = None,
 ) -> None:
     """
     Plot seasonal trajectories in facets, one per group.
@@ -358,7 +417,12 @@ def plot_seasonal_trajectories(
     for idx, grp in enumerate(groups):
         ax = axes[idx]
         
-        grp_mean = coords_mean[coords_mean[group_col] == grp].sort_values('month')
+        grp_mean = coords_mean[coords_mean[group_col] == grp].copy()
+        if month_rank_map:
+            grp_mean['month_order'] = grp_mean['month'].map(month_rank_map)
+            grp_mean = grp_mean.sort_values('month_order')
+        else:
+            grp_mean = grp_mean.sort_values('month')
         
         if len(grp_mean) < 2:
             ax.text(0.5, 0.5, f'Insufficient data\n(n={len(grp_mean)})', 
@@ -406,9 +470,10 @@ def plot_seasonal_trajectories(
                 zorder=3,
             )
         
-        # Plot points with month numbers inside
+        # Plot points with month/season labels inside
         for idx_pt, row in grp_mean.iterrows():
-            month = int(row['month'])
+            month_value = row['month']
+            month_label = format_temporal_label(month_value)
             x_pos = row[x_col]
             y_pos = row[y_col]
             
@@ -428,7 +493,7 @@ def plot_seasonal_trajectories(
             ax.text(
                 x_pos,
                 y_pos,
-                str(month),
+                month_label,
                 ha='center',
                 va='center',
                 fontsize=13,
@@ -471,6 +536,8 @@ def plot_circular_trajectories(
     group_colors: Dict,
     group_col: str,
     output_path: Path,
+    temporal_order: Optional[List] = None,
+    month_rank_map: Optional[Dict] = None,
 ) -> None:
     """
     Plot trajectories in circular/polar coordinates to emphasize seasonality.
@@ -481,6 +548,16 @@ def plot_circular_trajectories(
     coord_cols = [c for c in coords_mean.columns if c not in [group_col, 'month', 'n_samples']]
     x_col = coord_cols[0]  # Use first UMAP dimension as radius
     
+    if temporal_order and month_rank_map and len(temporal_order) > 0:
+        period_divisor = len(temporal_order)
+        xtick_positions = np.linspace(0, 2*np.pi, period_divisor, endpoint=False)
+        xtick_labels = [format_temporal_label(val) for val in temporal_order]
+    else:
+        period_divisor = 12
+        xtick_positions = np.linspace(0, 2*np.pi, 12, endpoint=False)
+        xtick_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
     for grp in coords_mean[group_col].unique():
         grp_mean = coords_mean[coords_mean[group_col] == grp].sort_values('month')
         
@@ -490,7 +567,14 @@ def plot_circular_trajectories(
         color = group_colors.get(grp, '#808080')
         
         # Convert months to angles (radians)
-        theta = grp_mean['month'] * 2 * np.pi / 12 - np.pi/2  # Start at top (Jan)
+        month_values = grp_mean['month']
+        if month_rank_map:
+            numeric_months = pd.to_numeric(month_values.map(month_rank_map), errors='coerce')
+            divisor = max(period_divisor, 1)
+            theta = numeric_months * 2 * np.pi / divisor - np.pi/2
+        else:
+            month_numeric = pd.to_numeric(month_values, errors='coerce')
+            theta = month_numeric * 2 * np.pi / period_divisor - np.pi/2  # Start at top
         
         # Use UMAP coordinate as radius (normalized)
         r = grp_mean[x_col]
@@ -507,9 +591,8 @@ def plot_circular_trajectories(
                    '--', color=color, linewidth=2, alpha=0.5)
     
     # Set month labels
-    ax.set_xticks(np.linspace(0, 2*np.pi, 12, endpoint=False))
-    ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+    ax.set_xticks(xtick_positions)
+    ax.set_xticklabels(xtick_labels)
     ax.set_theta_direction(-1)  # Clockwise
     ax.set_theta_zero_location('N')  # Start at top
     
@@ -523,6 +606,107 @@ def plot_circular_trajectories(
     plt.close()
     
     print(f"  [✓] Saved circular trajectory plot")
+
+
+def plot_linear_trajectories(
+    coords_mean: pd.DataFrame,
+    group_colors: Dict,
+    group_col: str,
+    output_path: Path,
+    temporal_order: Optional[List] = None,
+    month_rank_map: Optional[Dict] = None,
+) -> None:
+    """
+    Plot normalized UMAP position over the ordered temporal axis.
+    """
+    fig, ax = plt.subplots(figsize=(14, 8))
+    coord_cols = [c for c in coords_mean.columns if c not in [group_col, 'month', 'n_samples']]
+    x_col = coord_cols[0]
+    groups = sorted(coords_mean[group_col].unique())
+    for grp in groups:
+        grp_mean = coords_mean[coords_mean[group_col] == grp].copy()
+        if month_rank_map:
+            grp_mean['order'] = grp_mean['month'].map(month_rank_map)
+        else:
+            grp_mean['order'] = grp_mean['month']
+        grp_mean = grp_mean.dropna(subset=['order']).sort_values('order')
+        if grp_mean.empty:
+            continue
+        values = grp_mean[x_col]
+        norm_vals = (values - values.min()) / (values.max() - values.min() + 1e-10)
+        color = group_colors.get(grp, '#808080')
+        ax.plot(grp_mean['order'], norm_vals, marker='o', linewidth=2.5,
+                markersize=7, alpha=0.8, color=color, label=str(grp))
+    if month_rank_map and temporal_order:
+        tick_pos = [month_rank_map.get(val) for val in temporal_order if val in month_rank_map]
+        tick_labels = [format_temporal_label(val) for val in temporal_order if val in month_rank_map]
+    else:
+        tick_pos = list(range(1, 13))
+        tick_labels = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_labels)
+    ax.set_xlim(min(tick_pos) - 0.5, max(tick_pos) + 0.5)
+    ax.set_xlabel('Time', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Normalized UMAP 1', fontsize=12, fontweight='bold')
+    ax.set_title('Seasonal Trajectory Profile', fontsize=14, fontweight='bold')
+    ax.grid(alpha=0.3, linestyle='--')
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', title=group_col)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches='tight', dpi=300)
+    plt.close()
+    print(f"  [✓] Saved linear seasonal trajectory plot")
+
+
+def plot_trajectory_heatmap(
+    coords_mean: pd.DataFrame,
+    group_col: str,
+    output_path: Path,
+    temporal_order: Optional[List] = None,
+    month_rank_map: Optional[Dict] = None,
+) -> None:
+    """
+    Heatmap of normalized UMAP coordinates across time for each group.
+    """
+    coord_cols = [c for c in coords_mean.columns if c not in [group_col, 'month', 'n_samples']]
+    x_col = coord_cols[0]
+    df = coords_mean[[group_col, 'month', x_col]].copy()
+    if month_rank_map:
+        df['order'] = df['month'].map(month_rank_map)
+    else:
+        df['order'] = df['month']
+    df = df.dropna(subset=['order'])
+    df['value'] = df.groupby(group_col)[x_col].transform(
+        lambda x: (x - x.min()) / (x.max() - x.min() + 1e-10)
+    )
+    pivot = df.pivot_table(
+        index=group_col,
+        columns='order',
+        values='value',
+        aggfunc='mean',
+    )
+    if temporal_order and month_rank_map:
+        ordered_cols = [month_rank_map.get(val) for val in temporal_order if val in month_rank_map]
+        pivot = pivot.reindex(columns=ordered_cols)
+        col_labels = [format_temporal_label(val) for val in temporal_order if val in month_rank_map]
+    else:
+        pivot = pivot.sort_index(axis=1)
+        col_labels = [format_temporal_label(col) for col in pivot.columns]
+    plt.figure(figsize=(14, max(4, len(pivot) * 0.6)))
+    sns.heatmap(
+        pivot,
+        cmap='viridis',
+        linewidths=0.5,
+        linecolor='white',
+        cbar_kws={'label': 'Normalized UMAP 1'},
+    )
+    plt.xlabel('Time', fontsize=12, fontweight='bold')
+    plt.ylabel(group_col, fontsize=12, fontweight='bold')
+    plt.xticks(ticks=np.arange(len(col_labels)) + 0.5, labels=col_labels, rotation=45, ha='right')
+    plt.title('Seasonal Trajectory Heatmap', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches='tight', dpi=300)
+    plt.close()
+    print(f"  [✓] Saved seasonal trajectory heatmap")
 
 
 def plot_comparison_between_groupings(
@@ -619,11 +803,16 @@ def plot_seasonal_marker_taxa(
     group_colors: Dict,
     output_path: Path,
     top_n: int = 5,
+    temporal_order: Optional[List] = None,
+    month_rank_map: Optional[Dict] = None,
 ) -> None:
     """
     Plot seasonal patterns of marker taxa, averaging across years.
     """
     n_groups = len(marker_taxa)
+    if n_groups == 0:
+        print("  [!] No marker taxa available for plotting.")
+        return
     fig, axes = plt.subplots(n_groups, 1, figsize=(14, 5 * n_groups))
     
     if n_groups == 1:
@@ -645,38 +834,50 @@ def plot_seasonal_marker_taxa(
             
             # Calculate monthly means
             monthly_data = []
-            for month in range(1, 13):
-                month_mask = grp_meta[month_col] == month
+            periods = temporal_order if temporal_order else sorted(metadata[month_col].dropna().unique())
+            for period in periods:
+                month_mask = grp_meta[month_col] == period
                 if month_mask.sum() > 0:
+                    order_value = month_rank_map.get(period, np.nan) if month_rank_map else period
+                    if pd.isna(order_value):
+                        continue
                     mean_val = grp_asv.loc[month_mask, asv].mean()
                     std_val = grp_asv.loc[month_mask, asv].std()
                     monthly_data.append({
-                        'month': month,
+                        'period_order': order_value,
+                        'label': period,
                         'mean': mean_val,
                         'std': std_val,
                     })
             
             df_monthly = pd.DataFrame(monthly_data)
+            if 'period_order' in df_monthly.columns:
+                df_monthly = df_monthly.sort_values('period_order')
             
             linestyle = '-' if direction == 'increase' else '--'
             label = f"{asv[:30]}... ({direction}, ρ={corr:.2f})"
             
-            ax.plot(df_monthly['month'], df_monthly['mean'],
+            ax.plot(df_monthly['period_order'], df_monthly['mean'],
                    marker='o', linestyle=linestyle, linewidth=2,
                    markersize=8, alpha=0.7, label=label)
             
             # Add error bars
-            ax.fill_between(df_monthly['month'],
+            ax.fill_between(df_monthly['period_order'],
                            df_monthly['mean'] - df_monthly['std'],
                            df_monthly['mean'] + df_monthly['std'],
                            alpha=0.2)
         
-        ax.set_xlabel('Month', fontsize=11, fontweight='bold')
+        ax.set_xlabel('Time', fontsize=11, fontweight='bold')
         ax.set_ylabel('CLR Abundance (mean ± SD)', fontsize=11, fontweight='bold')
         ax.set_title(f'Top {top_n} Seasonal Marker Taxa - Group: {grp}',
                     fontsize=12, fontweight='bold', pad=10)
-        ax.set_xticks(range(1, 13))
-        ax.set_xticklabels(['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'])
+        if temporal_order and month_rank_map:
+            tick_positions = [month_rank_map.get(val) for val in temporal_order]
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels([format_temporal_label(val) for val in temporal_order])
+        else:
+            ax.set_xticks(range(1, 13))
+            ax.set_xticklabels(['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'])
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
         ax.grid(alpha=0.3, linestyle='--')
     
@@ -704,6 +905,9 @@ def main():
                         help="Path to CLR-transformed ASV data")
     parser.add_argument("--metadata", type=Path, required=True,
                         help="Path to metadata TSV")
+    parser.add_argument("--cluster-color-table", type=Path,
+                        help="Optional TSV (e.g., compartment_umap_clusters.tsv) containing columns sampleid, cluster, cluster_color, etc. "
+                             "Values will override matching metadata columns.")
     
     # Column specifications
     parser.add_argument("--month-col", required=True,
@@ -736,7 +940,7 @@ def main():
         print("SEASONAL TRAJECTORY ANALYSIS")
         print("="*70)
         print(f"Grouping methods: {group_cols}")
-        print(f"Temporal axis: Months (1-12)")
+        print(f"Temporal axis: {args.month_col}")
         print(f"Years treated as: Pseudo-replicates")
         print("="*70 + "\n")
     
@@ -751,6 +955,19 @@ def main():
     if SAMPLE_ID_COL not in metadata_df.columns:
         raise ValueError(f"Metadata column '{SAMPLE_ID_COL}' not found in {args.metadata}")
     metadata = metadata_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
+
+    # Optional: merge in cluster color/assignment overrides
+    if args.cluster_color_table:
+        cluster_table_path = args.cluster_color_table
+        cluster_df = pd.read_csv(cluster_table_path, sep="\t")
+        if SAMPLE_ID_COL not in cluster_df.columns:
+            raise ValueError(f"Cluster color table {cluster_table_path} must contain '{SAMPLE_ID_COL}'")
+        cluster_df = cluster_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
+        overlap_idx = metadata.index.intersection(cluster_df.index)
+        if overlap_idx.empty:
+            raise ValueError("No overlapping samples found between metadata and cluster color table.")
+        for col in cluster_df.columns:
+            metadata.loc[overlap_idx, col] = cluster_df.loc[overlap_idx, col]
     
     print(f"  UMAP data: {umap_df.shape}")
     print(f"  ASV data: {asv_data.shape}")
@@ -758,7 +975,7 @@ def main():
     
     # Merge cluster information from UMAP results into metadata
     print("\n  [i] Merging cluster information from UMAP results...")
-    cluster_cols = ['cluster_before', 'cluster_after', 'batch']  # columns that might be in UMAP results
+    cluster_cols = ['compartment_cluster']  # columns that might be in UMAP results
     available_cols = [col for col in cluster_cols if col in umap_df.columns]
     
     if available_cols:
@@ -787,20 +1004,22 @@ def main():
             print(f"  Available columns in UMAP results: {list(umap_df.columns)}")
             raise ValueError(f"Grouping column '{group_col}' not found")
         
-        n_groups = len(metadata[group_col].unique())
-        print(f"      ✓ {group_col}: {n_groups} unique groups {sorted(metadata[group_col].unique())}")
+        metadata[group_col] = normalize_group_labels(metadata[group_col])
+        unique_vals = sorted([val for val in metadata[group_col].dropna().unique()])
+        n_groups = len(unique_vals)
+        print(f"      ✓ {group_col}: {n_groups} unique groups {unique_vals}")
     
-    # Check month column
+    # Check month column and standardize ordering
     if args.month_col not in metadata.columns:
         print(f"\n  [!] ERROR: Month column '{args.month_col}' not found!")
         print(f"  Available columns: {list(metadata.columns)}")
         raise ValueError(f"Month column '{args.month_col}' not found")
-    
-    months = sorted(metadata[args.month_col].unique())
-    print(f"\n  ✓ Months: {months} ({len(months)} total)")
+    temporal_order, month_rank_map = standardize_temporal_column(metadata, args.month_col)
+    months = [int(m) for m in (temporal_order if temporal_order else sorted(metadata[args.month_col].dropna().unique()))]
+    print(f"\n  ✓ Temporal order: {months} ({len(months)} total)")
     
     # Get UMAP coordinates (after correction)
-    coords = umap_df[['umap1_after', 'umap2_after']]
+    coords = umap_df[['umap1', 'umap2']]
     coords_df = coords.copy()
     coords_df.columns = ['UMAP1', 'UMAP2']
         
@@ -822,6 +1041,7 @@ def main():
             metadata,
             args.month_col,
             group_col,
+            temporal_order=temporal_order,
         )
         
         coords_mean_dict[group_col] = mean_data
@@ -829,7 +1049,8 @@ def main():
         count_dict[group_col] = count_data
         
         print(f"    Groups: {mean_data['group'].unique()}")
-        print(f"    Months covered: {sorted(mean_data['month'].unique())}")
+        covered = [val for val in temporal_order if val in mean_data['month'].unique()] if temporal_order else sorted(mean_data['month'].unique())
+        print(f"    Months covered: {covered}")
     
     # Calculate metrics for each grouping
     print("[3/8] Calculating trajectory metrics...")
@@ -838,6 +1059,7 @@ def main():
         metrics = calculate_seasonal_trajectory_metrics(
             coords_mean_dict[group_col],
             coords_std_dict[group_col],
+            month_rank_map,
             group_col='group',
         )
         metrics_dict[group_col] = metrics
@@ -854,6 +1076,7 @@ def main():
         metadata,
         args.month_col,
         group_cols,
+        temporal_order,
     )
     comparison_df.to_csv(out_dir / "grouping_comparison.tsv", sep='\t', index=False)
     
@@ -867,6 +1090,8 @@ def main():
             args.month_col,
             group_col,
             top_n=args.top_taxa,
+            temporal_order=temporal_order,
+            month_rank_map=month_rank_map,
         )
         marker_taxa_dict[group_col] = markers
         
@@ -881,9 +1106,27 @@ def main():
     color_dict = {}
     for group_col in group_cols:
         groups = metadata[group_col].unique()
-        
-        if group_col == group_cols[0] and args.color_col in metadata.columns:
-            # Use specified colors for first grouping
+
+        # Determine explicit color column priority:
+        # 1. Column specific to group (e.g., cluster -> cluster_color)
+        # 2. User-specified args.color_col (only applied to first grouping as legacy behavior)
+        # 3. Auto-generated palette fallback
+        specific_color_col = f"{group_col}_color"
+        if specific_color_col in metadata.columns:
+            group_colors = (
+                metadata[[group_col, specific_color_col]]
+                .dropna()
+                .drop_duplicates(subset=[group_col])
+                .set_index(group_col)[specific_color_col]
+                .to_dict()
+            )
+            # Ensure all groups covered
+            missing_groups = set(groups) - set(group_colors.keys())
+            if missing_groups:
+                palette = sns.color_palette("tab10", len(missing_groups))
+                for grp, color in zip(sorted(missing_groups), palette):
+                    group_colors[grp] = plt.matplotlib.colors.rgb2hex(color)
+        elif group_col == group_cols[0] and args.color_col in metadata.columns:
             group_colors = dict(zip(metadata[group_col], metadata[args.color_col]))
         else:
             # Auto-generate
@@ -893,6 +1136,42 @@ def main():
         
         color_dict[group_col] = group_colors
     
+    # Consolidate summary for each grouping (primary also saved as trajectory_summary.tsv)
+    summary_written = False
+    for idx, group_col in enumerate(group_cols):
+        if group_col not in metrics_dict:
+            continue
+        summary_df = metrics_dict[group_col].copy()
+        summary_df['group_col'] = group_col
+        if group_col in color_dict:
+            summary_df['group_color'] = summary_df['group'].map(color_dict[group_col]).fillna('#808080')
+        else:
+            summary_df['group_color'] = '#808080'
+        if group_col in marker_taxa_dict:
+            marker_tables = marker_taxa_dict[group_col]
+            def summarize_markers(group_value, tables=marker_tables) -> str:
+                if group_value in tables and not tables[group_value].empty:
+                    return ','.join(tables[group_value]['asv'].astype(str).head(5))
+                # Fallback if group_value stored as string or numeric mismatch
+                str_key = str(group_value)
+                for key in tables:
+                    if str(key) == str_key and not tables[key].empty:
+                        return ','.join(tables[key]['asv'].astype(str).head(5))
+                return ''
+            summary_df['top_markers'] = summary_df['group'].apply(summarize_markers)
+        else:
+            summary_df['top_markers'] = ''
+        summary_path = out_dir / f"trajectory_summary_{group_col}.tsv"
+        summary_df.to_csv(summary_path, sep='\t', index=False)
+        print(f"[i] Saved trajectory summary: {summary_path.name}")
+        if idx == 0:
+            summary_generic = out_dir / "trajectory_summary.tsv"
+            summary_df.to_csv(summary_generic, sep='\t', index=False)
+            print(f"[i] Updated primary summary copy: trajectory_summary.tsv")
+            summary_written = True
+    if not summary_written:
+        print("[!] No trajectory summary tables written (missing metrics).")
+
     # Create visualizations
     print("[7/8] Creating visualizations...")
     
@@ -907,6 +1186,7 @@ def main():
             'group',
             out_dir / f"seasonal_trajectories_{group_col}.pdf",
             title=f"Seasonal Trajectories - {group_col}",
+            month_rank_map=month_rank_map,
         )
         
         # Circular plot
@@ -915,6 +1195,27 @@ def main():
             color_dict[group_col],
             'group',
             out_dir / f"circular_trajectories_{group_col}.pdf",
+            temporal_order=temporal_order,
+            month_rank_map=month_rank_map,
+        )
+        
+        # Linear profile
+        plot_linear_trajectories(
+            coords_mean_dict[group_col],
+            color_dict[group_col],
+            'group',
+            out_dir / f"linear_trajectories_{group_col}.pdf",
+            temporal_order=temporal_order,
+            month_rank_map=month_rank_map,
+        )
+        
+        # Heatmap summary
+        plot_trajectory_heatmap(
+            coords_mean_dict[group_col],
+            'group',
+            out_dir / f"trajectory_heatmap_{group_col}.pdf",
+            temporal_order=temporal_order,
+            month_rank_map=month_rank_map,
         )
         
         # Marker taxa
@@ -927,6 +1228,8 @@ def main():
             color_dict[group_col],
             out_dir / f"seasonal_marker_taxa_{group_col}.pdf",
             top_n=5,
+            temporal_order=temporal_order,
+            month_rank_map=month_rank_map,
         )
     
     # Comparison plot
@@ -945,7 +1248,7 @@ def main():
     summary.append("SEASONAL TRAJECTORY ANALYSIS SUMMARY")
     summary.append("="*70)
     summary.append(f"\nAnalyzed {len(common_samples)} samples")
-    summary.append(f"Months: {sorted(metadata[args.month_col].unique())}")
+    summary.append(f"Temporal order: {months}")
     summary.append(f"\nGrouping methods compared: {group_cols}")
     
     summary.append("\n\nGROUPING METHOD COMPARISON:")
@@ -972,7 +1275,7 @@ def main():
     print("="*70)
     print(f"\nOutput: {out_dir}")
     print("\nKey insight: Check grouping_comparison.pdf to see which method")
-    print("(Depth vs cluster_after) better captures seasonal variation!")
+    print("(Depth vs Compartment) better captures seasonal variation!")
     print("="*70 + "\n")
 
 

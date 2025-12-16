@@ -21,6 +21,7 @@ import warnings
 from pathlib import Path
 from itertools import combinations
 from datetime import datetime
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.spatial.distance import euclidean, pdist
 from scipy.stats import zscore
+from scipy.ndimage import gaussian_filter1d
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
@@ -43,6 +45,17 @@ plt.rcParams.update({
 sns.set_style("white")
 
 SAMPLE_ID_COL = 'sampleid'
+COVERAGE_THRESHOLD = 0.51
+BIOCHEM_COLOR_MAP = {
+    'Oxygen': 'black',
+    'Nitrogen Oxides': "#E7298A",
+    'Nitrate': "#1B9E77",
+    'Nitrite': "#66A61E",
+    'Nitrous Oxide': "#0C5196",
+    'Ammonium': "#7570B3",
+    'Hydrogen Sulfide': "#D95F02",
+    'Methane': "violet"
+}
 
 
 # ============================================================================
@@ -54,6 +67,7 @@ def calculate_stratification_score_timeseries(
     metadata: pd.DataFrame,
     date_col: str,
     depth_col: str,
+    feature_cols: List[str],
 ) -> pd.DataFrame:
     """
     Calculate stratification score for each time point.
@@ -75,47 +89,403 @@ def calculate_stratification_score_timeseries(
     
     for date in unique_dates:
         date_mask = metadata[date_col] == date
-        date_data = integrated_data.loc[date_mask]
         date_meta = metadata.loc[date_mask]
-        
-        depths = sorted(date_meta[depth_col].unique())
-        
-        if len(depths) < 2:
-            # Can't calculate stratification with only one depth
+        date_data = integrated_data.loc[date_mask, feature_cols]
+
+        if date_data.empty or date_meta.empty:
             continue
-        
-        # Calculate centroid for each depth at this time point
+
+        depths = sorted(date_meta[depth_col].unique())
+
         depth_centroids = {}
-        
+
         for depth in depths:
             depth_mask = date_meta[depth_col] == depth
             depth_samples = date_data.loc[depth_mask]
-            
-            if len(depth_samples) > 0:
-                depth_centroids[depth] = depth_samples.mean().values
-        
-        # Calculate mean pairwise distance
-        if len(depth_centroids) >= 2:
-            distances = []
-            for depth1, depth2 in combinations(depth_centroids.keys(), 2):
-                dist = euclidean(depth_centroids[depth1], depth_centroids[depth2])
+            if depth_samples.empty:
+                continue
+            centroid = depth_samples.mean(axis=0, skipna=True)
+            if centroid.notna().sum() == 0:
+                continue
+            depth_centroids[depth] = centroid.values
+
+        distances = []
+        for depth1, depth2 in combinations(depth_centroids.keys(), 2):
+            dist = _safe_euclidean(depth_centroids[depth1], depth_centroids[depth2])
+            if dist is not None:
                 distances.append(dist)
-            
-            mean_dist = np.mean(distances)
-            
-            results.append({
-                'date': date,
-                'stratification_score': mean_dist,
-                'n_depths': len(depths),
-                'depths_present': ','.join(map(str, depths)),
-                'n_samples': len(date_data),
-            })
+
+        if not distances:
+            continue
+
+        mean_dist = np.mean(distances)
+        total_cells = date_data.size
+        non_na = np.isfinite(date_data.values).sum()
+        coverage = non_na / total_cells if total_cells > 0 else 0.0
+
+        results.append({
+            'date': date,
+            'stratification_score': mean_dist,
+            'n_depths': len(depths),
+            'depths_present': ','.join(map(str, depths)),
+            'n_samples': len(date_data),
+            'coverage': coverage,
+        })
     
     timeseries_df = pd.DataFrame(results)
     
     print(f"      Computed {len(timeseries_df)} time points")
     
     return timeseries_df
+
+
+def _dominant_category(values: pd.Series):
+    """
+    Determine the most frequent non-null value, breaking ties by first appearance.
+    """
+    values = values.dropna()
+    if values.empty:
+        return np.nan
+    counts = values.value_counts()
+    top_freq = counts.max()
+    top_values = counts[counts == top_freq].index.tolist()
+    for val in values:
+        if val in top_values:
+            return val
+    return top_values[0]
+
+
+def _safe_int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_euclidean(a: np.ndarray, b: np.ndarray) -> float | None:
+    mask = np.isfinite(a) & np.isfinite(b)
+    if not mask.any():
+        return None
+    diff = a[mask] - b[mask]
+    return np.linalg.norm(diff)
+
+
+def integrate_biochem_only_samples(
+    integrated_data: pd.DataFrame,
+    metadata_df: pd.DataFrame,
+    args,
+    sample_col: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Append biogeochemistry-only samples (year/month/depth + features) to the
+    integrated data matrix and metadata.
+    """
+    print("  [i] Augmenting with biochem-only data...")
+    biochem_df = pd.read_csv(args.biochem_only_data, sep="\t")
+    required = {
+        args.biochem_cruise_col,
+        args.biochem_year_col,
+        args.biochem_month_col,
+        args.biochem_depth_col,
+    }
+    if args.biochem_sample_id_col:
+        required.add(args.biochem_sample_id_col)
+    missing = [col for col in required if col not in biochem_df.columns]
+    if missing:
+        raise ValueError(f"Biochem-only data missing required columns: {missing}")
+
+    feature_cols = [c for c in biochem_df.columns if c in integrated_data.columns]
+    if not feature_cols:
+        raise ValueError(
+            "Biochem-only data does not share any feature columns with the integrated data."
+        )
+
+    sample_ids = []
+    metadata_rows = []
+    feature_rows = []
+
+    for _, row in biochem_df.iterrows():
+        year = _safe_int(row[args.biochem_year_col])
+        month = _safe_int(row[args.biochem_month_col])
+        if year is None or month is None:
+            continue
+        depth_val = row[args.biochem_depth_col]
+        cruise_val = row[args.biochem_cruise_col]
+
+        if args.biochem_sample_id_col:
+            sample_id = str(row[args.biochem_sample_id_col])
+        else:
+            depth_str = (
+                str(int(depth_val)) if pd.notna(depth_val) and float(depth_val).is_integer()
+                else str(depth_val).replace(".", "p")
+            )
+            cruise_sanitized = (
+                str(cruise_val).strip().replace(" ", "_") if pd.notna(cruise_val) else "cruise"
+            )
+            sample_id = f"{cruise_sanitized}_{year}_{month:02d}_{depth_str}_{args.biochem_sample_suffix}"
+
+        sample_id = sample_id.strip()
+        try:
+            sample_date = pd.Timestamp(year=year, month=month, day=args.biochem_date_day)
+        except ValueError:
+            sample_date = pd.Timestamp(year=year, month=month, day=1)
+
+        metadata_rows.append({
+            sample_col: sample_id,
+            args.date_col: sample_date.strftime("%Y-%m-%d"),
+            args.year_col: year,
+            args.month_col: month,
+            args.depth_col: depth_val,
+        })
+
+        feature_rows.append({
+            "_biochem_sampleid": sample_id,
+            **{col: row[col] for col in feature_cols},
+        })
+        sample_ids.append(sample_id)
+
+    if not sample_ids:
+        print("  [i] No valid biochem-only samples found, skipping augmentation.")
+        return integrated_data, metadata_df
+
+    if not feature_rows:
+        raise ValueError(
+            "Biochem-only data does not share any feature columns with the integrated data."
+        )
+
+    features_df = pd.DataFrame(feature_rows).set_index("_biochem_sampleid")
+    features_df = features_df.apply(pd.to_numeric, errors='coerce')
+
+    aligned = pd.DataFrame(
+        np.nan,
+        index=sample_ids,
+        columns=integrated_data.columns,
+    )
+    for col in feature_cols:
+        if col in features_df.columns:
+            aligned[col] = features_df[col]
+
+    metadata_extra = pd.DataFrame(metadata_rows)
+    if metadata_df.columns is not None:
+        for col in metadata_df.columns:
+            if col not in metadata_extra.columns:
+                metadata_extra[col] = np.nan
+
+    integrated_data = pd.concat([integrated_data, aligned], axis=0)
+    metadata_df = pd.concat([metadata_df, metadata_extra], ignore_index=True, sort=False)
+
+    print(f"  [i] Appended {len(sample_ids)} biochem-only samples")
+    return integrated_data, metadata_df
+
+
+def select_biochem_features(
+    integrated_data: pd.DataFrame,
+    metadata_df: pd.DataFrame,
+    threshold: float,
+) -> List[str]:
+    """
+    Identify biogeochemistry columns that pass the coverage threshold.
+    """
+    candidates = [
+        col for col in integrated_data.columns
+        if not col.startswith('ASV') and col in metadata_df.columns
+    ]
+    if not candidates:
+        raise ValueError('No biochem columns could be matched between the data and metadata.')
+    coverage = integrated_data[candidates].notna().sum() / len(integrated_data)
+    keep = [col for col in candidates if coverage.get(col, 0.0) >= threshold]
+    drop = [col for col in candidates if col not in keep]
+    print(f"  [i] Keeping {len(keep)} biochem columns for stratification: {keep}")
+    if drop:
+        print(f"  [i] Dropping undersampled columns (<{threshold*100:.0f}% coverage): {drop}")
+    if not keep:
+        raise ValueError('No biochem columns meet the coverage requirement.')
+    return keep
+
+
+def select_metadata_biochem_columns(
+    metadata_df: pd.DataFrame,
+) -> List[str]:
+    """
+    Pick numeric metadata columns (non-ASV) for vertical plotting.
+    """
+    exclude = {
+        SAMPLE_ID_COL, 'sample_code', 'longID', 'sampleID', 'plateID',
+        'Cruise', 'Date', 'Year', 'Month', 'Day', 'Season', 'Depth',
+        'Color', 'Month_Color', 'Month_Marker', 'Index'
+    }
+    candidates = [
+        col for col in metadata_df.columns
+        if col not in exclude and not col.startswith('ASV') and col in BIOCHEM_COLOR_MAP
+    ]
+    if not candidates:
+        return []
+    available = []
+    for col in candidates:
+        series = pd.to_numeric(metadata_df[col], errors='coerce')
+        if series.notna().any():
+            available.append(col)
+    print(f"  [i] Vertical profile biochem variables (any data present): {available}")
+    return available
+
+
+def plot_biochem_vertical_profiles(
+    metadata: pd.DataFrame,
+    depth_col: str,
+    variables: List[str],
+    output_path: Path,
+) -> None:
+    """
+    Recreate the assign_compartments vertical-depth plots for biochem vars.
+    """
+    available = [var for var in variables if var in metadata.columns]
+    if not available:
+        print("  [!] Skipping vertical biochem plot (no variables available).")
+        return
+
+    n_vars = len(available)
+    ncols = 2 if n_vars > 1 else 1
+    nrows = int(np.ceil(n_vars / ncols))
+    fig_height = max(4.8 * nrows, 7)
+    fig_width = max(5.0 * ncols, 5.5)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height), sharey=True)
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    for ax, var in zip(axes, available):
+        data = metadata[[depth_col, var]].copy()
+        data[var] = pd.to_numeric(data[var], errors='coerce')
+        data = data.dropna()
+        data = data[data[var] >= 0]
+        if data.empty:
+            ax.set_visible(False)
+            continue
+        color = BIOCHEM_COLOR_MAP.get(var, '#1f77b4')
+        ax.scatter(data[var], data[depth_col], s=8, color='black', alpha=0.45, label='Samples')
+
+        grouped = data.groupby(depth_col)[var]
+        mean_vals = grouped.mean().sort_index()
+        std_vals = grouped.std().fillna(0).reindex(mean_vals.index).fillna(0)
+        depths_sorted = mean_vals.index.values
+        ax.plot(mean_vals.values, depths_sorted, color=color, linewidth=2.5, label='Mean')
+        ax.fill_betweenx(
+            depths_sorted,
+            mean_vals.values - std_vals.values,
+            mean_vals.values + std_vals.values,
+            color=color,
+            alpha=0.2,
+            label='±1 SD'
+        )
+        ax.set_title(var, fontsize=13, fontweight='bold', color=color)
+        ax.set_xlabel(f"{var} (a.u.)", fontsize=11)
+        overall_mean = data[var].mean()
+        overall_std = data[var].std()
+        if not np.isnan(overall_mean):
+            ax.axvline(overall_mean, color=color, linestyle='--', linewidth=1.4, alpha=0.65)
+            if not np.isnan(overall_std):
+                ax.axvspan(
+                    overall_mean - overall_std,
+                    overall_mean + overall_std,
+                    color=color,
+                    alpha=0.08,
+                )
+        ax.invert_yaxis()
+        ax.grid(alpha=0.2, linestyle='--')
+
+    # Hide unused axes
+    for ax in axes[len(available):]:
+        ax.set_visible(False)
+
+    # Ensure uniform inverted depth axis for all panels
+    if not metadata[depth_col].dropna().empty:
+        depth_min = metadata[depth_col].min()
+        depth_max = metadata[depth_col].max()
+        for ax in axes[:len(available)]:
+            ax.set_ylim(depth_max, depth_min)
+
+    fig.suptitle(
+        '',
+        fontsize=12,
+        fontweight='bold',
+    )
+    plt.tight_layout()
+    if output_path:
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        print(f"  [✓] Saved vertical biochem profiles: {output_path.name}")
+    plt.close()
+
+def determine_dominant_group_per_date(
+    metadata: pd.DataFrame,
+    date_col: str,
+    group_col: str,
+) -> pd.Series:
+    """
+    Map each sampling date to the dominant (most common) group value.
+    """
+    meta_reset = metadata.reset_index()
+    if group_col not in meta_reset.columns:
+        raise ValueError(f"Metadata column '{group_col}' required for trajectory context")
+    if date_col not in meta_reset.columns:
+        raise ValueError(f"Metadata column '{date_col}' required for trajectory context")
+
+    dominant_series = (
+        meta_reset.dropna(subset=[date_col])
+        .groupby(date_col)[group_col]
+        .apply(_dominant_category)
+    )
+    return dominant_series
+
+
+def load_trajectory_summary(summary_path: Path) -> pd.DataFrame:
+    """
+    Load trajectory summary TSV and validate required columns.
+    """
+    summary_df = pd.read_csv(summary_path, sep='\t')
+    if summary_df.empty:
+        raise ValueError(f"Trajectory summary {summary_path} is empty")
+    if 'group' not in summary_df.columns:
+        raise ValueError(f"Trajectory summary {summary_path} missing 'group' column")
+    return summary_df
+
+
+def attach_trajectory_context(
+    timeseries_df: pd.DataFrame,
+    extremes_df: pd.DataFrame,
+    metadata: pd.DataFrame,
+    date_col: str,
+    summary_df: pd.DataFrame,
+    group_col: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Merge trajectory context (group assignments, colors, metrics) into outputs.
+    """
+    print("  [i] Integrating trajectory context from seasonal analysis...")
+    date_group_map = determine_dominant_group_per_date(metadata, date_col, group_col)
+    timeseries_df = timeseries_df.copy()
+    timeseries_df['trajectory_group'] = timeseries_df['date'].map(date_group_map)
+    missing_dates = timeseries_df['trajectory_group'].isna().sum()
+    if missing_dates:
+        print(f"      Warning: {missing_dates} time points lack trajectory group assignments")
+
+    summary_pref = summary_df.rename(columns={'group': 'trajectory_group'}).copy()
+    summary_pref = summary_pref.rename(columns={
+        col: f"trajectory_{col}"
+        for col in summary_pref.columns
+        if col != 'trajectory_group'
+    })
+
+    timeseries_df = timeseries_df.merge(summary_pref, on='trajectory_group', how='left')
+
+    if extremes_df is not None and not extremes_df.empty:
+        context_cols = ['date', 'trajectory_group'] + [
+            col for col in timeseries_df.columns
+            if col.startswith('trajectory_')
+        ]
+        context_df = timeseries_df[context_cols].drop_duplicates(subset=['date'])
+        extremes_df = extremes_df.merge(context_df, on='date', how='left')
+
+    return timeseries_df, extremes_df
 
 
 def normalize_to_centered_scale(
@@ -504,6 +874,149 @@ def plot_stratification_timeseries(
     print(f"  [✓] Saved stratification time series")
 
 
+def plot_stratification_monthly_profile(
+    timeseries_df: pd.DataFrame,
+    extremes_df: pd.DataFrame,
+    metadata: pd.DataFrame,
+    date_col: str,
+    month_col: str,
+    year_col: str,
+    output_path: Path,
+) -> None:
+    """
+    Monthly index plot: grey tracelines per year plus smoothed average and CI,
+    with strat/mix extremes annotated. Matches the y-axis styling of the main
+    time series.
+    """
+    print("  [i] Creating enriched monthly stratification profile...")
+    plot_df = timeseries_df.copy()
+
+    meta_reset = metadata.reset_index()
+    if date_col not in meta_reset.columns:
+        raise ValueError(f"Metadata missing date column '{date_col}' for monthly profile")
+    if month_col not in meta_reset.columns or year_col not in meta_reset.columns:
+        raise ValueError("Metadata must supply month/year columns for monthly profile")
+
+    date_to_month = (
+        meta_reset.groupby(date_col)[month_col]
+        .first()
+        .to_dict()
+    )
+    date_to_year = (
+        meta_reset.groupby(date_col)[year_col]
+        .first()
+        .to_dict()
+    )
+
+    plot_df['month'] = plot_df['date'].map(date_to_month)
+    plot_df['year'] = plot_df['date'].map(date_to_year)
+    plot_df = plot_df.dropna(subset=['month', 'year']).copy()
+    plot_df['coverage'] = plot_df['coverage'].fillna(0.0)
+    plot_df['month'] = plot_df['month'].astype(int)
+    plot_df['year'] = plot_df['year'].astype(int)
+
+    pivot = (
+        plot_df.groupby(['month', 'year'])['normalized_score']
+        .mean()
+        .unstack(level=1)
+        .reindex(range(1, 13))
+    )
+    pivot = pivot.apply(pd.to_numeric, errors='coerce')
+    coverage_pivot = (
+        plot_df.groupby(['month', 'year'])['coverage']
+        .mean()
+        .unstack(level=1)
+        .reindex(range(1, 13))
+        .apply(pd.to_numeric, errors='coerce')
+    )
+
+    plot_range = np.linspace(0.8, 12.2, 300)
+
+    month_means = pivot.mean(axis=1, skipna=True)
+    mean_values = month_means.interpolate(limit_direction='both').fillna(method='ffill').fillna(method='bfill')
+    mean_smoothed = gaussian_filter1d(mean_values.values, sigma=1.1)
+    mean_curve = np.interp(plot_range, np.arange(1, 13), mean_smoothed)
+
+    month_std = pivot.std(axis=1, ddof=0).fillna(0.0)
+    std_smoothed = gaussian_filter1d(month_std.values, sigma=1.1)
+    lower_curve = np.interp(plot_range, np.arange(1, 13), mean_smoothed - std_smoothed)
+    upper_curve = np.interp(plot_range, np.arange(1, 13), mean_smoothed + std_smoothed)
+
+    fig, ax = plt.subplots(figsize=(20, 6))
+
+    ax.fill_between(plot_range, lower_curve, upper_curve,
+                    color='lightgrey', alpha=0.6, zorder=1)
+    ax.plot(plot_range, mean_curve, color='black', linewidth=3, zorder=2)
+    ax.axhline(0, color='black', linewidth=2, alpha=0.6, zorder=4)
+
+    extremes_df = extremes_df.copy()
+    extremes_df['month'] = extremes_df['date'].map(date_to_month)
+    strat_points = extremes_df[extremes_df['extreme_type'] == 'max_stratification']
+    mix_points = extremes_df[extremes_df['extreme_type'] == 'max_mixing']
+
+    coverage_counts = {}
+    for year in coverage_pivot.columns:
+        coverage_counts[year] = (coverage_pivot[year] >= COVERAGE_THRESHOLD).sum()
+    min_months_needed = 7
+    eligible_years = {year for year, count in coverage_counts.items() if count >= min_months_needed}
+
+    for _, row in strat_points.iterrows():
+        if pd.isna(row['month']) or row.get('year', None) not in eligible_years:
+            continue
+        month_val = row['month']
+        ax.scatter(month_val, row['normalized_score'],
+                   marker='^', color='royalblue', s=200, edgecolor='black', linewidth=2.0, zorder=5)
+
+    for _, row in mix_points.iterrows():
+        if pd.isna(row['month']) or row.get('year', None) not in eligible_years:
+            continue
+        month_val = row['month']
+        ax.scatter(month_val, row['normalized_score'],
+                   marker='v', color='darkorange', s=200, edgecolor='black', linewidth=2.0, zorder=5)
+
+    ax.set_xlim(0.9, 12.1)
+    ax.set_xticks(range(1, 13))
+    ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], fontsize=12)
+
+    score_min = timeseries_df['normalized_score'].min()
+    score_max = timeseries_df['normalized_score'].max()
+    y_pad = (score_max - score_min) * 0.1 if score_max != score_min else 0.5
+    ax.set_ylim(score_min - y_pad, score_max + y_pad)
+
+    ax.set_xlabel('Month', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Stratification Index\n(−1=Mixed, 0=Intermediate, +1=Stratified)',
+                  fontsize=14, fontweight='bold')
+    ax.text(-0.05, 0.5, '', transform=ax.transAxes,
+            fontsize=12, fontweight='bold', rotation=90, va='center')
+    ax.grid(axis='y', linestyle='--', alpha=0.35)
+    ax.set_ylim(-1.2, 1.2)
+    ax.set_yticks([-1, -0.5, 0, 0.5, 1])
+    ax.set_yticklabels(['Max\nMixed', 'Mixed', 'Intermediate', 'Stratified', 'Max\nStratified'],
+                       fontsize=11, fontweight='bold')
+    ax.tick_params(axis='y', which='major', pad=8)
+    ax.set_title('Monthly Stratification Profile', fontsize=16, fontweight='bold')
+
+    point_df = pivot.stack().reset_index(name='normalized_score')
+    coverage_df = coverage_pivot.stack().reset_index(name='coverage')
+    point_df = point_df.merge(coverage_df, on=['month', 'year'], how='left')
+
+    for _, row in point_df.iterrows():
+        if pd.isna(row['normalized_score']) or pd.isna(row['coverage']):
+            continue
+        if row['coverage'] < COVERAGE_THRESHOLD:
+            continue
+        color = 'royalblue' if row['normalized_score'] >= 0 else 'darkorange'
+        ax.scatter(row['month'], row['normalized_score'],
+                   color=color, s=48, edgecolor='black', linewidth=0.6, alpha=0.9, zorder=5)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  [✓] Saved monthly stratification profile")
+
+
+
 def plot_anomaly_heatmap(
     timeseries_df: pd.DataFrame,
     metadata: pd.DataFrame,
@@ -609,12 +1122,37 @@ def main():
                        help="Column name for year")
     parser.add_argument("--depth-col", required=True,
                        help="Column name for depth")
+    parser.add_argument("--sample-id-col", default=SAMPLE_ID_COL,
+                       help="Column containing unique sample IDs (default: sampleid)")
+    parser.add_argument("--trajectory-summary", type=Path,
+                       help="Optional trajectory summary TSV (from trajectory_analysis.py) to add contextual metrics")
+    parser.add_argument("--trajectory-group-col", default=None,
+                       help="Metadata column that matches the 'group' column in the trajectory summary (e.g., cluster)")
     parser.add_argument("--consensus-threshold", type=int, default=2,
                        help="Minimum methods for anomaly consensus")
     parser.add_argument("--output-dir", type=Path, required=True,
                        help="Output directory")
+    parser.add_argument("--biochem-only-data", type=Path,
+                       help="Optional biogeochemistry-only matrix (year/month/depth + biochem features)")
+    parser.add_argument("--biochem-sample-id-col", default=None,
+                       help="Column to use as sample identifier in the biochem-only file (defaults to generated IDs)")
+    parser.add_argument("--biochem-cruise-col", default="Cruise",
+                       help="Column name for cruise identifier in the biochem-only file")
+    parser.add_argument("--biochem-year-col", default="Year",
+                       help="Column name for year in the biochem-only file")
+    parser.add_argument("--biochem-month-col", default="Month",
+                       help="Column name for month in the biochem-only file")
+    parser.add_argument("--biochem-depth-col", default="Depth",
+                       help="Column name for depth in the biochem-only file")
+    parser.add_argument("--biochem-date-day", type=int, default=1,
+                       help="Day of month to assign when only year/month are available")
+    parser.add_argument("--biochem-sample-suffix", default="biochem",
+                       help="Suffix to append to generated sample IDs for biochem-only rows")
+    parser.add_argument("--vertical-profile-output", type=Path,
+                       help="Optional path to save vertical biochem depth profiles (PDF)")
     
     args = parser.parse_args()
+    meta_sample_col = args.sample_id_col
     
     out_dir = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -627,10 +1165,42 @@ def main():
     print("\n[1/6] Loading data...")
     integrated_data = pd.read_csv(args.integrated_data, sep="\t", index_col=0)
     metadata_df = pd.read_csv(args.metadata, sep="\t")
-    if SAMPLE_ID_COL not in metadata_df.columns:
-        raise ValueError(f"Metadata column '{SAMPLE_ID_COL}' not found in {args.metadata}")
-    metadata = metadata_df.drop_duplicates(subset=[SAMPLE_ID_COL]).set_index(SAMPLE_ID_COL)
-    
+    if meta_sample_col not in metadata_df.columns:
+        raise ValueError(f"Metadata column '{meta_sample_col}' not found in {args.metadata}")
+    if args.biochem_only_data:
+        integrated_data, metadata_df = integrate_biochem_only_samples(
+            integrated_data,
+            metadata_df,
+            args,
+            meta_sample_col,
+        )
+    feature_cols = select_biochem_features(
+        integrated_data,
+        metadata_df,
+        COVERAGE_THRESHOLD,
+    )
+    integrated_data[feature_cols] = integrated_data[feature_cols].apply(pd.to_numeric, errors='coerce')
+    metadata = metadata_df.drop_duplicates(subset=[meta_sample_col]).set_index(meta_sample_col)
+    vertical_vars = select_metadata_biochem_columns(metadata_df)
+    trajectory_summary_df = None
+    trajectory_group_col = args.trajectory_group_col
+    if args.trajectory_summary:
+        if not args.trajectory_summary.exists():
+            raise FileNotFoundError(f"Trajectory summary not found: {args.trajectory_summary}")
+        trajectory_summary_df = load_trajectory_summary(args.trajectory_summary)
+        inferred_group = None
+        if 'group_col' in trajectory_summary_df.columns:
+            inferred_vals = trajectory_summary_df['group_col'].dropna()
+            if not inferred_vals.empty:
+                inferred_group = str(inferred_vals.iloc[0])
+        if trajectory_group_col is None:
+            trajectory_group_col = inferred_group
+        if not trajectory_group_col:
+            raise ValueError("Trajectory group column is required when providing a trajectory summary")
+        if trajectory_group_col not in metadata_df.columns:
+            raise ValueError(f"Metadata missing trajectory group column '{trajectory_group_col}'")
+        print(f"  [i] Trajectory context: using column '{trajectory_group_col}' with summary {args.trajectory_summary.name}")
+
     common = integrated_data.index.intersection(metadata.index)
     integrated_data = integrated_data.loc[common]
     metadata = metadata.loc[common]
@@ -646,6 +1216,7 @@ def main():
         metadata,
         args.date_col,
         args.depth_col,
+        feature_cols,
     )
     
     # Normalize to centered scale
@@ -666,6 +1237,16 @@ def main():
         metadata,
         args.year_col,
     )
+
+    if trajectory_summary_df is not None:
+        timeseries_df, extremes_df = attach_trajectory_context(
+            timeseries_df,
+            extremes_df,
+            metadata,
+            args.date_col,
+            trajectory_summary_df,
+            trajectory_group_col,
+        )
     
     # Save results
     timeseries_df.to_csv(out_dir / "stratification_timeseries.tsv", sep='\t', index=False)
@@ -681,6 +1262,24 @@ def main():
         args.date_col,
         args.month_col,
         out_dir / "stratification_timeseries.pdf"
+    )
+    
+    plot_stratification_monthly_profile(
+        timeseries_df,
+        extremes_df,
+        metadata,
+        args.date_col,
+        args.month_col,
+        args.year_col,
+        out_dir / "stratification_monthly_profile.pdf"
+    )
+
+    vertical_output = args.vertical_profile_output or (out_dir / "biochem_vertical_profiles.pdf")
+    plot_biochem_vertical_profiles(
+        metadata_df,
+        args.depth_col,
+        vertical_vars,
+        vertical_output,
     )
     
     plot_anomaly_heatmap(

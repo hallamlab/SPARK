@@ -198,6 +198,9 @@ stratification:
   year_col: Year
   depth_col: Depth
   consensus_threshold: 2
+  sample_id_col: sampleid
+  trajectory_group_col: cluster_after
+  trajectory_summary:
 
 outlier_detection:
   enabled: true

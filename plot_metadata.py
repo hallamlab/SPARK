@@ -173,12 +173,75 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
     return df
 
 
-def read_fastq_stats(path: Path, meta_sample_col: str) -> pd.DataFrame:
+def load_sample_manifest(path: Path) -> Dict[str, str]:
+    """
+    Build a lookup from FASTQ file path (or basename) to sample ID.
+    Manifest columns: sample_id, fastq_r1, fastq_r2 (no header).
+    """
+    df = pd.read_csv(path, sep='\t', header=None, names=['sample_id', 'r1', 'r2'])
+    mapping: Dict[str, str] = {}
+    for _, row in df.iterrows():
+        sample_id = str(row['sample_id']).strip()
+        if not sample_id:
+            continue
+        for col in ('r1', 'r2'):
+            fastq_path = str(row[col]).strip()
+            if not fastq_path or fastq_path.lower() == 'nan':
+                continue
+            candidates = {
+                fastq_path,
+                os.path.basename(fastq_path),
+            }
+            try:
+                candidates.add(str(Path(fastq_path).resolve()))
+            except Exception:
+                pass
+            for cand in candidates:
+                if cand in mapping and mapping[cand] != sample_id:
+                    raise ValueError(
+                        f"FASTQ '{cand}' maps to multiple sample IDs ({mapping[cand]} vs {sample_id})"
+                    )
+                mapping[cand] = sample_id
+    if not mapping:
+        raise ValueError(f"No FASTQ entries were parsed from manifest: {path}")
+    return mapping
+
+
+def read_fastq_stats(path: Path, samp_col: str,
+                     manifest_map: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+    """
+    Expects columns: file, num_seqs
+    Collapses replicates by sample ID via groupby+sum.
+    """
     df = pd.read_csv(path, sep='\t', header=0)
     if 'file' not in df or 'num_seqs' not in df:
         raise ValueError(f"{path} must contain columns: file, num_seqs")
-    df[meta_sample_col] = df['file'].apply(lambda x: extract_sample_id_from_path(x))
-    return df.groupby(meta_sample_col, as_index=False)['num_seqs'].sum()
+    stats_dir = path.parent
+
+    def lookup_sample(file_path: str) -> str:
+        if manifest_map:
+            candidates = [
+                file_path,
+                os.path.basename(file_path),
+                extract_sample_id_from_path(file_path),
+            ]
+            rel_path = (stats_dir / file_path)
+            candidates.append(str(rel_path))
+            candidates.append(os.path.basename(rel_path))
+            try:
+                candidates.append(str(rel_path.resolve()))
+            except Exception:
+                pass
+            for cand in candidates:
+                if cand in manifest_map:
+                    return manifest_map[cand]
+            print(candidates)
+            raise ValueError(f"File '{file_path}' not found in manifest")
+        return extract_sample_id_from_path(file_path)
+
+    df[samp_col] = df['file'].apply(lookup_sample)
+    out = df.groupby(samp_col, as_index=False)['num_seqs'].sum()
+    return out
 
 
 def read_taxonomy_table(path: Path) -> pd.DataFrame:
@@ -467,7 +530,7 @@ def compute_and_save_block(
         plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
     plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
     plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
-    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.pdf")
+    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.png")
     plt.close()
 
     # Control subtraction (scope+skin), pivot to ASV x sample corrected counts
@@ -503,7 +566,7 @@ def compute_and_save_block(
         row_legend_df=row_colors_df,
         col_palette=sub_palette,
         out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
-        out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.pdf",
+        out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.png",
     )
 
     # Violin pairs (only for selected groups present)
@@ -524,7 +587,7 @@ def compute_and_save_block(
         )
         plt.tight_layout()
         plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.svg", bbox_inches='tight')
-        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.pdf", bbox_inches='tight')
+        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.png", bbox_inches='tight')
         plt.close()
 
 
@@ -539,11 +602,15 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--data-dir", type=Path, required=True, help="Project root")
     io.add_argument("--sub-dir", default="spark_combined_output", help="Subdirectory under data-dir")
     io.add_argument("--metadata", type=Path, default=None, help="Metadata TSV path (default: <data>/ref_db/spark_metadata.tsv)")
+    io.add_argument("--sample-manifest", type=Path,
+                    help="TSV with columns: sample_id, fastq_r1, fastq_r2")
     io.add_argument("--taxonomy", type=Path, required=True, help="SILVA taxonomy TSV (Feature ID, Taxon)")
 
     cols = p.add_argument_group("Columns / Groups")
-    cols.add_argument("--type-col", default="type_group", help="Sample type column in metadata")
+    cols.add_argument("--group1-col", default="group1", help="Primary grouping column in metadata")
     cols.add_argument("--color-col", default="Color", help="Color column in metadata")
+    cols.add_argument("--sample-id-col", default=SAMPLE_ID_COL,
+                      help="Column containing unique sample IDs (must match manifest/ASV headers)")
     cols.add_argument("--keep-types", default="",
                       help="Comma-separated list of types to keep (order honored)")
 
@@ -604,11 +671,14 @@ def main():
         print(f"[i] ASV mito : {asv_mito_path}")
 
     # Read data
-    meta_sample_col = SAMPLE_ID_COL
+    meta_sample_col = args.sample_id_col
     meta = read_metadata(meta_path, meta_sample_col, keep_types)
 
+    manifest_path = args.sample_manifest
+    manifest_map = load_sample_manifest(manifest_path)
+
     # set palette
-    palette = {k[0]: k[1] for k in zip(meta[args.type_col], meta[args.color_col])}
+    palette = {k[0]: k[1] for k in zip(meta[args.group1_col], meta[args.color_col])}
     palette = dict(sorted(palette.items()))
     palette['Failed-QC'] = '#d3d3d3'  # light grey for failed QC
     
@@ -616,6 +686,7 @@ def main():
     fastq_df = read_fastq_stats(
         fastq_stats_path,
         meta_sample_col,
+        manifest_map,
     )
 
     # Output roots
@@ -639,7 +710,7 @@ def main():
             meta=meta.copy(),
             tax_df=tax_df,
             meta_sample_col=meta_sample_col,
-            type_col=args.type_col,
+            type_col=args.group1_col,
             type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),
@@ -658,7 +729,7 @@ def main():
             meta=meta.copy(),
             tax_df=tax_df,
             meta_sample_col=meta_sample_col,
-            type_col=args.type_col,
+            type_col=args.group1_col,
             type_palette=palette,
             keep_types=keep_types,
             fastq_stats_df=fastq_df.copy(),

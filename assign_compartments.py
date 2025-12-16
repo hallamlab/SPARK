@@ -36,6 +36,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import pairwise_distances
 import umap
 from Bio import SeqIO
+from matplotlib.colors import to_hex, ListedColormap, BoundaryNorm
+from scipy.interpolate import griddata
 
 warnings.filterwarnings('ignore')
 
@@ -48,6 +50,17 @@ plt.rcParams.update({
 sns.set_style("white")
 
 SAMPLE_ID_COL = 'sampleid'
+BIOCHEM_COLOR_MAP = {
+    'Oxygen': 'black',
+    'Nitrogen Oxides': "#E7298A",
+    'Nitrate': "#1B9E77",
+    'Nitrite': "#66A61E",
+    'Nitrous Oxide': "#0C5196",
+    'Ammonium': "#7570B3",
+    'Hydrogen Sulfide': "#D95F02",
+    'Methane': "violet"
+}
+BIOCHEM_ALLOWED_VARS = list(BIOCHEM_COLOR_MAP.keys())
 
 
 # ============================================================================
@@ -416,6 +429,7 @@ def plot_umap_by_depth(
 def plot_umap_by_cluster(
     coords: np.ndarray,
     cluster_labels: np.ndarray,
+    cluster_color_map: Dict[int, str],
     output_path: Path,
 ) -> None:
     """
@@ -425,17 +439,12 @@ def plot_umap_by_cluster(
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
-    # Color by cluster
-    n_clusters = len(np.unique(cluster_labels))
-    palette = sns.color_palette("Set2", n_clusters)
-    cluster_color_map = dict(zip(range(n_clusters), palette))
-    
     for cluster_id in sorted(np.unique(cluster_labels)):
         mask = cluster_labels == cluster_id
         ax.scatter(
             coords[mask, 0],
             coords[mask, 1],
-            c=[cluster_color_map[cluster_id]],
+            c=[cluster_color_map.get(cluster_id, '#808080')],
             s=80,
             alpha=0.7,
             edgecolors='black',
@@ -610,6 +619,268 @@ def plot_between_depth_distances(
     plt.close()
     
     print(f"  [✓] Saved between-depth distances plot")
+
+
+def plot_compartment_depth_time_section(
+    metadata: pd.DataFrame,
+    depth_col: str,
+    month_col: str,
+    cluster_labels: np.ndarray,
+    cluster_color_map: Dict[int, str],
+    output_path: Path,
+) -> None:
+    """
+    Create a depth vs. time contour-style plot of compartment assignments.
+    """
+    print("  [i] Creating depth-time compartment section...")
+
+    section_df = metadata[[depth_col, month_col]].copy()
+    section_df['cluster'] = cluster_labels
+    section_df = section_df.dropna(subset=[depth_col, month_col, 'cluster'])
+
+    section_df[depth_col] = pd.to_numeric(section_df[depth_col], errors='coerce')
+    section_df[month_col] = pd.to_numeric(section_df[month_col], errors='coerce')
+    section_df = section_df.dropna(subset=[depth_col, month_col])
+
+    if section_df.empty:
+        print("      [!] No valid depth-time data available for contour plot.")
+        return
+
+    depths = section_df[depth_col].values.astype(float)
+    times = section_df[month_col].values.astype(float)
+
+    unique_clusters = sorted(section_df['cluster'].unique())
+    cluster_to_idx = {c: i for i, c in enumerate(unique_clusters)}
+    idx_to_cluster = {i: c for c, i in cluster_to_idx.items()}
+
+    mapped_values = section_df['cluster'].map(cluster_to_idx).values.astype(float)
+
+    grid_time = np.linspace(times.min(), times.max(), max(len(np.unique(times)) * 5, 100))
+    grid_depth = np.linspace(depths.min(), depths.max(), 300)
+    grid_T, grid_D = np.meshgrid(grid_time, grid_depth)
+
+    grid_clusters = griddata(
+        np.column_stack([times, depths]),
+        mapped_values,
+        (grid_T, grid_D),
+        method='nearest',
+    )
+
+    cmap_colors = [cluster_color_map.get(idx_to_cluster[i], '#808080') for i in range(len(unique_clusters))]
+    cmap = ListedColormap(cmap_colors)
+    norm = BoundaryNorm(np.arange(len(unique_clusters) + 1) - 0.5, len(unique_clusters))
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    pcm = ax.pcolormesh(
+        grid_time,
+        grid_depth,
+        grid_clusters,
+        cmap=cmap,
+        norm=norm,
+        shading='auto',
+        alpha=0.9,
+    )
+
+    scatter_colors = [cluster_color_map.get(cl, '#808080') for cl in section_df['cluster']]
+    ax.scatter(times, depths, c=scatter_colors, s=20, edgecolor='k', linewidth=0.2, alpha=0.8)
+
+    ax.set_xlabel('Month', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Depth (m)', fontsize=12, fontweight='bold')
+    ax.set_title('Compartment Assignments Across Depth and Time', fontsize=14, fontweight='bold')
+    ax.invert_yaxis()
+    ax.grid(alpha=0.2, linestyle='--')
+
+    cbar = fig.colorbar(pcm, ax=ax, ticks=np.arange(len(unique_clusters)))
+    cbar.ax.set_yticklabels([str(idx_to_cluster[i]) for i in range(len(unique_clusters))])
+    cbar.set_label('Compartment Cluster', fontsize=11, fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches='tight', dpi=300)
+    plt.close()
+    print(f"  [✓] Saved compartment depth-time section: {output_path.name}")
+
+
+def plot_biochem_depth_profiles(
+    metadata: pd.DataFrame,
+    depth_col: str,
+    variables: List[str],
+    output_path: Path,
+) -> None:
+    """
+    Plot depth profiles for specified biochemical variables with variance shading.
+    """
+    available_vars = [var for var in variables if var in metadata.columns]
+    if not available_vars:
+        print("  [!] Skipping biochem depth profiles (no variables available).")
+        return
+
+    n_vars = len(available_vars)
+    ncols = 2 if n_vars > 1 else 1
+    nrows = int(np.ceil(n_vars / ncols))
+    fig_height = max(4.8 * nrows, 7)
+    fig_width = max(5.0 * ncols, 5.5)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height), sharey=True)
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    for ax, var in zip(axes, available_vars):
+        data = metadata[[depth_col, var]].dropna()
+        if data.empty:
+            ax.set_visible(False)
+            continue
+        color = BIOCHEM_COLOR_MAP.get(var, '#1f77b4')
+        ax.scatter(data[var], data[depth_col], s=8, color='black', alpha=0.45, label='Samples')
+
+        grouped = data.groupby(depth_col)[var]
+        mean_vals = grouped.mean().sort_index()
+        std_vals = grouped.std().fillna(0).reindex(mean_vals.index).fillna(0)
+        depths_sorted = mean_vals.index.values
+        ax.plot(mean_vals.values, depths_sorted, color=color, linewidth=2.5, label='Mean')
+        ax.fill_betweenx(
+            depths_sorted,
+            mean_vals.values - std_vals.values,
+            mean_vals.values + std_vals.values,
+            color=color,
+            alpha=0.2,
+            label='±1 SD'
+        )
+        ax.set_title(var, fontsize=13, fontweight='bold', color=color)
+        ax.set_xlabel(f"{var} (a.u.)", fontsize=11)
+        overall_mean = data[var].mean()
+        overall_std = data[var].std()
+        if not np.isnan(overall_mean):
+            ax.axvline(overall_mean, color=color, linestyle='--', linewidth=1.4, alpha=0.65)
+            if not np.isnan(overall_std):
+                ax.axvspan(
+                    overall_mean - overall_std,
+                    overall_mean + overall_std,
+                    color=color,
+                    alpha=0.08,
+                )
+        ax.grid(alpha=0.25, linestyle='--')
+        if not data[depth_col].empty:
+            ax.set_ylim(data[depth_col].max(), data[depth_col].min())
+    for ax in axes[n_vars:]:
+        ax.set_visible(False)
+    axes[0].set_ylabel('Depth (m)', fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  [✓] Saved biochem depth profiles: {output_path.name}")
+
+
+def run_biochem_only_outputs(
+    biochem_scaled: pd.DataFrame,
+    kept_biochem_cols: List[str],
+    metadata: pd.DataFrame,
+    sample_gc: pd.Series,
+    args,
+    out_dir: Path,
+) -> None:
+    """
+    Generate full set of outputs using only biochemical variables.
+    """
+    if biochem_scaled.empty or not kept_biochem_cols:
+        print("\n[!] Skipping biochem-only analysis (no valid biochemical data).")
+        return
+    print("\n[9/9] Running biochem-only compartment analysis...")
+    bio_dir = out_dir / "biochem_only"
+    bio_dir.mkdir(exist_ok=True)
+
+    optimal_k, cluster_eval_df, linkage_matrix = determine_optimal_clusters_euclidean(
+        biochem_scaled,
+        metadata,
+        args.depth_col,
+        k_range=range(2, 11),
+        linkage_method='average',
+        output_path=bio_dir / "cluster_evaluation_biochem.png",
+    )
+    cluster_eval_df.to_csv(bio_dir / "cluster_evaluation_biochem.tsv", sep='\t', index=False)
+
+    cluster_labels = fcluster(linkage_matrix, optimal_k, criterion='maxclust') - 1
+    unique_clusters = sorted(np.unique(cluster_labels))
+    palette = sns.color_palette("Set3", len(unique_clusters))
+    cluster_color_map = {cluster: to_hex(palette[i]) for i, cluster in enumerate(unique_clusters)}
+
+    plot_dendrogram_with_heatmap_euclidean(
+        biochem_scaled,
+        metadata,
+        linkage_matrix,
+        cluster_labels,
+        sample_gc,
+        kept_biochem_cols,
+        args.depth_col,
+        bio_dir / "figure1_panel_ab_dendrogram_heatmap_biochem.png",
+    )
+
+    umap_coords = plot_umap_by_depth_euclidean(
+        biochem_scaled,
+        metadata,
+        args.depth_col,
+        bio_dir / "figure1_panel_c_umap_by_depth_biochem.png",
+    )
+
+    plot_umap_by_cluster_euclidean(
+        umap_coords,
+        cluster_labels,
+        cluster_color_map,
+        bio_dir / "figure1_panel_d_umap_by_cluster_biochem.png",
+    )
+
+    biochem_cluster_table = pd.DataFrame({
+        SAMPLE_ID_COL: biochem_scaled.index,
+        'compartment_cluster': cluster_labels,
+        args.depth_col: metadata.loc[biochem_scaled.index, args.depth_col].values,
+        'compartment_color': [cluster_color_map.get(lbl, '#808080') for lbl in cluster_labels],
+        'umap1': umap_coords[:, 0],
+        'umap2': umap_coords[:, 1],
+    })
+    biochem_cluster_table.to_csv(bio_dir / "compartment_umap_clusters_biochem.tsv", sep='\t', index=False)
+
+    plot_compartment_depth_time_section(
+        metadata,
+        args.depth_col,
+        args.month_col,
+        cluster_labels,
+        cluster_color_map,
+        bio_dir / "compartment_depth_time_section_biochem.png",
+    )
+
+    plot_biochem_depth_profiles(
+        metadata,
+        args.depth_col,
+        [var for var in BIOCHEM_ALLOWED_VARS if var in kept_biochem_cols],
+        bio_dir / "biochem_depth_profiles_biochem_only.png",
+    )
+
+    depth_cluster_table = pd.DataFrame({
+        SAMPLE_ID_COL: biochem_scaled.index,
+        'compartment_cluster_biochem': cluster_labels,
+        args.depth_col: metadata.loc[biochem_scaled.index, args.depth_col].values,
+    })
+    depth_cluster_table.to_csv(bio_dir / "depth_clusters_biochem.tsv", sep='\t', index=False)
+
+    summary_lines = []
+    summary_lines.append("="*70)
+    summary_lines.append("BIOCHEM-ONLY COMPARTMENT ANALYSIS")
+    summary_lines.append("="*70)
+    summary_lines.append(f"Samples analyzed: {len(biochem_scaled)}")
+    summary_lines.append(f"Biochem features: {len(biochem_scaled.columns)}")
+    summary_lines.append(f"Optimal clusters: {optimal_k}")
+    summary_lines.append("\nCluster sizes:")
+    for cluster in unique_clusters:
+        n = (cluster_labels == cluster).sum()
+        pct = n / len(cluster_labels) * 100
+        summary_lines.append(f"  Cluster {cluster}: {n} samples ({pct:.1f}%)")
+    summary_lines.append("\nBiochemical variables retained:")
+    for col in kept_biochem_cols:
+        summary_lines.append(f"  - {col}")
+    summary_lines.append("\n" + "="*70)
+    summary_text = "\n".join(summary_lines)
+    with open(bio_dir / "biochem_only_summary.txt", 'w') as fh:
+        fh.write(summary_text)
+    print(summary_text)
 
 
 def reorder_dendrogram_by_depth_enhanced(
@@ -963,8 +1234,8 @@ def evaluate_standard_metrics(
 
 def determine_optimal_clusters_integrated(
     asv_clr: pd.DataFrame,
+    biochem_scaled: pd.DataFrame,
     metadata: pd.DataFrame,
-    biochem_cols: List[str],
     depth_col: str,
     k_range: range = range(2, 11),
     linkage_method: str = 'average',
@@ -975,7 +1246,7 @@ def determine_optimal_clusters_integrated(
     n_stability_iterations: int = 20,
     output_path: Optional[Path] = None,
     output_table: Optional[Path] = None,
-) -> Tuple[int, pd.DataFrame, np.ndarray, pd.DataFrame, List[str]]:
+) -> Tuple[int, pd.DataFrame, np.ndarray]:
     """
     Cluster on INTEGRATED microbiome + biochemical data with robust optimization.
     
@@ -999,10 +1270,9 @@ def determine_optimal_clusters_integrated(
     from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
     
     # Integrate data
-    integrated_data, kept_biochem_cols = integrate_microbiome_and_biochem(
+    integrated_data = integrate_microbiome_and_biochem(
         asv_clr,
-        metadata,
-        biochem_cols,
+        biochem_scaled,
         auto_weight=auto_weight,
         weight_microbiome=weight_microbiome,
         weight_biochem=weight_biochem,
@@ -1962,21 +2232,21 @@ def plot_dendrogram_with_heatmap_euclidean(
     print(f"      ✓ Saved cluster runs table: {cluster_runs_file.name}")
 
 
-def plot_umap_by_depth_manhattan(
+def plot_umap_by_depth_euclidean(
     asv_clr: pd.DataFrame,
     metadata: pd.DataFrame,
     depth_col: str,
     output_path: Path,
 ) -> np.ndarray:
     """
-    UMAP ordination with Manhattan distance, colored by depth.
+    UMAP ordination with Euclidean distance, colored by depth.
     Legend positioned outside plot area.
     """
-    print("  [i] Creating UMAP with Manhattan distance (colored by depth)...")
+    print("  [i] Creating UMAP with Euclidean distance (colored by depth)...")
     
     reducer = umap.UMAP(
         n_components=2, 
-        metric='manhattan',
+        metric='euclidean',
         random_state=42, 
         n_neighbors=15, 
         min_dist=0.1
@@ -2008,7 +2278,7 @@ def plot_umap_by_depth_manhattan(
     
     ax.set_xlabel('UMAP 1', fontsize=12, fontweight='bold')
     ax.set_ylabel('UMAP 2', fontsize=12, fontweight='bold')
-    ax.set_title('Community Composition by Depth (Manhattan distance)', 
+    ax.set_title('Community Composition by Depth (Euclidean distance)', 
                 fontsize=13, fontweight='bold', pad=15)
     ax.legend(title=depth_col, bbox_to_anchor=(1.02, 1), loc='upper left', 
              frameon=True, fontsize=9, title_fontsize=10)
@@ -2018,14 +2288,15 @@ def plot_umap_by_depth_manhattan(
     plt.savefig(output_path, bbox_inches='tight', dpi=300)
     plt.close()
     
-    print(f"  [✓] Saved UMAP by depth (Manhattan)")
+    print(f"  [✓] Saved UMAP by depth (Euclidean)")
     
     return coords
 
 
-def plot_umap_by_cluster_manhattan(
+def plot_umap_by_cluster_euclidean(
     coords: np.ndarray,
     cluster_labels: np.ndarray,
+    cluster_color_map: Dict[int, str],
     output_path: Path,
 ) -> None:
     """
@@ -2036,16 +2307,12 @@ def plot_umap_by_cluster_manhattan(
     
     fig, ax = plt.subplots(figsize=(11, 8))
     
-    n_clusters = len(np.unique(cluster_labels))
-    palette = sns.color_palette("Set2", n_clusters)
-    cluster_color_map = dict(zip(range(n_clusters), palette))
-    
     for cluster_id in sorted(np.unique(cluster_labels)):
         mask = cluster_labels == cluster_id
         ax.scatter(
             coords[mask, 0],
             coords[mask, 1],
-            c=[cluster_color_map[cluster_id]],
+            c=[cluster_color_map.get(cluster_id, '#808080')],
             s=80,
             alpha=0.7,
             edgecolors='black',
@@ -2055,7 +2322,7 @@ def plot_umap_by_cluster_manhattan(
     
     ax.set_xlabel('UMAP 1', fontsize=12, fontweight='bold')
     ax.set_ylabel('UMAP 2', fontsize=12, fontweight='bold')
-    ax.set_title('Community Composition by Depth Cluster (Manhattan distance)', 
+    ax.set_title('Community Composition by Depth Cluster (Euclidean distance)', 
                 fontsize=13, fontweight='bold', pad=15)
     ax.legend(title='Cluster', bbox_to_anchor=(1.02, 1), loc='upper left', 
              frameon=True, fontsize=9, title_fontsize=10)
@@ -2090,82 +2357,82 @@ def calculate_log_weights(n_microbiome, n_biochem):
     return weight_microbiome, weight_biochem
 
 
-def integrate_microbiome_and_biochem(
-    asv_clr: pd.DataFrame,
+def prepare_biochem_dataset(
     metadata: pd.DataFrame,
     biochem_cols: List[str],
-    auto_weight: bool = True,
-    weight_microbiome: float = 0.5,
-    weight_biochem: float = 0.5,
     min_valid_pct: float = 50.0,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Integrate CLR-transformed microbiome and biochemical data.
-    
-    Parameters
-    ----------
-    weight_microbiome : float
-        Weight for microbiome data (0-1)
-    weight_biochem : float
-        Weight for biochemical data (0-1)
-    min_valid_pct : float
-        Minimum % valid values required for biochem variables
-    
-    Returns
-    -------
-    integrated_data : DataFrame
-        Combined scaled data (samples x features)
-    kept_biochem_cols : list
-        Biochem columns that passed filtering
+    Prepare numeric, scaled biochemical dataset aligned to metadata.
+    """
+    print("\n  [i] Preparing biochemical dataset...")
+    if biochem_cols:
+        requested_cols = [col for col in biochem_cols if col in BIOCHEM_ALLOWED_VARS]
+    else:
+        requested_cols = BIOCHEM_ALLOWED_VARS.copy()
+    existing_cols = [col for col in requested_cols if col in metadata.columns]
+    missing_cols = [col for col in requested_cols if col not in metadata.columns]
+    if missing_cols:
+        print(f"      [!] Missing biochem columns (skipping): {missing_cols}")
+    if not existing_cols:
+        print("      [!] No requested biochemical columns found in metadata.")
+        return pd.DataFrame(index=metadata.index), []
+    biochem_data = metadata[existing_cols].copy()
+    for col in biochem_data.columns:
+        biochem_data[col] = pd.to_numeric(biochem_data[col], errors='coerce')
+    valid_pct = biochem_data.notna().sum() / len(biochem_data) * 100
+    kept_cols = valid_pct[valid_pct >= min_valid_pct].index.tolist()
+    excluded_cols = valid_pct[valid_pct < min_valid_pct].index.tolist()
+    print(f"      Biochemical variables requested: {len(biochem_cols)}")
+    print(f"      Kept (≥{min_valid_pct}% valid): {len(kept_cols)}")
+    if excluded_cols:
+        print(f"      Excluded due to low coverage ({len(excluded_cols)}): {', '.join(excluded_cols)}")
+    if not kept_cols:
+        print("      [!] No biochemical variables passed filtering.")
+        return pd.DataFrame(index=metadata.index), []
+    biochem_filtered = biochem_data[kept_cols].copy()
+    for col in biochem_filtered.columns:
+        if biochem_filtered[col].isna().any():
+            median_val = biochem_filtered[col].median()
+            if np.isnan(median_val):
+                median_val = 0
+            biochem_filtered[col].fillna(median_val, inplace=True)
+    scaler = StandardScaler()
+    biochem_scaled = pd.DataFrame(
+        scaler.fit_transform(biochem_filtered),
+        index=biochem_filtered.index,
+        columns=biochem_filtered.columns,
+    )
+    return biochem_scaled, kept_cols
+
+
+def integrate_microbiome_and_biochem(
+    asv_clr: pd.DataFrame,
+    biochem_scaled: pd.DataFrame,
+    auto_weight: bool = True,
+    weight_microbiome: float = 0.5,
+    weight_biochem: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Integrate CLR-transformed microbiome and scaled biochemical data.
     """
     from sklearn.preprocessing import StandardScaler
     
     print(f"\n  [i] Integrating microbiome and biochemical data...")
-    if auto_weight:
-        n_microbiome = asv_clr.shape[1]
-        n_biochem = len(biochem_cols)
+    asv_clr_aligned = asv_clr.copy()
+    biochem_scaled_aligned = biochem_scaled.loc[asv_clr_aligned.index]
+    if auto_weight and biochem_scaled_aligned.shape[1] > 0:
+        n_microbiome = asv_clr_aligned.shape[1]
+        n_biochem = biochem_scaled_aligned.shape[1]
         weight_microbiome, weight_biochem = calculate_log_weights(n_microbiome, n_biochem)
+    elif auto_weight and biochem_scaled_aligned.shape[1] == 0:
+        weight_microbiome, weight_biochem = 1.0, 0.0
     else:
         print(f"      Using user-specified weights:")
         print(f"      Microbiome weight: {weight_microbiome}")
         print(f"      Biochem weight: {weight_biochem}")
     
-    # Align samples
-    common_samples = asv_clr.index.intersection(metadata.index)
-    asv_clr_aligned = asv_clr.loc[common_samples]
-    metadata_aligned = metadata.loc[common_samples]
-    
-    # Extract and filter biochem data
-    biochem_data = metadata_aligned[biochem_cols].copy()
-    
-    # Convert to numeric
-    for col in biochem_data.columns:
-        biochem_data[col] = pd.to_numeric(biochem_data[col], errors='coerce')
-    
-    # Filter by valid percentage
-    valid_pct = biochem_data.notna().sum() / len(biochem_data) * 100
-    kept_cols = valid_pct[valid_pct >= min_valid_pct].index.tolist()
-    excluded_cols = valid_pct[valid_pct < min_valid_pct].index.tolist()
-    
-    print(f"\n      Biochemical variables:")
-    print(f"        Requested: {len(biochem_cols)}")
-    print(f"        Kept (≥{min_valid_pct}% valid): {len(kept_cols)}")
-    if excluded_cols:
-        print(f"        Excluded: {len(excluded_cols)} - {', '.join(excluded_cols)}")
-    
-    biochem_data_filtered = biochem_data[kept_cols].copy()
-    
-    # Impute missing with median
-    for col in biochem_data_filtered.columns:
-        if biochem_data_filtered[col].isna().any():
-            median_val = biochem_data_filtered[col].median()
-            if np.isnan(median_val):
-                median_val = 0
-            biochem_data_filtered[col].fillna(median_val, inplace=True)
-    
-    # Scale both datasets
     scaler_microbiome = StandardScaler()
-    scaler_biochem = StandardScaler()
     
     microbiome_scaled = pd.DataFrame(
         scaler_microbiome.fit_transform(asv_clr_aligned),
@@ -2173,25 +2440,23 @@ def integrate_microbiome_and_biochem(
         columns=asv_clr_aligned.columns
     )
     
-    biochem_scaled = pd.DataFrame(
-        scaler_biochem.fit_transform(biochem_data_filtered),
-        index=biochem_data_filtered.index,
-        columns=biochem_data_filtered.columns
-    )
+    if biochem_scaled_aligned.shape[1] > 0:
+        biochem_weighted = biochem_scaled_aligned * weight_biochem
+        microbiome_weighted = microbiome_scaled * weight_microbiome
+        integrated_frames = [microbiome_weighted, biochem_weighted]
+    else:
+        microbiome_weighted = microbiome_scaled
+        integrated_frames = [microbiome_weighted]
+        print("      [!] No biochemical variables available; using microbiome data only.")
     
-    # Apply weights
-    microbiome_weighted = microbiome_scaled * weight_microbiome
-    biochem_weighted = biochem_scaled * weight_biochem
-    
-    # Concatenate
-    integrated_data = pd.concat([microbiome_weighted, biochem_weighted], axis=1)
+    integrated_data = pd.concat(integrated_frames, axis=1)
     
     print(f"\n      Integrated data shape: {integrated_data.shape}")
     print(f"        Microbiome features: {len(microbiome_weighted.columns)}")
-    print(f"        Biochemical features: {len(biochem_weighted.columns)}")
+    print(f"        Biochemical features: {biochem_scaled_aligned.shape[1]}")
     print(f"        Total features: {integrated_data.shape[1]}")
     
-    return integrated_data, kept_cols
+    return integrated_data
 
 
 # ============================================================================
@@ -2320,6 +2585,8 @@ def main():
     print(f"  ASVs: {asv_clr.shape[1]}")
     print(f"  Depths: {sorted(metadata[args.depth_col].unique())}")
     
+    biochem_scaled, kept_biochem_cols = prepare_biochem_dataset(metadata, biochem_cols)
+    
     # Calculate GC content
     print("\n[2/9] Calculating GC content...")
     gc_content = calculate_gc_content_from_fasta(args.asv_fasta)
@@ -2330,15 +2597,15 @@ def main():
         print(f"\n[4/8] Clustering on INTEGRATED microbiome + biochem data...")
         optimal_k, cluster_eval_df, linkage_matrix = determine_optimal_clusters_integrated(
                 asv_clr,
+                biochem_scaled,
                 metadata,
-                biochem_cols,
                 args.depth_col,
                 k_range=range(2, 11),
                 linkage_method='average',
                 auto_weight='log',
                 optimization_method='stability',
                 n_stability_iterations=20,
-                output_path=out_dir / "cluster_evaluation_integrated.pdf",
+                output_path=out_dir / "cluster_evaluation_integrated.png",
                 output_table=out_dir / "data_integrated.tsv",
             )
             
@@ -2350,7 +2617,7 @@ def main():
             args.depth_col,
             k_range=range(2, 11),
             linkage_method='average',
-            output_path=out_dir / "cluster_evaluation_euclidean.pdf",
+            output_path=out_dir / "cluster_evaluation_euclidean.png",
         )
         
     # Use just ASV data for UMAP
@@ -2386,6 +2653,9 @@ def main():
     # Get cluster labels
     print(f"\n[5/9] Assigning samples to clusters (k={optimal_k})...")
     cluster_labels = fcluster(linkage_matrix, optimal_k, criterion='maxclust') - 1
+    unique_clusters = sorted(np.unique(cluster_labels))
+    cluster_palette = sns.color_palette("Set2", len(unique_clusters))
+    cluster_color_map = {cluster: to_hex(cluster_palette[i]) for i, cluster in enumerate(unique_clusters)}
 
     print(f"      Created {optimal_k} clusters:")
     for i in range(optimal_k):
@@ -2397,6 +2667,7 @@ def main():
         'sample': asv_clr.index,
         'cluster': cluster_labels,
         'depth': metadata.loc[asv_clr.index, args.depth_col],
+        'cluster_color': [cluster_color_map.get(lbl, '#808080') for lbl in cluster_labels],
     })
     cluster_df.to_csv(out_dir / "depth_clusters.tsv", sep='\t', index=False)
     
@@ -2427,21 +2698,33 @@ def main():
         sample_gc,
         biochem_cols,
         args.depth_col,
-        out_dir / "figure1_panel_ab_dendrogram_heatmap.pdf",
+        out_dir / "figure1_panel_ab_dendrogram_heatmap.png",
     )
 
-    umap_coords = plot_umap_by_depth_manhattan(
+    umap_coords = plot_umap_by_depth_euclidean(
         use_for_umap,  # Use integrated data if --use-integrated
         metadata,
         args.depth_col,
-        out_dir / "figure1_panel_c_umap_by_depth.pdf",
+        out_dir / "figure1_panel_c_umap_by_depth.png",
     )
+    color_values = [cluster_color_map.get(lbl, '#808080') for lbl in cluster_labels]
+    umap_cluster_table = pd.DataFrame({
+        SAMPLE_ID_COL: use_for_umap.index,
+        'compartment_cluster': cluster_labels,
+        args.depth_col: metadata.loc[use_for_umap.index, args.depth_col].values,
+        'compartment_color': color_values,
+        'umap1': umap_coords[:, 0],
+        'umap2': umap_coords[:, 1],
+    })
+    umap_cluster_table.to_csv(out_dir / "compartment_umap_clusters.tsv", sep='\t', index=False)
+    print(f"  [✓] Saved UMAP coordinates table: compartment_umap_clusters.tsv")
     
-    # Panel d: UMAP by cluster (Manhattan)
-    plot_umap_by_cluster_manhattan(
+    # Panel d: UMAP by cluster (euclidean)
+    plot_umap_by_cluster_euclidean(
         umap_coords,
         cluster_labels,
-        out_dir / "figure1_panel_d_umap_by_cluster.pdf",
+        cluster_color_map,
+        out_dir / "figure1_panel_d_umap_by_cluster.png",
     )
     
     # Panel e: Richness by depth
@@ -2449,7 +2732,7 @@ def main():
         richness,
         metadata,
         args.depth_col,
-        out_dir / "figure1_panel_e_richness_by_depth.pdf",
+        out_dir / "figure1_panel_e_richness_by_depth.png",
     )
     
     # Bonus: Between-depth distances (pass metadata for colors)
@@ -2457,8 +2740,25 @@ def main():
         distance_df,
         metadata,
         args.depth_col,
-        out_dir / "figure1_bonus_between_depth_distances.pdf",
+        out_dir / "figure1_bonus_between_depth_distances.png",
     )
+    
+    plot_compartment_depth_time_section(
+        metadata,
+        args.depth_col,
+        args.month_col,
+        cluster_labels,
+        cluster_color_map,
+        out_dir / "compartment_depth_time_section.png",
+    )
+
+    plot_biochem_depth_profiles(
+        metadata,
+        args.depth_col,
+        kept_biochem_cols,
+        out_dir / "biochem_depth_profiles.png",
+    )
+    
     
     # Summary
     print("\n[8/9] Generating summary...")
@@ -2494,15 +2794,24 @@ def main():
     with open(out_dir / "figure1_summary.txt", 'w') as f:
         f.write(summary_text)
     
+    run_biochem_only_outputs(
+        biochem_scaled.loc[metadata.index],
+        kept_biochem_cols,
+        metadata,
+        sample_gc,
+        args,
+        out_dir,
+    )
+    
     print("\n[9/9] Complete!")
     print("="*70)
     print(f"\nOutput directory: {out_dir}")
     print("\nFigure 1 panels:")
-    print("  - figure1_panel_ab_dendrogram_heatmap.pdf")
-    print("  - figure1_panel_c_umap_by_depth.pdf")
-    print("  - figure1_panel_d_umap_by_cluster.pdf")
-    print("  - figure1_panel_e_richness_by_depth.pdf")
-    print("  - figure1_bonus_between_depth_distances.pdf")
+    print("  - figure1_panel_ab_dendrogram_heatmap.png")
+    print("  - figure1_panel_c_umap_by_depth.png")
+    print("  - figure1_panel_d_umap_by_cluster.png")
+    print("  - figure1_panel_e_richness_by_depth.png")
+    print("  - figure1_bonus_between_depth_distances.png")
     print("\nData files:")
     print("  - depth_clusters.tsv")
     print("  - between_depth_distances.tsv")

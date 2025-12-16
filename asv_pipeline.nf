@@ -689,6 +689,16 @@ def stratificationMonthCol = stratificationConfig.month_col ?: 'Month'
 def stratificationYearCol = stratificationConfig.year_col ?: 'Year'
 def stratificationDepthCol = stratificationConfig.depth_col ?: 'Depth'
 def stratificationConsensusThreshold = stratificationConfig.consensus_threshold ? (stratificationConfig.consensus_threshold as int) : 2
+def stratificationSampleIdCol = stratificationConfig.sample_id_col ?: 'sampleid'
+def stratificationTrajectoryGroupColConfigured = stratificationConfig.trajectory_group_col ?: null
+def stratificationTrajectorySummaryOverride = stratificationConfig.trajectory_summary ? resolveOptionalPath(stratificationConfig.trajectory_summary, configRoot) : null
+if( stratificationTrajectorySummaryOverride ) {
+    def stratSummaryFile = file(stratificationTrajectorySummaryOverride)
+    if( !stratSummaryFile.exists() ) {
+        exit 1, "stratification.trajectory_summary not found: ${stratificationTrajectorySummaryOverride}"
+    }
+}
+def stratificationTrajectoryGroupCol = stratificationTrajectoryGroupColConfigured ?: (trajectoryGroupCols ? trajectoryGroupCols[0] : null)
 
 def outlierConfig = config.outlier_detection ?: [:]
 boolean outlierEnabled = batchCorrectionEnabled && (outlierConfig.containsKey('enabled') ? (outlierConfig.enabled as boolean) : true)
@@ -814,6 +824,8 @@ def asvFinalForCollectors = null
     def asvClrForTrajectory = null
     def asvClrForOutlier = null
     def umapResultsForTrajectory = null
+    def trajectory_stage = null
+    def trajectorySummaryChannel = Channel.value(stratificationTrajectorySummaryOverride ?: '')
     if( batchCorrectionEnabled ) {
         batch_stage = ASV_BATCH_CORRECTION(
             metaMicroForBatch,
@@ -839,16 +851,22 @@ def asvFinalForCollectors = null
     }
 
     if( trajectoryEnabled ) {
-        TRAJECTORY_ANALYSIS(
+        trajectory_stage = TRAJECTORY_ANALYSIS(
             umapResultsForTrajectory,
             asvClrForTrajectory,
             metaMicroForTrajectory
         )
+        if( !stratificationTrajectorySummaryOverride ) {
+            trajectorySummaryChannel = trajectory_stage.trajectory_summary
+                .map { it?.toString() ?: '' }
+                .ifEmpty { Channel.value('') }
+        }
     }
     if( stratificationEnabled ) {
         STRATIFICATION_ANALYSIS(
             integratedDataForStrat,
-            metaMicroForStrat
+            metaMicroForStrat,
+            trajectorySummaryChannel
         )
     }
     if( outlierEnabled ) {
@@ -1589,6 +1607,9 @@ process TRAJECTORY_ANALYSIS {
     path(asv_clr)
     path(metadata_table)
 
+    output:
+    path("trajectory_summary.tsv"), optional true, emit: trajectory_summary
+
     script:
     """
 set -euo pipefail
@@ -1603,6 +1624,10 @@ python "${trajectoryScriptPath}" \\
   --top-taxa ${trajectoryTopTaxa} \\
   --output-dir "${trajectoryOutputDirAbs}" \\
   --verbose
+
+if [[ -f "${trajectoryOutputDirAbs}/trajectory_summary.tsv" ]]; then
+  ln -sf "${trajectoryOutputDirAbs}/trajectory_summary.tsv" trajectory_summary.tsv
+fi
 """
 }
 
@@ -1616,8 +1641,12 @@ process STRATIFICATION_ANALYSIS {
     input:
     path(integrated_data)
     path(metadata_table)
+    val trajectory_summary_path
 
     script:
+    def sampleIdArg = stratificationSampleIdCol ? "  --sample-id-col \"${stratificationSampleIdCol}\" \\\n" : ''
+    def trajectorySummaryArg = (trajectory_summary_path && trajectory_summary_path.toString().trim()) ? "  --trajectory-summary \"${trajectory_summary_path}\" \\\n" : ''
+    def trajectoryGroupArg = (trajectorySummaryArg && stratificationTrajectoryGroupCol) ? "  --trajectory-group-col \"${stratificationTrajectoryGroupCol}\" \\\n" : ''
     """
 set -euo pipefail
 
@@ -1628,7 +1657,7 @@ python "${stratificationScriptPath}" \\
   --month-col "${stratificationMonthCol}" \\
   --year-col "${stratificationYearCol}" \\
   --depth-col "${stratificationDepthCol}" \\
-  --consensus-threshold ${stratificationConsensusThreshold} \\
+${sampleIdArg}${trajectorySummaryArg}${trajectoryGroupArg}  --consensus-threshold ${stratificationConsensusThreshold} \\
   --output-dir "${stratificationOutputDirAbs}"
 """
 }

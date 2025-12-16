@@ -206,7 +206,7 @@ def plot_alpha_boxplot(df: pd.DataFrame, group_col: str, value_col: str,
     ax.tick_params(axis='x', rotation=45)
     plt.tight_layout()
     
-    for ext in ('svg', 'pdf'):
+    for ext in ('svg', 'pdf', 'png'):
         fig.savefig(output_path.with_suffix(f'.{ext}'), bbox_inches='tight')
     plt.close(fig)
 
@@ -232,7 +232,7 @@ def plot_alpha_faceted(df: pd.DataFrame, group_col: str, facet_col: str,
     
     g.figure.tight_layout()
     
-    for ext in ('svg', 'pdf'):
+    for ext in ('svg', 'pdf', 'png'):
         g.figure.savefig(output_path.with_suffix(f'.{ext}'), bbox_inches='tight')
     plt.close(g.figure)
 
@@ -314,7 +314,7 @@ def plot_permanova_heatmap(pairwise_df: pd.DataFrame, output_path: Path,
     ax.set_title(title, fontweight='bold', fontsize=14)
     plt.tight_layout()
     
-    for ext in ('svg', 'pdf'):
+    for ext in ('svg', 'pdf', 'png'):
         fig.savefig(output_path.with_suffix(f'.{ext}'), bbox_inches='tight')
     plt.close(fig)
 
@@ -417,7 +417,7 @@ def plot_umap_scatter(df: pd.DataFrame, x_col: str, y_col: str,
     plt.tight_layout()
     
     if output_path:
-        for ext in ('svg', 'pdf'):
+        for ext in ('svg', 'pdf', 'png'):
             fig.savefig(output_path.with_suffix(f'.{ext}'), bbox_inches='tight')
         plt.close(fig)
 
