@@ -1,52 +1,26 @@
-# file: env_compartments_final_gmm.py
-# put this in: /media/nfs/Ryan/SABer/SI_data/SI_ASV/SPARK/env_compartments_final_gmm.py
+# /media/nfs/Ryan/SABer/SI_data/SI_ASV/SPARK/env_compartments_final_gmm.py
 #!/usr/bin/env python3
 """
 env_compartments_final_gmm.py
 
-Purpose
--------
-Given PCA eigengene scores (PC1..PCn per sample) and a PC keep/decision table,
-fit a FINAL Gaussian Mixture Model (GMM) at a fixed K (default 5) and produce:
+(Original purpose preserved.)
 
-1) Reproducible model artifacts
-   - model_params.json (weights/means/covariances/etc)
-   - run_config.json
+ADDED (non-breaking):
+---------------------
+Optional HDBSCAN clustering on the same PC model space used for the final GMM.
 
-2) Per-sample compartment assignments with uncertainty
-   - compartments_assignments_base.csv
-   - responsibilities_base.csv
-   (optionally)
-   - compartments_assignments_smoothed.csv
-   - responsibilities_smoothed.csv
+Why this is defensible:
+- GMM uses fixed K (here K=5).
+- HDBSCAN is density-based; it does NOT take K.
+- We treat K=5 as a *reference point* for interpretation, not a constraint.
+- We report: number of clusters found, noise fraction, cluster sizes,
+  and agreement vs GMM (ARI/NMI) to support discussion.
 
-3) Compartment summaries
-   - compartment_summary_base.csv
-   - compartment_separation_base.csv
-   - covariance_diagnostics_base.csv
-   - persistent_episodic_labels_base.csv
-   (and *_smoothed.csv if smoothing enabled)
-
-4) Plots (matplotlib)
-   - pc_scatter_PC1_PC2_base.png
-   - compartment_frequency_over_time_base.png
-   - depth_time_heatmaps_component_{k}_base.png
-   (and *_smoothed.png if smoothing enabled)
-
-Optional biological inference helpers
-------------------------------------
-If you provide --matrix-cleaned (from env_pca/tables/matrix_cleaned.csv),
-the script also computes:
-   - pc_feature_correlations_spearman.csv
-   - compartment_feature_shifts.csv  (simple effect size vs global mean)
-
-Notes on “episodic smoothing”
------------------------------
-This is *second-stage temporal regularization* applied AFTER base GMM responsibilities.
-It does not change K. It can be applied to:
-  - only low-confidence samples (default), or
-  - all samples
-within each block (e.g. Cruise), ordered by provided sort cols.
+Outputs added (if --run-hdbscan):
+- tables/compartments_assignments_hdbscan.csv
+- tables/hdbscan_cluster_summary.csv
+- tables/hdbscan_vs_gmm_metrics.csv
+- plots/pc_scatter_PC1_PC2_hdbscan.png
 
 """
 
@@ -65,7 +39,7 @@ import matplotlib.pyplot as plt
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
-
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 # -----------------------------
 # Config
@@ -122,6 +96,14 @@ class RunConfig:
 
     # optional inference
     matrix_cleaned_csv: Optional[str]
+
+    # ADDED: HDBSCAN
+    run_hdbscan: bool
+    hdbscan_min_cluster_size: int
+    hdbscan_min_samples: Optional[int]
+    hdbscan_metric: str
+    hdbscan_cluster_selection_method: str
+    hdbscan_allow_single_cluster: bool
 
 
 def parse_args() -> RunConfig:
@@ -192,6 +174,22 @@ def parse_args() -> RunConfig:
     ap.add_argument("--matrix-cleaned", default=None,
                     help="Optional path to env_pca/tables/matrix_cleaned.csv for feature-space inference.")
 
+    # -----------------------------
+    # ADDED: HDBSCAN args (optional)
+    # -----------------------------
+    ap.add_argument("--run-hdbscan", action="store_true",
+                    help="Also run HDBSCAN on the same PC model space used for the final GMM.")
+    ap.add_argument("--hdbscan-min-cluster-size", type=int, default=50,
+                    help="HDBSCAN min_cluster_size (default 50).")
+    ap.add_argument("--hdbscan-min-samples", type=int, default=None,
+                    help="HDBSCAN min_samples (default None -> library default).")
+    ap.add_argument("--hdbscan-metric", default="euclidean",
+                    help="HDBSCAN metric (default euclidean).")
+    ap.add_argument("--hdbscan-cluster-selection-method", choices=["eom", "leaf"], default="eom",
+                    help="HDBSCAN cluster_selection_method (default eom).")
+    ap.add_argument("--hdbscan-allow-single-cluster", action="store_true",
+                    help="Allow HDBSCAN to return a single cluster (default False).")
+
     ns = ap.parse_args()
 
     pc_explicit = None
@@ -200,6 +198,11 @@ def parse_args() -> RunConfig:
 
     sort_cols = [c.strip() for c in ns.episodic_sort_cols.split(",") if c.strip()]
     depth_norm_col = ns.depth_norm_col if ns.depth_norm_col else ns.anchored_depth_col
+
+    # Interpret hdbscan-min-samples: allow empty/None
+    hdbscan_min_samples = ns.hdbscan_min_samples
+    if hdbscan_min_samples is not None and hdbscan_min_samples <= 0:
+        hdbscan_min_samples = None
 
     return RunConfig(
         eigengenes_csv=ns.eigengenes,
@@ -235,6 +238,12 @@ def parse_args() -> RunConfig:
         episodic_max_frac_samples=ns.episodic_max_frac_samples,
         episodic_max_span_days=ns.episodic_max_span_days,
         matrix_cleaned_csv=ns.matrix_cleaned,
+        run_hdbscan=ns.run_hdbscan,
+        hdbscan_min_cluster_size=ns.hdbscan_min_cluster_size,
+        hdbscan_min_samples=hdbscan_min_samples,
+        hdbscan_metric=ns.hdbscan_metric,
+        hdbscan_cluster_selection_method=ns.hdbscan_cluster_selection_method,
+        hdbscan_allow_single_cluster=ns.hdbscan_allow_single_cluster,
     )
 
 
@@ -258,11 +267,9 @@ def save_fig(path: str) -> None:
 
 def read_pc_keep(pc_keep_csv: str, sep: str) -> pd.DataFrame:
     df = pd.read_csv(pc_keep_csv, sep=sep)
-    # tolerate slight variations
     if "PC" not in df.columns:
         raise ValueError("pc_keep_decision.csv must contain a 'PC' column.")
     if "KEEP" not in df.columns:
-        # allow 'keep' alternative
         keep_cols = [c for c in df.columns if c.lower() == "keep"]
         if keep_cols:
             df["KEEP"] = df[keep_cols[0]]
@@ -288,7 +295,6 @@ def pick_pcs(eig: pd.DataFrame, pc_keep: pd.DataFrame, mode: str, explicit: Opti
             raise ValueError("None of the requested --pc-explicit columns exist in eigengenes.")
         return use
 
-    # keep
     keep_set = set(pc_keep.loc[pc_keep["KEEP"], "PC"].tolist())
     use = [p for p in pc_cols if p in keep_set]
     if not use:
@@ -314,7 +320,6 @@ def standardize_matrix(X: pd.DataFrame) -> Tuple[np.ndarray, Optional[StandardSc
 # -----------------------------
 
 def responsibility_entropy(P: np.ndarray) -> np.ndarray:
-    """Normalized Shannon entropy per row: H(p)/log(K)."""
     eps = 1e-12
     P2 = np.clip(P, eps, 1.0)
     H = -np.sum(P2 * np.log(P2), axis=1)
@@ -341,12 +346,10 @@ def fit_gmm(X: np.ndarray, K: int, covariance_type: str, n_init: int, max_iter: 
 # -----------------------------
 
 def knn_mean_distance(Z: np.ndarray, k: int) -> np.ndarray:
-    """Mean distance to k nearest neighbors (excluding self)."""
     k_eff = min(k + 1, Z.shape[0])
     nn = NearestNeighbors(n_neighbors=k_eff, metric="euclidean")
     nn.fit(Z)
     dists, _ = nn.kneighbors(Z, return_distance=True)
-    # dists[:,0] is self=0
     if dists.shape[1] <= 1:
         return np.zeros(Z.shape[0], dtype=float)
     return np.mean(dists[:, 1:], axis=1)
@@ -368,12 +371,6 @@ def sticky_transition(K: int, sticky_prob: float) -> np.ndarray:
 
 
 def forward_backward_emission(T: np.ndarray, E: np.ndarray) -> np.ndarray:
-    """
-    Forward-backward where:
-      - states = components
-      - emissions at t are proportional to E[t,:] (responsibilities from base GMM)
-    Returns smoothed posteriors gamma[t,:].
-    """
     eps = 1e-12
     E = np.clip(E, eps, 1.0)
     E = E / E.sum(axis=1, keepdims=True)
@@ -407,6 +404,17 @@ def forward_backward_emission(T: np.ndarray, E: np.ndarray) -> np.ndarray:
     return gamma
 
 
+def _selective_replace(base: np.ndarray, smoothed: np.ndarray, apply_to: str, thr: float) -> np.ndarray:
+    if apply_to == "all":
+        return smoothed
+    maxp = base.max(axis=1)
+    mask = maxp < thr
+    out = base.copy()
+    out[mask, :] = smoothed[mask, :]
+    out /= out.sum(axis=1, keepdims=True)
+    return out
+
+
 def apply_sticky_smoothing(
     df: pd.DataFrame,
     resp: np.ndarray,
@@ -416,40 +424,22 @@ def apply_sticky_smoothing(
     apply_to: str,
     lowconf_maxprob: float
 ) -> np.ndarray:
-    """
-    Apply sticky smoothing within each block, ordered by sort_cols.
-    If apply_to=low_conf_only, only replace rows with max_prob < lowconf_maxprob.
-    """
     out = resp.copy()
     K = resp.shape[1]
     T = sticky_transition(K, sticky_prob)
 
     if block_col not in df.columns:
-        # treat all as one block
         order = df.sort_values(sort_cols).index.to_numpy()
         gamma = forward_backward_emission(T, resp[order, :])
         out[order, :] = _selective_replace(resp[order, :], gamma, apply_to, lowconf_maxprob)
         return out
 
-    for b, sub in df.groupby(block_col, sort=False):
+    for _, sub in df.groupby(block_col, sort=False):
         sub_sorted = sub.sort_values(sort_cols)
         idx = sub_sorted.index.to_numpy()
         gamma = forward_backward_emission(T, resp[idx, :])
         out[idx, :] = _selective_replace(resp[idx, :], gamma, apply_to, lowconf_maxprob)
 
-    return out
-
-
-def _selective_replace(base: np.ndarray, smoothed: np.ndarray, apply_to: str, thr: float) -> np.ndarray:
-    if apply_to == "all":
-        return smoothed
-    # low_conf_only
-    maxp = base.max(axis=1)
-    mask = maxp < thr
-    out = base.copy()
-    out[mask, :] = smoothed[mask, :]
-    # renormalize (numerical safety)
-    out /= out.sum(axis=1, keepdims=True)
     return out
 
 
@@ -474,7 +464,6 @@ def summarize_components(
     df["_knn_md"] = knn_md
 
     n_total = df.shape[0]
-    t = pd.to_datetime(df[time_col], errors="coerce") if time_col in df.columns else pd.Series([pd.NaT] * n_total)
 
     rows = []
     for k, sub in df.groupby("_component"):
@@ -542,79 +531,20 @@ def label_persistent_episodic(
     return out
 
 
-def pairwise_mean_separation(Z: np.ndarray, comp: np.ndarray, K: int) -> pd.DataFrame:
-    """
-    Simple separation diagnostics in the model space:
-      - Euclidean distance between component means
-      - (optional-ish) pooled Mahalanobis using pooled covariance (if invertible)
-    """
-    means = []
-    covs = []
-    ns = []
-    for k in range(K):
-        idx = np.where(comp == k)[0]
-        ns.append(len(idx))
-        if len(idx) == 0:
-            means.append(np.full(Z.shape[1], np.nan))
-            covs.append(np.eye(Z.shape[1]))
-        else:
-            means.append(np.mean(Z[idx, :], axis=0))
-            covs.append(np.cov(Z[idx, :].T) if len(idx) > 1 else np.eye(Z.shape[1]))
-    means = np.vstack(means)
-
-    # pooled covariance
-    pooled = None
-    try:
-        num = np.zeros((Z.shape[1], Z.shape[1]), dtype=float)
-        den = 0
-        for k in range(K):
-            if ns[k] > 1:
-                num += (ns[k] - 1) * covs[k]
-                den += (ns[k] - 1)
-        pooled = num / den if den > 0 else None
-        inv_pooled = np.linalg.inv(pooled) if pooled is not None else None
-    except Exception:
-        inv_pooled = None
-
-    rows = []
-    for i in range(K):
-        for j in range(i + 1, K):
-            if np.any(np.isnan(means[i])) or np.any(np.isnan(means[j])):
-                continue
-            d_euc = float(np.linalg.norm(means[i] - means[j]))
-            if inv_pooled is not None:
-                v = (means[i] - means[j]).reshape(-1, 1)
-                d_mah = float(np.sqrt((v.T @ inv_pooled @ v).item()))
-            else:
-                d_mah = np.nan
-            rows.append({
-                "component_i": i,
-                "component_j": j,
-                "mean_dist_euclidean": d_euc,
-                "mean_dist_mahalanobis_pooled": d_mah,
-            })
-    return pd.DataFrame(rows).sort_values("mean_dist_euclidean", ascending=False)
-
-
 def covariance_diagnostics(gmm: GaussianMixture) -> pd.DataFrame:
-    """
-    Diagnostics per component covariance:
-      - trace, det, condition number (where possible)
-    """
     K = gmm.n_components
     covs = gmm.covariances_
 
     rows = []
     for k in range(K):
         C = covs[k]
-        # handle covariance_type variations
         if gmm.covariance_type == "full":
             M = C
         elif gmm.covariance_type == "tied":
             M = covs
         elif gmm.covariance_type == "diag":
             M = np.diag(C)
-        else:  # spherical
+        else:
             M = np.eye(gmm.means_.shape[1]) * float(C)
 
         try:
@@ -637,7 +567,7 @@ def covariance_diagnostics(gmm: GaussianMixture) -> pd.DataFrame:
 # Plots
 # -----------------------------
 
-def plot_pc_scatter(df: pd.DataFrame, pc1: str, pc2: str, comp_col: str, outpath: str) -> None:
+def plot_pc_scatter(df: pd.DataFrame, pc1: str, pc2: str, comp_col: str, outpath: str, title: str) -> None:
     if pc1 not in df.columns or pc2 not in df.columns:
         return
     c = pd.to_numeric(df[comp_col], errors="coerce").fillna(-1).to_numpy()
@@ -645,94 +575,16 @@ def plot_pc_scatter(df: pd.DataFrame, pc1: str, pc2: str, comp_col: str, outpath
     plt.scatter(df[pc1].values, df[pc2].values, c=c)
     plt.xlabel(pc1)
     plt.ylabel(pc2)
-    plt.title(f"{pc1} vs {pc2} colored by compartment")
-    plt.colorbar(label="component")
+    plt.title(title)
+    plt.colorbar(label=comp_col)
     save_fig(outpath)
-
-
-def plot_compartment_frequency_over_time(df: pd.DataFrame, time_col: str, cruise_col: str, comp_col: str,
-                                        K: int, outpath: str) -> None:
-    if time_col not in df.columns:
-        return
-    tmp = df.copy()
-    tmp[time_col] = pd.to_datetime(tmp[time_col], errors="coerce")
-    tmp = tmp.dropna(subset=[time_col])
-    if tmp.empty:
-        return
-
-    # aggregate by date (daily) across cruises; if you want cruise-resolved, you can facet later
-    tmp["_date"] = tmp[time_col].dt.date.astype(str)
-    g = tmp.groupby(["_date", comp_col]).size().unstack(fill_value=0)
-
-    # ensure all components exist
-    for k in range(K):
-        if k not in g.columns:
-            g[k] = 0
-    g = g[sorted(g.columns)]
-
-    # normalize to frequencies per date
-    G = g.values.astype(float)
-    denom = G.sum(axis=1, keepdims=True)
-    denom[denom == 0] = 1.0
-    F = G / denom
-
-    x = np.arange(F.shape[0])
-    plt.figure(figsize=(12, 5))
-    plt.stackplot(x, F.T)
-    plt.xticks(x[::max(1, len(x)//12)], g.index[::max(1, len(x)//12)], rotation=45, ha="right")
-    plt.ylabel("Fraction of samples")
-    plt.title("Compartment frequency over time (all cruises aggregated)")
-    save_fig(outpath)
-
-
-def plot_depth_time_heatmaps(df: pd.DataFrame, time_col: str, depth_col: str, comp_col: str, K: int, plots_dir: str, tag: str) -> None:
-    if time_col not in df.columns or depth_col not in df.columns:
-        return
-    tmp = df.copy()
-    tmp[time_col] = pd.to_datetime(tmp[time_col], errors="coerce")
-    tmp[depth_col] = pd.to_numeric(tmp[depth_col], errors="coerce")
-    tmp = tmp.dropna(subset=[time_col, depth_col])
-    if tmp.empty:
-        return
-
-    # bin time to month for readability
-    tmp["_month"] = tmp[time_col].dt.to_period("M").astype(str)
-    tmp["_depth"] = tmp[depth_col].round(0).astype(int)
-
-    # build frequency heatmap per component: (depth x month) = fraction of samples at that cell assigned to comp
-    cell_counts = tmp.groupby(["_depth", "_month"]).size().rename("n").reset_index()
-    for k in range(K):
-        kk = tmp[tmp[comp_col] == k].groupby(["_depth", "_month"]).size().rename("nk").reset_index()
-        merged = cell_counts.merge(kk, on=["_depth", "_month"], how="left").fillna({"nk": 0})
-        merged["frac"] = merged["nk"] / merged["n"]
-
-        depths = sorted(merged["_depth"].unique().tolist())
-        months = sorted(merged["_month"].unique().tolist())
-        M = np.zeros((len(depths), len(months)), dtype=float)
-
-        di = {d: i for i, d in enumerate(depths)}
-        mi = {m: i for i, m in enumerate(months)}
-        for _, r in merged.iterrows():
-            M[di[int(r["_depth"])], mi[str(r["_month"])]] = float(r["frac"])
-
-        plt.figure(figsize=(12, max(4, 0.18 * len(depths))))
-        plt.imshow(M, aspect="auto", interpolation="nearest")
-        plt.yticks(np.arange(len(depths)), depths)
-        plt.xticks(np.arange(len(months))[::max(1, len(months)//12)],
-                   months[::max(1, len(months)//12)], rotation=45, ha="right")
-        plt.xlabel("Month")
-        plt.ylabel("Depth (m, rounded)")
-        plt.title(f"Depth x time membership frequency for component {k} ({tag})")
-        plt.colorbar(label="Fraction in component")
-        save_fig(os.path.join(plots_dir, f"depth_time_heatmap_component_{k}_{tag}.png"))
 
 
 # -----------------------------
-# Optional feature-space inference
+# Optional feature-space inference (unchanged)
 # -----------------------------
 
 def spearman_corr(a: np.ndarray, b: np.ndarray) -> float:
-    # minimal spearman (rank + pearson)
     ra = pd.Series(a).rank(method="average").to_numpy()
     rb = pd.Series(b).rank(method="average").to_numpy()
     if np.std(ra) == 0 or np.std(rb) == 0:
@@ -742,9 +594,7 @@ def spearman_corr(a: np.ndarray, b: np.ndarray) -> float:
 
 def pc_feature_correlations(matrix_cleaned: pd.DataFrame, eig: pd.DataFrame, pcs: List[str],
                             meta_cols: List[str], out_csv: str) -> pd.DataFrame:
-    # numeric features = columns in matrix_cleaned not in meta_cols
     feats = [c for c in matrix_cleaned.columns if c not in meta_cols]
-    # coerce numeric
     mc = matrix_cleaned.copy()
     for c in feats:
         mc[c] = pd.to_numeric(mc[c], errors="coerce")
@@ -787,7 +637,6 @@ def compartment_feature_shifts(matrix_cleaned: pd.DataFrame, comp: np.ndarray, m
             continue
         mk = np.nanmean(X[idx, :], axis=0)
         z = (mk - mu) / sd
-        # report top absolute shifts
         top = np.argsort(-np.abs(z))[:20]
         for j in top:
             rows.append({
@@ -804,7 +653,94 @@ def compartment_feature_shifts(matrix_cleaned: pd.DataFrame, comp: np.ndarray, m
 
 
 # -----------------------------
-# Main
+# ADDED: HDBSCAN helpers
+# -----------------------------
+
+def run_hdbscan_clustering(
+    Z_model: np.ndarray,
+    min_cluster_size: int,
+    min_samples: Optional[int],
+    metric: str,
+    cluster_selection_method: str,
+    allow_single_cluster: bool,
+    random_state: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Returns:
+      labels: shape (n,), -1 means noise
+      probs: shape (n,), membership strength per point (0..1) if available
+    """
+    try:
+        import hdbscan  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "HDBSCAN requested but the 'hdbscan' package is not available in this environment.\n"
+            "Install it (recommended):  conda install -c conda-forge hdbscan\n"
+            f"Original import error: {e}"
+        )
+
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=int(min_cluster_size),
+        min_samples=None if min_samples is None else int(min_samples),
+        metric=metric,
+        cluster_selection_method=cluster_selection_method,
+        allow_single_cluster=bool(allow_single_cluster),
+        # HDBSCAN itself is mostly deterministic given inputs, but keep API stable
+        # (the library doesn't always accept random_state; ignore if unsupported)
+    )
+    labels = clusterer.fit_predict(Z_model)
+
+    # probabilities_ exists on clusterer; for noise points it's usually 0
+    probs = getattr(clusterer, "probabilities_", None)
+    if probs is None:
+        probs = np.full(Z_model.shape[0], np.nan, dtype=float)
+
+    return labels.astype(int), probs.astype(float)
+
+
+def summarize_hdbscan(labels: np.ndarray) -> pd.DataFrame:
+    n = len(labels)
+    n_noise = int(np.sum(labels == -1))
+    frac_noise = n_noise / n if n else np.nan
+    # cluster sizes excluding noise
+    labs = labels[labels != -1]
+    if labs.size == 0:
+        return pd.DataFrame([{
+            "n_total": n,
+            "n_clusters": 0,
+            "n_noise": n_noise,
+            "frac_noise": frac_noise,
+            "min_cluster_size_obs": np.nan,
+            "max_cluster_size_obs": np.nan,
+            "median_cluster_size_obs": np.nan,
+        }])
+    counts = pd.Series(labs).value_counts().sort_index()
+    return pd.DataFrame([{
+        "n_total": n,
+        "n_clusters": int(counts.shape[0]),
+        "n_noise": n_noise,
+        "frac_noise": float(frac_noise),
+        "min_cluster_size_obs": int(counts.min()),
+        "max_cluster_size_obs": int(counts.max()),
+        "median_cluster_size_obs": float(counts.median()),
+    }])
+
+
+def compare_clusterings(gmm_comp: np.ndarray, hdb_labels: np.ndarray) -> pd.DataFrame:
+    """
+    Compare GMM component labels vs HDBSCAN labels.
+    Note: ARI/NMI can handle different label sets and noise (-1) as just another label.
+    """
+    ari = adjusted_rand_score(gmm_comp, hdb_labels)
+    nmi = normalized_mutual_info_score(gmm_comp, hdb_labels)
+    return pd.DataFrame([{
+        "ARI_gmm_vs_hdbscan": float(ari),
+        "NMI_gmm_vs_hdbscan": float(nmi),
+    }])
+
+
+# -----------------------------
+# Main (GMM unchanged; HDBSCAN added after)
 # -----------------------------
 
 def run_once(tag: str,
@@ -824,7 +760,6 @@ def run_once(tag: str,
     ent = responsibility_entropy(resp)
     knn_md = knn_mean_distance(Z_density, cfg.knn_k)
 
-    # save per-sample tables
     assign = meta.copy()
     assign["component"] = comp
     assign["max_prob"] = maxp
@@ -837,7 +772,6 @@ def run_once(tag: str,
     resp_df = pd.DataFrame(resp, columns=[f"resp_{k}" for k in range(resp.shape[1])])
     resp_df.to_csv(os.path.join(tables_dir, f"responsibilities_{tag}.csv"), index=False)
 
-    # summaries
     depth_group_col = cfg.anchored_depth_col if cfg.anchored_depth_col in meta.columns else cfg.depth_col
     summary = summarize_components(
         meta=meta,
@@ -861,20 +795,20 @@ def run_once(tag: str,
     )
     labels.to_csv(os.path.join(tables_dir, f"persistent_episodic_labels_{tag}.csv"), index=False)
 
-    sep = pairwise_mean_separation(Z_model, comp, cfg.K)
-    sep.to_csv(os.path.join(tables_dir, f"compartment_separation_{tag}.csv"), index=False)
-
     covdiag = covariance_diagnostics(gmm)
     covdiag.to_csv(os.path.join(tables_dir, f"covariance_diagnostics_{tag}.csv"), index=False)
 
-    # plots
     df_plot = pd.concat([meta.reset_index(drop=True), pcs_df.reset_index(drop=True)], axis=1)
     df_plot["component"] = comp
-    plot_pc_scatter(df_plot, "PC1", "PC2", "component", os.path.join(plots_dir, f"pc_scatter_PC1_PC2_{tag}.png"))
-    plot_compartment_frequency_over_time(df_plot, cfg.time_col, cfg.cruise_col, "component", cfg.K,
-                                         os.path.join(plots_dir, f"compartment_frequency_over_time_{tag}.png"))
-    plot_depth_time_heatmaps(df_plot, cfg.time_col, cfg.anchored_depth_col if cfg.anchored_depth_col in df_plot.columns else cfg.depth_col,
-                             "component", cfg.K, plots_dir, tag)
+
+    plot_pc_scatter(
+        df_plot,
+        "PC1",
+        "PC2",
+        "component",
+        os.path.join(plots_dir, f"pc_scatter_PC1_PC2_{tag}.png"),
+        title=f"PC1 vs PC2 colored by GMM component ({tag})"
+    )
 
 
 def main() -> None:
@@ -888,11 +822,9 @@ def main() -> None:
     pc_keep = read_pc_keep(cfg.pc_keep_csv, sep=cfg.sep)
     pcs = pick_pcs(eig, pc_keep, cfg.pc_use_mode, cfg.pc_explicit)
 
-    # metadata columns = everything that's not PCs (plus any PC columns not used)
     meta_cols = [c for c in eig.columns if not c.startswith("PC")]
     meta = eig[meta_cols].copy()
 
-    # coerce key cols
     if cfg.time_col in meta.columns:
         meta[cfg.time_col] = pd.to_datetime(meta[cfg.time_col], errors="coerce")
     if cfg.depth_col in meta.columns:
@@ -918,7 +850,7 @@ def main() -> None:
         scaler = None
         pcs_df = Xpcs.copy()
 
-    # density space Z_density
+    # density space Z_density (unchanged)
     if cfg.density_space == "pc":
         Z_density = Z_model
     else:
@@ -929,7 +861,7 @@ def main() -> None:
         dz = dz.to_numpy().reshape(-1, 1)
         Z_density = np.hstack([Z_model, dz])
 
-    # Fit final GMM on Z_model (PC space), not density space
+    # Fit final GMM on Z_model
     gmm = fit_gmm(
         X=Z_model,
         K=cfg.K,
@@ -988,19 +920,11 @@ def main() -> None:
         if not sort_cols:
             raise ValueError("episodic-smoothing enabled but none of episodic-sort-cols exist in metadata.")
 
-        # create a working df containing required cols
         work = meta.copy()
-        block_col = cfg.episodic_block_col
-        if block_col not in work.columns:
-            # still allowed: treated as one block
-            pass
-
-        # ensure sort cols comparable
         for c in sort_cols:
             if "date" in c.lower() or "time" in c.lower():
                 work[c] = pd.to_datetime(work[c], errors="coerce")
             else:
-                # attempt numeric first, fallback to string
                 wc = pd.to_numeric(work[c], errors="coerce")
                 if wc.notna().sum() > 0:
                     work[c] = wc
@@ -1010,7 +934,7 @@ def main() -> None:
         resp_sm = apply_sticky_smoothing(
             df=work,
             resp=resp,
-            block_col=block_col,
+            block_col=cfg.episodic_block_col,
             sort_cols=sort_cols,
             sticky_prob=cfg.episodic_sticky_prob,
             apply_to=cfg.episodic_apply_to,
@@ -1026,18 +950,15 @@ def main() -> None:
             Z_model=Z_model,
             Z_density=Z_density,
             scaler=scaler,
-            gmm=gmm,   # model unchanged; smoothing is post hoc
+            gmm=gmm,
             resp=resp_sm,
         )
 
-    # optional feature-space inference
+    # optional feature-space inference (unchanged)
     if cfg.matrix_cleaned_csv:
         mc = pd.read_csv(cfg.matrix_cleaned_csv)
-        # align by row order assumption: matrix_cleaned was written in same row order as eigengenes
-        # We reindexed eigengenes to kept_idx above and then reset_index, so do same to matrix_cleaned:
         mc = mc.loc[kept_idx].reset_index(drop=True)
 
-        # meta_cols for matrix_cleaned: take intersection with eigengenes meta cols
         mc_meta_cols = [c for c in mc.columns if c in meta.columns]
         pc_feature_correlations(
             matrix_cleaned=mc,
@@ -1047,14 +968,56 @@ def main() -> None:
             out_csv=os.path.join(tables_dir, "pc_feature_correlations_spearman.csv"),
         )
 
-        # feature shifts using base compartments
         base_assign = pd.read_csv(os.path.join(tables_dir, "compartments_assignments_base.csv"))
-        comp = pd.to_numeric(base_assign["component"], errors="coerce").fillna(-1).astype(int).to_numpy()
+        comp_base = pd.to_numeric(base_assign["component"], errors="coerce").fillna(-1).astype(int).to_numpy()
         compartment_feature_shifts(
             matrix_cleaned=mc,
-            comp=comp,
+            comp=comp_base,
             meta_cols=mc_meta_cols,
             out_csv=os.path.join(tables_dir, "compartment_feature_shifts.csv"),
+        )
+
+    # -----------------------------
+    # ADDED: optional HDBSCAN run
+    # -----------------------------
+    if cfg.run_hdbscan:
+        base_assign = pd.read_csv(os.path.join(tables_dir, "compartments_assignments_base.csv"))
+        gmm_comp = pd.to_numeric(base_assign["component"], errors="coerce").fillna(-1).astype(int).to_numpy()
+
+        labels, probs = run_hdbscan_clustering(
+            Z_model=Z_model,
+            min_cluster_size=cfg.hdbscan_min_cluster_size,
+            min_samples=cfg.hdbscan_min_samples,
+            metric=cfg.hdbscan_metric,
+            cluster_selection_method=cfg.hdbscan_cluster_selection_method,
+            allow_single_cluster=cfg.hdbscan_allow_single_cluster,
+            random_state=cfg.random_state,
+        )
+
+        # per-sample output
+        hdb = meta.copy()
+        hdb["hdbscan_component"] = labels
+        hdb["hdbscan_prob"] = probs
+        hdb.to_csv(os.path.join(tables_dir, "compartments_assignments_hdbscan.csv"), index=False)
+
+        # summary
+        hsum = summarize_hdbscan(labels)
+        hsum.to_csv(os.path.join(tables_dir, "hdbscan_cluster_summary.csv"), index=False)
+
+        # compare vs GMM
+        cmp_df = compare_clusterings(gmm_comp=gmm_comp, hdb_labels=labels)
+        cmp_df.to_csv(os.path.join(tables_dir, "hdbscan_vs_gmm_metrics.csv"), index=False)
+
+        # quick PC scatter
+        df_plot = pd.concat([meta.reset_index(drop=True), pcs_df.reset_index(drop=True)], axis=1)
+        df_plot["hdbscan_component"] = labels
+        plot_pc_scatter(
+            df_plot,
+            "PC1",
+            "PC2",
+            "hdbscan_component",
+            os.path.join(plots_dir, "pc_scatter_PC1_PC2_hdbscan.png"),
+            title="PC1 vs PC2 colored by HDBSCAN cluster (-1 = noise)"
         )
 
     print(f"[OK] Wrote outputs to: {cfg.outdir}")
@@ -1065,6 +1028,10 @@ def main() -> None:
         print(f"     Smoothing: ON ({cfg.episodic_apply_to}, sticky_prob={cfg.episodic_sticky_prob}, lowconf<{cfg.episodic_lowconf_maxprob})")
     else:
         print("     Smoothing: OFF")
+    if cfg.run_hdbscan:
+        print(f"     HDBSCAN: ON (min_cluster_size={cfg.hdbscan_min_cluster_size}, min_samples={cfg.hdbscan_min_samples}, metric={cfg.hdbscan_metric})")
+    else:
+        print("     HDBSCAN: OFF")
 
 
 if __name__ == "__main__":

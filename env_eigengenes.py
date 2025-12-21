@@ -158,8 +158,6 @@ class RunConfig:
     meta_cols: List[str]
 
     include_depth_as_feature: bool
-    include_features: Optional[List[str]]  # user-requested subset (names)
-
     n_components: int
     log1p: bool
 
@@ -214,7 +212,7 @@ def parse_args() -> RunConfig:
     ap.add_argument("--outdir", required=True, help="Output directory.")
     ap.add_argument("--sep", default="\t", help="Delimiter (default: tab). Use ',' for CSV.")
 
-    ap.add_argument("--n-components", type=int, default=10, help="Number of PCA components.")
+    ap.add_argument("--n-components", type=int, default=5, help="Number of PCA components.")
     ap.add_argument("--log1p", action="store_true", help="Apply log1p to features after cleaning (negatives clamped to 0).")
 
     ap.add_argument(
@@ -267,16 +265,6 @@ def parse_args() -> RunConfig:
         ),
     )
 
-    ap.add_argument(
-        "--include-features",
-        default=None,
-        help=(
-            "Comma-separated subset of features to include FROM the configured feature set. "
-            "Example: \"Temperature,Salinity (PSU),Oxygen\". "
-            "If provided, PCA uses only these columns (that exist)."
-        ),
-    )
-
     ap.add_argument("--id-col", default=DEFAULT_ID_COL, help=f"ID column (default: {DEFAULT_ID_COL})")
     ap.add_argument("--time-col", default=DERIVED_TIME_COL, help=f"Time column (default: derived '{DERIVED_TIME_COL}')")
 
@@ -306,7 +294,7 @@ def parse_args() -> RunConfig:
 
     ap.add_argument("--pcsel-support-min-cov", type=float, default=0.70, help="Min per-feature coverage threshold (default 0.70).")
     ap.add_argument("--pcsel-support-median-cov", type=float, default=0.70, help="Median coverage threshold on top features (default 0.70).")
-    ap.add_argument("--pcsel-support-min-n", type=int, default=6, help="Min number of well-covered top features (default 6).")
+    ap.add_argument("--pcsel-support-min-n", type=int, default=5, help="Min number of well-covered top features (default 6).")
 
     ap.add_argument("--pcsel-top-frac", type=float, default=0.15, help="Fraction of features for top-loading set Tk (default 0.15).")
     ap.add_argument("--pcsel-top-min", type=int, default=8, help="Minimum size of top-loading set Tk (default 8).")
@@ -359,15 +347,6 @@ def parse_args() -> RunConfig:
         if "Depth" not in feature_cols:
             feature_cols = ["Depth"] + feature_cols
 
-    include_features = None
-    if ns.include_features:
-        include_features = [c.strip() for c in ns.include_features.split(",") if c.strip()]
-        include_set = set(include_features)
-        feature_cols = [c for c in feature_cols if c in include_set]
-
-    if len(feature_cols) == 0:
-        raise ValueError("After applying --include-features (or your overrides), there are 0 feature columns configured.")
-
     return RunConfig(
         input_path=ns.input,
         outdir=ns.outdir,
@@ -377,7 +356,6 @@ def parse_args() -> RunConfig:
         feature_cols=feature_cols,
         meta_cols=meta_cols,
         include_depth_as_feature=ns.include_depth_as_feature,
-        include_features=include_features,
         n_components=ns.n_components,
         log1p=ns.log1p,
 
@@ -617,9 +595,6 @@ def anchor_depth_column_data_driven(
                 proto_rows.append({"block": b, "anchor_depth_m": float(a), "n_rows": n})
             else:
                 proto_counts[key] = n
-
-    proto_df = pd.DataFrame(proto_rows).sort_values(["block", "anchor_depth_m"])
-    proto_df.to_csv  # just to satisfy linters; file write happens in main
 
     # Decide anchoring per row
     anchored_vals = np.full(shape=out.shape[0], fill_value=np.nan, dtype=float)
@@ -1472,7 +1447,6 @@ def main() -> None:
             {
                 "missing_features": missing_features,
                 "missing_meta": missing_meta,
-                "requested_include_features": cfg.include_features,
                 "configured_feature_cols_final": cfg.feature_cols,
             },
             f,
