@@ -1,81 +1,159 @@
 #!/usr/bin/env python3
 """
-env_eigengenes.py
+env_eigenvectors.py
 
-Baseline:
-- Prepare env/biochem matrix
-- Handle missingness (drop sparse cols/rows + impute)
-- Clamp negatives to 0 (always; counted)
-- Optional log1p (after clamp)
-- Standardize
-- PCA
-- Save key tables/plots
+Purpose
+- Prepare an environmental / biogeochemical feature matrix for PCA (“eigenvectors”):
+  cleaning → missingness filtering → imputation → clamp/log → scaling → PCA
+- Write a reproducible set of tables/plots plus a compact QC summary.
 
-NEW (optional):
-A) Depth anchoring (pre-flight) --anchor-depths
-   DATA-DRIVEN ONLY (no “nearest” mode):
-   - Choose global depth anchors from most common rounded depths
-   - For each cruise (or --anchor-by-col block), compute anchor prototypes
-     using ONLY observed (non-imputed) feature values
-   - For each off-depth sample, compare similarity to bracketing anchors (below/above)
-     within the same cruise; snap if:
-       (i) enough observed overlap (>= --anchor-min-features),
-       (ii) one anchor is clearly closer (<= --anchor-margin ratio),
-       (iii) chosen anchor is within --anchor-tol-m meters
-   - Keeps samples; avoids dropping “off-depth” samples
-   Outputs:
-     tables/depth_anchors.csv
-     tables/depth_anchor_mapping_summary.csv
-     tables/depth_anchor_decisions.csv
-     tables/depth_anchor_decision_summary_by_block.csv
+Pipeline (always, in this order)
+1) Load input table (CSV/TSV)
+   - Reads all columns as strings, then coerces configured feature columns (and Depth if needed) to numeric.
+   - Creates a datetime column:
+     * If --time-col exists, it is parsed as datetime.
+     * Else, if Year/Month/Day exist, derives --time-col from them.
 
-B) Improved imputation:
-   - median/mean (baseline)
-   - knn (KNNImputer)
-   - iterative (IterativeImputer with BayesianRidge)
-   - Optionally depth-aware: --impute-scope by_depth
-     (learn imputation within each anchored depth group; fallback to global model for small groups)
+2) Optional pre-flight depth anchoring (DATA-DRIVEN ONLY)  [enabled by --anchor-depths]
+   Goal: keep “off-depth” samples by snapping some of them to common anchor depths using similarity of observed
+   (non-imputed) feature values, within a block (e.g., cruise).
+   - Global anchor depths are chosen from the most frequent rounded depths across the full dataset:
+     * Depths are rounded to --anchor-round-m meters
+     * Only depths with count >= --anchor-min-count are eligible
+     * Uses at most --anchor-top-k anchor depths
+   - Prototypes per (block, anchor) are built ONLY from observed feature values (median), requiring
+     >= --anchor-proto-min-n samples at that (block, anchor).
+   - For a non-anchor sample, only the bracketing anchors (below/above its depth) are considered.
+   - A sample snaps only if ALL gates pass:
+     (i) enough shared observed features with the prototype (>= --anchor-min-features),
+     (ii) clear winner by distance ratio: winner/loser <= --anchor-margin
+          (if only one side has a usable prototype, ratio is treated as 0),
+     (iii) chosen anchor is within --anchor-tol-m meters of the sample’s actual depth.
+   - IMPORTANT: samples already at an anchor depth (by rounded depth) are never evaluated for snapping;
+     they are kept as-is (“is_anchor”).
+   - Similarity distances are computed in z-scored space where z-score parameters are computed from observed data
+     (no imputation); negatives in the feature matrix used for similarity are clamped to 0 (counted separately).
 
-C) Data-driven PC selection + feature clustering by loading similarity
-   Enable with: --pc-selection
+3) Missingness summaries + filtering (features only)
+   - Writes missingness stats before/after filtering.
+   - Drops feature columns with missing fraction > --dropna-col-thresh
+   - Drops rows with missing fraction > --dropna-row-thresh (computed over kept features)
 
-PC selection rules implemented:
-1) Parallel analysis (permute columns) keep if lambda_obs > null_q
-2) Coverage support on top-loading features (median_cov >= 0.70 and n_cov>=6)
-3) Feature clusters (Agglomerative on cosine distance of centered loading vectors)
-   PC coherence keep if >= 60% of top-loading features in one cluster
-4) Block-bootstrap stability (by Cruise/Month/YearMonth) keep if:
-   median abs corr(loadings) >= 0.85 AND median abs corr(scores) >= 0.80
+4) Imputation
+   Strategies (--impute): median | mean | knn | iterative
+   Scope (--impute-scope):
+   - global: learn/fill across all rows
+   - by_depth: impute within each anchored depth group (requires anchored depth column in metadata)
+       * For knn/iterative: if group size < --impute-min-group-size, fallback to a global fitted model
+       * For median/mean: if group too small, fallback to global median/mean
+   Notes:
+   - X_preimpute (post-drop, pre-impute) is retained for coverage metrics used by PC selection.
 
-Outputs:
+5) Post-impute cleaning + transform
+   - Clamp negatives to 0 (ALWAYS; counted)
+   - Optional log1p (--log1p), applied after clamp
+
+6) Scaling + PCA
+   - Standardize with StandardScaler (mean=0, std=1)
+   - Fit PCA with n_components = min(--n-components, #features, #rows)
+
+7) Optional: PC selection + feature clustering  [enabled by --pc-selection]
+   Computed on the fitted PCA results.
+   Outputs include parallel analysis, per-PC support checks, feature clustering by loading similarity,
+   and block-bootstrap stability.
+
+   Implemented checks:
+   1) Parallel analysis (permute each column within rows B times)
+      Keep if lambda_obs > lambda_null_quantile, where:
+        - B = --pcsel-parallel-B
+        - quantile = --pcsel-parallel-quantile
+
+   2) Coverage support (uses X_preimpute)
+      For each PC, define Tk = top-loading features by abs(loading):
+        - size(Tk) = max(--pcsel-top-min, ceil(--pcsel-top-frac * #features))
+      Keep coverage if:
+        - median coverage(Tk) >= --pcsel-support-median-cov
+        - AND count of Tk with coverage >= --pcsel-support-min-cov is >= --pcsel-support-min-n
+
+   3) Feature clustering + coherence
+      - Cluster features by cosine distance of centered loading vectors (Agglomerative, average linkage)
+        using the PCs that passed parallel analysis.
+      - For each PC’s Tk, compute fraction in dominant cluster; keep coherence if:
+        - dominant_cluster_fraction >= --pcsel-coherence-min-frac
+
+   4) Concentration / interpretability metrics (entropy + participation ratio)
+      Computed per PC from loading “energy” (loading^2):
+        - entropy_norm (0=concentrated, 1=diffuse)
+        - effective_features (exp(entropy))
+        - participation_ratio (effective #contributors proxy)
+      Keep “entropy gate” if:
+        - entropy_norm <= --pcsel-entropy-max
+        - OR participation_ratio <= --pcsel-pr-max
+
+   5) Block-bootstrap stability (block-resample with replacement)
+      Blocks are defined by --pcsel-block-col (e.g., Cruise, Month, YearMonth).
+      For R replicates:
+        - Fit PCA on bootstrap sample
+        - Align components to full PCA by cosine similarity of loadings
+        - Record abs(corr(loadings)) and abs(corr(scores)) per PC
+      Keep stability if:
+        - median abs corr(loadings) >= --pcsel-stability-min-load-corr
+        - AND median abs corr(scores) >= --pcsel-stability-min-score-corr
+
+   Final KEEP decision for each PC:
+     KEEP = keep_parallel
+            AND keep_coverage
+            AND (keep_coherence OR keep_entropy)
+            AND keep_stability
+
+Key outputs
 - run_config.json
 - qc_summary.json
 - missing_expected_columns.json
 
-Tables:
-- missingness_pre_drop.csv, missingness_post_drop.csv
+Tables (always)
+- missingness_pre_drop.csv
+- missingness_post_drop.csv
 - dropped_rows.csv
-- matrix_cleaned.csv, matrix_scaled.csv
-- impute_values.csv
-- (if depth anchoring) depth_anchors.csv, depth_anchor_mapping_summary.csv, depth_anchor_decisions.csv,
-  depth_anchor_decision_summary_by_block.csv
-- (if depth-aware impute) imputation_depth_group_audit.csv
-- pca_explained_variance.csv, pca_loadings.csv, eigengenes_scores.csv
+- matrix_cleaned.csv              (metadata + post-impute/post-clamp/(optional)post-log features)
+- matrix_scaled.csv               (metadata + scaled features)
+- impute_values.csv               (median/mean fill values, or per-feature means after imputation model)
+- pca_explained_variance.csv
+- pca_loadings.csv
+- eigenvectors_scores.csv
 
-Plots:
-- missingness_pre_drop.png, missingness_post_drop.png
-- scree.png, cumulative_variance.png, pc1_vs_pc2.png
-- top_loadings_PC{k}.png
+Tables (if depth anchoring enabled)
+- depth_anchors.csv
+- depth_anchor_mapping_summary.csv
+- depth_anchor_decisions.csv
+- depth_anchor_decision_summary_by_block.csv
+- depth_anchor_prototype_audit.csv
 
-PC selection (if enabled):
-- parallel_analysis.csv + parallel_analysis.png
+Plots (always)
+- missingness_pre_drop.png
+- missingness_post_drop.png
+- scree.png
+- cumulative_variance.png
+- pc1_vs_pc2.png
+- top_loadings_PC{k}.png          for k=1..min(5, n_components_fit)
+
+PC selection outputs (if enabled)
+- parallel_analysis.csv
+- parallel_analysis.png
 - feature_coverage.csv
 - feature_clusters.csv
 - pc_coverage_support.csv
 - pc_cluster_enrichment.csv
+- pc_loading_concentration.csv
 - pc_stability.csv
 - pc_keep_decision.csv
 - loadings_heatmap_by_feature_cluster.png
+
+Notes / invariants
+- Negative values are clamped to 0 twice:
+  (1) during depth-anchoring similarity calculations (if anchoring enabled; counted separately)
+  (2) after imputation (always; counted)
+- Depth anchoring never uses imputed values; it uses observed feature overlap only.
 """
 
 from __future__ import annotations
@@ -100,6 +178,7 @@ from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import BayesianRidge
 
+pd.set_option('future.no_silent_downcasting', True)
 
 # -----------------------------
 # Column configuration (YOUR DATA)
@@ -207,7 +286,7 @@ class RunConfig:
 
 
 def parse_args() -> RunConfig:
-    ap = argparse.ArgumentParser(description="Prep env params for PCA and extract eigengenes (+ optional PC selection).")
+    ap = argparse.ArgumentParser(description="Prep env params for PCA and extract eigenvectors (+ optional PC selection).")
     ap.add_argument("--input", required=True, help="Path to input table (CSV/TSV).")
     ap.add_argument("--outdir", required=True, help="Output directory.")
     ap.add_argument("--sep", default="\t", help="Delimiter (default: tab). Use ',' for CSV.")
@@ -995,7 +1074,7 @@ def plot_pc_scatter(scores_df: pd.DataFrame, outpath: str, time_col: str) -> Non
         plt.scatter(scores_df["PC1"], scores_df["PC2"])
     plt.xlabel("PC1")
     plt.ylabel("PC2")
-    plt.title("PC1 vs PC2 (eigengene space)")
+    plt.title("PC1 vs PC2 (eigenvectors space)")
     save_fig(outpath)
 
 
@@ -1609,11 +1688,11 @@ def main() -> None:
     )
     loadings.to_csv(os.path.join(tables_dir, "pca_loadings.csv"))
 
-    # Eigengenes (scores)
+    # eigenvectors (scores)
     scores = pca.transform(X_scaled)
     scores_df = pd.DataFrame(scores, columns=[f"PC{i}" for i in range(1, pca.n_components_ + 1)])
-    eigengenes = pd.concat([meta.reset_index(drop=True), scores_df], axis=1)
-    eigengenes.to_csv(os.path.join(tables_dir, "eigengenes_scores.csv"), index=False)
+    eigenvectors = pd.concat([meta.reset_index(drop=True), scores_df], axis=1)
+    eigenvectors.to_csv(os.path.join(tables_dir, "eigenvectors_scores.csv"), index=False)
 
     # QC summary
     qc = {
@@ -1649,7 +1728,7 @@ def main() -> None:
     # Plots
     plot_scree(pca, os.path.join(plots_dir, "scree.png"))
     plot_cumvar(pca, os.path.join(plots_dir, "cumulative_variance.png"))
-    plot_pc_scatter(eigengenes, os.path.join(plots_dir, "pc1_vs_pc2.png"), cfg.time_col)
+    plot_pc_scatter(eigenvectors, os.path.join(plots_dir, "pc1_vs_pc2.png"), cfg.time_col)
 
     for i in range(1, min(6, pca.n_components_ + 1)):
         pc = f"PC{i}"

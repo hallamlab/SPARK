@@ -1,35 +1,248 @@
 #!/usr/bin/env python3
+
 """
 env_compare_compartments.py
 
-PURPOSE
-- Compare data-driven GMM compartments vs contemporary O2 compartments
-- Produce publication-ready depth-profile plots + UMAP embedding plots
-- Compute defensible agreement + clustering-quality metrics
+Purpose
+-------
+Compare (1) data-driven GMM “environmental compartments” (from your final GMM step) against
+(2) contemporaneous oxygen-defined compartments (oxic/dysoxic/suboxic/anoxic) computed from the
+biogeochemical matrix, and generate:
 
-FIXES (already in your current version)
-- Guard against duplicate column headers (e.g., duplicate 'cruise_year_month_depth')
-- Use composite join keys by default: Cruise+Year+Month+Day+Depth
-  (prevents collisions when multiple casts exist in the same month)
+- Depth-profile plots for every biogeochemical feature and every selected PC:
+    • color by O2 compartment (fixed palette)
+    • color by GMM component (categorical)
+- UMAP embeddings in biogeochemical space with multiple views:
+    • color by O2 compartment
+    • color by GMM component
+    • color by depth
+    • bubble plots for each biogeochemical feature (size=value, fixed color per feature)
+- Agreement metrics between O2 compartments and GMM components:
+    • confusion matrices (raw + row-normalized + col-normalized)
+    • ARI (Adjusted Rand Index)
+    • NMI (Normalized Mutual Information)
+- Clustering-quality metrics in TWO spaces (scaled):
+    • PC space: silhouette / Calinski–Harabasz / Davies–Bouldin for O2 labels and for GMM labels
+    • Biochem space (complete rows only): silhouette / Calinski–Harabasz / Davies–Bouldin for O2 and for GMM
+- Additional diagnostics and sensitivity analyses (when the required columns exist):
+    • PC-space scaling audit after StandardScaler
+    • cruise-block bootstrap silhouettes (CI) for O2 and GMM labels
+    • within-cruise permutation test for GMM silhouette (null: labels shuffled within cruise)
+    • responsibility-weighted silhouette (uses max_prob as sample_weight)
+    • low-confidence sweeps vs max_prob threshold:
+        - silhouette vs threshold (GMM labels)
+        - ARI/NMI vs threshold (O2 vs GMM)
 
-NEW ADD-ON (#4)
-- Additional quality metrics in PC space and biochem space:
-    silhouette, Calinski-Harabasz, Davies-Bouldin
-- Biological inference helpers:
-    * Per-compartment medians in biochem + PC space (GMM and O2)
-    * Pairwise effect-size ranking of biochem drivers for GMM separation
-- Optional PCA-stage interpretation if you provide --pca-tables-dir:
-    * pc_top_loadings.csv + plots of top loadings per PC
-    * merge pc_loading_concentration.csv if available (entropy/effective features)
+Key design / “be careful” behaviors (implemented in code)
+---------------------------------------------------------
+1) Robust merging via derived join key (default is composite)
+   - The script supports two key modes:
+     A) key_mode="composite" (DEFAULT)
+        • Builds an internal merge key column named "__merge_key__" from:
+            Cruise, Year, Month, Day, Depth
+          using a configurable separator (default "|").
+        • This is the default because it avoids collisions when multiple casts exist in the same month.
+     B) key_mode="id"
+        • Uses an existing id column (default "cruise_year_month_depth") as the merge key.
+   - The derived key is constructed independently for each input table and used for left-merging.
 
-INPUTS
-- matrix_cleaned.csv (biochem + metadata; Oxygen already uM)
-- eigengenes_scores.csv (PC scores + metadata)
-- compartments_assignments_smoothed.csv (component/max_prob/entropy/resp_* + metadata)
+2) Guard against duplicate column headers in input files
+   - Each input is read with pandas, then any duplicated column labels are removed by keeping the
+     first instance only. This specifically protects against pathological CSVs where an ID column
+     appears twice (a known failure mode).
 
-OUTPUTS
-- outdir/tables/*.csv
-- outdir/plots/*.pdf/.svg/.png
+3) Strict separation of “spaces” used for different computations
+   - PC-space metrics are computed on:
+       X_pc_scaled = StandardScaler().fit_transform(PC matrix)
+     using only rows with complete values across the selected PC columns.
+   - Biochem-space metrics and UMAP are computed on:
+       X_bio_scaled = StandardScaler().fit_transform(biochem feature matrix)
+     using only rows that are complete across ALL biochem features (strict complete-case).
+   - These spaces are not mixed: UMAP is NOT run on PC space in this script; it is run on scaled
+     biochem space only.
+
+Inputs (required)
+-----------------
+1) --matrix-cleaned
+   Path to matrix_cleaned.csv (biochemical features + metadata)
+   Required columns (names configurable via CLI flags):
+     - Oxygen column (default: "Oxygen")
+     - Depth anchored column (default: "Depth_anchored")  [required; used for depth profiles + UMAP depth coloring]
+     - Depth column (default: "Depth")                    [used for composite key and metadata]
+     - Cruise column (default: "Cruise")                  [used for composite key and block analyses]
+     - Year, Month, Day                                   [used for composite key; must exist if key_mode=composite]
+     - Date column (default: "date") is parsed if present but not required to exist
+
+   Biochemical features are defined as:
+     all columns in matrix_cleaned EXCEPT:
+       - derived merge key "__merge_key__" (internal)
+       - metadata columns present among:
+           Cruise, Year, Month, Day, Depth, date, Depth_anchored
+       - the legacy id column (default "cruise_year_month_depth") if present
+
+2) --eigenvectors
+   Path to eigenvectors_scores.csv (environmental eigenvectors / PCs + metadata)
+   Requirements:
+     - Must contain PC columns named "PC1", "PC2", ... (unless you explicitly restrict --pc-cols)
+     - Must contain the columns needed to build the merge key under your chosen key_mode
+
+   PC column selection:
+     - If --pc-cols is provided, it is used verbatim (comma-separated list).
+     - Otherwise, all columns starting with "PC" are auto-detected and sorted numerically by the
+       integer suffix (PC1, PC2, ...).
+
+3) --assignments
+   Path to compartments_assignments_smoothed.csv (from final GMM step)
+   Requirements:
+     - Must contain a GMM component label column named "component" (used throughout the comparisons)
+     - Must contain the columns needed to build the merge key under your chosen key_mode
+     - Optional but strongly used if present:
+         • "max_prob" (enables weighted silhouette + low-confidence sweeps)
+
+All three inputs are merged into a master table (written to tables/merged_for_comparison.csv) by:
+  df_assign LEFT JOIN df_matrix on __merge_key__
+  then LEFT JOIN df_eig on __merge_key__
+This means:
+  - every assignment row is retained (unless it later fails complete-case filters for certain analyses),
+  - missing matrix/eigenvectors fields become NaN and may exclude rows from specific downstream steps.
+
+Oxygen compartments (computed here)
+-----------------------------------
+O2 compartments are computed from the Oxygen column (treated as µM; no unit conversion is performed here),
+using inclusive threshold intervals:
+
+- oxic    : Oxygen > o2_oxic_gt                       (default > 90)
+- dysoxic : o2_dysoxic_lo <= Oxygen <= o2_dysoxic_hi   (default 20..90 inclusive)
+- suboxic : o2_suboxic_lo <= Oxygen <  o2_suboxic_hi   (default 1..20, upper bound exclusive)
+- anoxic  : Oxygen < o2_suboxic_lo                    (default < 1)
+- "NA" is assigned when Oxygen cannot be coerced to numeric.
+
+Note: Because dysoxic is assigned after oxic, the oxic condition dominates for Oxygen > 90; remaining
+values in 20..90 become dysoxic, etc.
+
+Outputs
+-------
+Directory structure under --outdir:
+
+Top-level
+- run_config.json
+  JSON dump of:
+    • Config (all CLI arguments)
+    • umap_available flag (whether umap-learn imported successfully)
+
+tables/
+- merged_for_comparison.csv
+  The merged master table used for all analyses (assignments + matrix_cleaned + eigenvectors).
+
+- confusion_o2_vs_gmm_raw.csv
+- confusion_o2_vs_gmm_row_norm.csv
+- confusion_o2_vs_gmm_col_norm.csv
+
+- comparison_stats.csv
+  Contains:
+    n_total, n_pc_complete, n_pcs_used,
+    ARI_o2_vs_gmm, NMI_o2_vs_gmm,
+    silhouette_PCspace_o2, silhouette_PCspace_gmm
+
+- quality_metrics_pcspace.csv
+  Contains (PC space, scaled, complete-PC rows only):
+    silhouette_o2, silhouette_gmm,
+    calinski_harabasz_o2, calinski_harabasz_gmm,
+    davies_bouldin_o2, davies_bouldin_gmm,
+    plus counts (n_used, k_labels_o2, k_labels_gmm)
+
+- pc_space_scaling_audit.csv                    (only if >=10 complete-PC rows)
+  Per-PC mean and std after StandardScaler.
+
+- pc1_mean_by_cruise.csv                        (only if Cruise exists and at least PC1 exists)
+  Mean of PC1_scaled by cruise; a simple cruise-offset diagnostic.
+
+- silhouette_block_bootstrap_by_cruise.csv      (only if Cruise exists and >=10 complete-PC rows)
+  Block bootstrap (resample cruises with replacement) silhouette mean and 95% CI
+  for O2 labels and for GMM labels in PC space.
+
+- within_cruise_permutation_test_gmm.csv        (only if Cruise exists and >=10 complete-PC rows)
+  Within-cruise permutation test for GMM silhouette in PC space:
+    observed silhouette, p_value, n_null
+
+- responsibility_weighted_silhouette.csv        (only if "max_prob" exists and >=10 complete-PC rows)
+  Responsibility-weighted silhouette for GMM labels in PC space using max_prob as sample_weight.
+
+- low_confidence_silhouette_sweep_pcspace.csv   (only if "max_prob" exists and >=10 complete-PC rows)
+  Silhouette vs max_prob threshold for GMM labels in PC space.
+
+- low_confidence_agreement_sweep.csv            (only if "max_prob" exists and >=10 complete-PC rows)
+  ARI and NMI vs max_prob threshold (O2 vs GMM) on retained high-confidence rows.
+
+- quality_metrics_biochem_space.csv
+  Clustering-quality metrics in biochem space (scaled) using STRICT complete-case rows across ALL
+  biochem features:
+    silhouette / Calinski–Harabasz / Davies–Bouldin for O2 and for GMM.
+
+- compartment_medians_gmm.csv
+- compartment_medians_o2.csv
+  Per-group medians of (all biochem features + all PCs used) and group sample sizes.
+
+- gmm_pairwise_feature_effect_sizes.csv
+  Pairwise, biochem-only effect sizes between GMM components:
+    effect_size_d = (median_i - median_j) / pooled_sd
+  (medians used for robustness; pooled SD computed from sample variances)
+
+UMAP-related tables (only if umap-learn is available AND >=10 complete biochem rows)
+- umap_embedding.csv
+  Contains: __merge_key__, UMAP1, UMAP2, o2_compartment, component, Depth_anchored
+
+UMAP skip markers
+- UMAP_NOT_AVAILABLE.txt                         (if umap-learn not importable)
+- UMAP_SKIPPED_NOT_ENOUGH_COMPLETE_ROWS.txt      (if insufficient complete biochem rows)
+
+Optional PCA-stage interpretation outputs (#4; only if pca tables are provided and found)
+---------------------------------------------------------------------------------------
+These are enabled when either:
+  - --pca-tables-dir points to a directory containing pca_loadings.csv and/or pc_loading_concentration.csv, OR
+  - --pca-loadings / --pc-loading-concentration are provided explicitly.
+
+tables/
+- pc_top_loadings.csv
+  Long-form table of top-N absolute loadings per PC (restricted to PCs present in eigenvectors).
+
+- pc_loading_concentration_merged.csv
+  Best-effort subset of columns from pc_loading_concentration.csv (PC, entropy_norm,
+  effective_features, participation_ratio) restricted to PCs present in eigenvectors.
+
+plots/
+- C1_top_loadings_PCk.{pdf,svg,png}
+  Horizontal bar plots of signed loadings for the top-N features for each PC used.
+
+Plots written (always, for complete-enough features)
+----------------------------------------------------
+All plots are saved in one or more formats depending on flags:
+  default: pdf + svg + png (png dpi default 300)
+  disable with: --no-pdf / --no-svg / --no-png
+
+A) Depth profiles for each biochem feature (if at least 3 numeric points)
+- A1_depth_vs_{feature}__color_o2
+- A2_depth_vs_{feature}__color_gmm
+
+A) Depth profiles for each PC (if at least 3 numeric points)
+- A3_depth_vs_{PC}__color_o2
+- A4_depth_vs_{PC}__color_gmm
+
+B) UMAP plots (only if UMAP runs)
+- B1_umap_color_o2
+- B2_umap_color_gmm
+- B3_umap_color_depth
+- B4_umap_bubble_{feature}   (one per biochem feature; fixed color, size encodes value)
+
+Notes / invariants (things this script does NOT do)
+---------------------------------------------------
+- Does not convert oxygen units; assumes the matrix_cleaned Oxygen column is already in µM.
+- Does not try to reconcile differing row sets across files beyond the merge key; missing data simply
+  propagates and can exclude rows from some analyses.
+- Does not compute UMAP on PC space; UMAP here is biochem-space only (complete-case).
+- Does not enforce uniqueness of the derived key; it relies on the composite key default to prevent
+  collisions, but will merge in a pandas-default manner if duplicates exist.
+
 """
 
 from __future__ import annotations
@@ -52,6 +265,7 @@ from sklearn.metrics import (
     calinski_harabasz_score,
     davies_bouldin_score,
 )
+pd.set_option('future.no_silent_downcasting', True)
 
 try:
     import umap  # type: ignore
@@ -97,7 +311,7 @@ def depth_cmap():
 @dataclass
 class Config:
     matrix_cleaned: str
-    eigengenes: str
+    eigenvectors: str
     assignments: str
     outdir: str
     sep_matrix: str
@@ -159,7 +373,7 @@ def parse_args() -> Config:
     ap = argparse.ArgumentParser(description="Compare GMM compartments vs O2 compartments; depth profiles + UMAP + stats.")
 
     ap.add_argument("--matrix-cleaned", required=True, help="Path to matrix_cleaned.csv")
-    ap.add_argument("--eigengenes", required=True, help="Path to eigengenes_scores.csv")
+    ap.add_argument("--eigenvectors", required=True, help="Path to eigenvectors_scores.csv")
     ap.add_argument("--assignments", required=True, help="Path to compartments_assignments_smoothed.csv")
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--sep-matrix", default=",")
@@ -244,7 +458,7 @@ def parse_args() -> Config:
 
     return Config(
         matrix_cleaned=ns.matrix_cleaned,
-        eigengenes=ns.eigengenes,
+        eigenvectors=ns.eigenvectors,
         assignments=ns.assignments,
         outdir=ns.outdir,
         sep_matrix=ns.sep_matrix,
@@ -578,6 +792,192 @@ def confusion_tables(y_true: pd.Series, y_pred: pd.Series) -> Tuple[pd.DataFrame
 
 
 # ----------------------------
+# NEW (#5): Cruise-block bootstrap / low-confidence / weighted silhouette / permutation / PC audit
+# ----------------------------
+
+def block_bootstrap_silhouette(
+    X: np.ndarray,
+    labels: pd.Series,
+    blocks: pd.Series,
+    n_boot: int = 1000,
+    random_state: int = 42,
+) -> Dict[str, float]:
+    """
+    Block bootstrap silhouette by resampling blocks (e.g., Cruise).
+    Returns mean, CI_low, CI_high.
+    """
+    rng = np.random.default_rng(random_state)
+    lab = labels.astype("object").fillna("NA").astype(str).to_numpy()
+    blk = blocks.astype("object").fillna("NA").astype(str).to_numpy()
+
+    uniq_blocks = np.unique(blk)
+    scores: List[float] = []
+
+    for _ in range(int(n_boot)):
+        sampled_blocks = rng.choice(uniq_blocks, size=len(uniq_blocks), replace=True)
+        mask = np.isin(blk, sampled_blocks)
+        if np.unique(lab[mask]).size < 2 or mask.sum() < 10:
+            continue
+        try:
+            s = float(silhouette_score(X[mask], lab[mask], metric="euclidean"))
+            scores.append(s)
+        except Exception:
+            pass
+
+    if len(scores) == 0:
+        return {"mean": np.nan, "ci_low": np.nan, "ci_high": np.nan}
+
+    return {
+        "mean": float(np.mean(scores)),
+        "ci_low": float(np.quantile(scores, 0.025)),
+        "ci_high": float(np.quantile(scores, 0.975)),
+    }
+
+
+def sweep_low_confidence_silhouette(
+    X: np.ndarray,
+    labels: pd.Series,
+    max_prob: pd.Series,
+    thresholds: List[float],
+) -> pd.DataFrame:
+    rows = []
+    lab = labels.astype("object").fillna("NA").astype(str)
+    mp = pd.to_numeric(max_prob, errors="coerce")
+    for t in thresholds:
+        keep = mp >= t
+        if int(keep.sum()) < 10:
+            continue
+        if lab.loc[keep].nunique(dropna=False) < 2:
+            continue
+        try:
+            s = float(silhouette_score(X[keep.to_numpy()], lab.loc[keep].to_numpy(), metric="euclidean"))
+        except Exception:
+            s = np.nan
+        rows.append({
+            "max_prob_threshold": float(t),
+            "n_retained": int(keep.sum()),
+            "n_labels": int(lab.loc[keep].nunique(dropna=False)),
+            "silhouette": float(s),
+        })
+    return pd.DataFrame(rows)
+
+
+def sweep_low_confidence_agreement(
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    max_prob: pd.Series,
+    thresholds: List[float],
+) -> pd.DataFrame:
+    rows = []
+    yt = y_true.astype("object").fillna("NA").astype(str)
+    yp = y_pred.astype("object").fillna("NA").astype(str)
+    mp = pd.to_numeric(max_prob, errors="coerce")
+    for t in thresholds:
+        keep = mp >= t
+        if int(keep.sum()) < 10:
+            continue
+        ari = float(adjusted_rand_score(yt.loc[keep], yp.loc[keep]))
+        nmi = float(normalized_mutual_info_score(yt.loc[keep], yp.loc[keep]))
+        rows.append({
+            "max_prob_threshold": float(t),
+            "n_retained": int(keep.sum()),
+            "ARI_o2_vs_gmm": ari,
+            "NMI_o2_vs_gmm": nmi,
+        })
+    return pd.DataFrame(rows)
+
+
+def responsibility_weighted_silhouette(X: np.ndarray, labels: pd.Series, weights: pd.Series) -> float:
+    """
+    Weighted silhouette for GMM labels using per-sample weights (e.g., max_prob).
+
+    IMPORTANT: scikit-learn's silhouette_score forwards **kwds to the pairwise distance
+    function for some metrics (including 'euclidean'), which can break when sample_weight
+    is present. To be robust across sklearn versions, we compute distances explicitly
+    and use metric='precomputed'.
+    """
+    from sklearn.metrics import silhouette_score
+    from sklearn.metrics import pairwise_distances
+
+    lab = labels.astype(str).fillna("NA").to_numpy()
+    if len(set(lab)) < 2:
+        return np.nan
+
+    w = pd.to_numeric(weights, errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(w).any():
+        return np.nan
+    w = np.where(np.isfinite(w), w, 0.0)
+    if np.all(w <= 0):
+        return np.nan
+
+    # Precompute Euclidean distances to avoid passing sample_weight into distance functions
+    D = pairwise_distances(X, metric="euclidean")
+
+    try:
+        return float(silhouette_score(D, lab, metric="precomputed", sample_weight=w))
+    except Exception:
+        return np.nan
+
+
+def within_block_permutation_test(
+    X: np.ndarray,
+    labels: pd.Series,
+    blocks: pd.Series,
+    n_perm: int = 1000,
+    random_state: int = 42,
+) -> Dict[str, float]:
+    """
+    Permute labels ONLY within each block (e.g., Cruise) and compare silhouette.
+    p-value is one-sided: P(null >= observed)
+    """
+    rng = np.random.default_rng(random_state)
+    lab = labels.astype("object").fillna("NA").astype(str).to_numpy()
+    blk = blocks.astype("object").fillna("NA").astype(str).to_numpy()
+
+    if np.unique(lab).size < 2 or X.shape[0] < 10:
+        return {"observed": np.nan, "p_value": np.nan, "n_null": 0}
+
+    try:
+        obs = float(silhouette_score(X, lab, metric="euclidean"))
+    except Exception:
+        return {"observed": np.nan, "p_value": np.nan, "n_null": 0}
+
+    null_scores: List[float] = []
+    uniq_blocks = np.unique(blk)
+
+    for _ in range(int(n_perm)):
+        perm = lab.copy()
+        for b in uniq_blocks:
+            idx = np.where(blk == b)[0]
+            if idx.size >= 2:
+                rng.shuffle(perm[idx])
+        try:
+            null_scores.append(float(silhouette_score(X, perm, metric="euclidean")))
+        except Exception:
+            pass
+
+    if len(null_scores) == 0:
+        return {"observed": obs, "p_value": np.nan, "n_null": 0}
+
+    null_arr = np.array(null_scores, dtype=float)
+    p = float(np.mean(null_arr >= obs))
+    return {"observed": obs, "p_value": p, "n_null": int(null_arr.size)}
+
+
+def pc_space_audit(X_scaled: np.ndarray, pc_cols: List[str]) -> pd.DataFrame:
+    """
+    Quick scaling audit: means and stds of each PC after StandardScaler.
+    """
+    means = X_scaled.mean(axis=0)
+    stds = X_scaled.std(axis=0, ddof=0)
+    return pd.DataFrame({
+        "PC": pc_cols,
+        "mean_scaled": np.round(means, 8),
+        "std_scaled": np.round(stds, 8),
+    })
+
+
+# ----------------------------
 # #4 Add-ons: interpretation + effect sizes
 # ----------------------------
 
@@ -693,7 +1093,7 @@ def main() -> None:
 
     # Load (with dedup col guard)
     df_matrix = read_table_dedup_cols(cfg.matrix_cleaned, cfg.sep_matrix)
-    df_eig = read_table_dedup_cols(cfg.eigengenes, cfg.sep_eig)
+    df_eig = read_table_dedup_cols(cfg.eigenvectors, cfg.sep_eig)
     df_assign = read_table_dedup_cols(cfg.assignments, cfg.sep_assign)
 
     # Datetimes
@@ -721,7 +1121,7 @@ def main() -> None:
         pc_cols = sorted(pc_cols, key=_pc_key)
 
     if len(pc_cols) == 0:
-        raise ValueError("No PC columns found in eigengenes (expected PC1, PC2, ...)")
+        raise ValueError("No PC columns found in eigenvectors (expected PC1, PC2, ...)")
 
     # Metadata columns expected in matrix
     meta_cols = [cfg.cruise_col, "Year", "Month", "Day", cfg.depth_col, cfg.date_col, cfg.depth_anchored_col]
@@ -835,6 +1235,7 @@ def main() -> None:
         db_o2_pc = safe_davies_bouldin(X_pc_scaled, yt.loc[good_pc])
         db_gmm_pc = safe_davies_bouldin(X_pc_scaled, yp.loc[good_pc])
     else:
+        X_pc_scaled = np.empty((0, len(pc_cols)), dtype=float)
         sil_o2_pc = float("nan")
         sil_gmm_pc = float("nan")
         ch_o2_pc = float("nan")
@@ -865,6 +1266,106 @@ def main() -> None:
         "davies_bouldin_o2": db_o2_pc,
         "davies_bouldin_gmm": db_gmm_pc,
     }]).to_csv(os.path.join(tables_dir, "quality_metrics_pcspace.csv"), index=False)
+
+    # ----------------------------
+    # NEW (#5): PC-space audit + bootstrap/permutation + weighted silhouette + low-confidence sweep
+    # ----------------------------
+    if X_pc_good.shape[0] >= 10:
+        # audit scaling/standardization
+        pc_audit_df = pc_space_audit(X_pc_scaled, pc_cols)
+        pc_audit_df.to_csv(os.path.join(tables_dir, "pc_space_scaling_audit.csv"), index=False)
+
+        # cruise structure helper table (simple mean PC1 per cruise, helps spot cruise offsets)
+        if cfg.cruise_col in m.columns and X_pc_scaled.shape[1] >= 1:
+            pd.DataFrame({
+                cfg.cruise_col: m.loc[good_pc, cfg.cruise_col].astype("object").fillna("NA").values,
+                "PC1_scaled": X_pc_scaled[:, 0],
+            }).groupby(cfg.cruise_col, dropna=False).mean(numeric_only=True).to_csv(
+                os.path.join(tables_dir, "pc1_mean_by_cruise.csv")
+            )
+
+        # block bootstrap silhouettes by Cruise
+        if cfg.cruise_col in m.columns:
+            boot_o2 = block_bootstrap_silhouette(
+                X_pc_scaled,
+                yt.loc[good_pc],
+                m.loc[good_pc, cfg.cruise_col],
+            )
+            boot_gmm = block_bootstrap_silhouette(
+                X_pc_scaled,
+                yp.loc[good_pc],
+                m.loc[good_pc, cfg.cruise_col],
+            )
+            pd.DataFrame([{
+                "label": "O2",
+                "silhouette_mean": boot_o2["mean"],
+                "silhouette_ci_low": boot_o2["ci_low"],
+                "silhouette_ci_high": boot_o2["ci_high"],
+            }, {
+                "label": "GMM",
+                "silhouette_mean": boot_gmm["mean"],
+                "silhouette_ci_low": boot_gmm["ci_low"],
+                "silhouette_ci_high": boot_gmm["ci_high"],
+            }]).to_csv(
+                os.path.join(tables_dir, "silhouette_block_bootstrap_by_cruise.csv"),
+                index=False,
+            )
+
+            # within-cruise permutation test (GMM labels)
+            perm_gmm = within_block_permutation_test(
+                X_pc_scaled,
+                yp.loc[good_pc],
+                m.loc[good_pc, cfg.cruise_col],
+            )
+            pd.DataFrame([{
+                "label": "GMM",
+                "space": "PCspace_scaled",
+                **perm_gmm,
+            }]).to_csv(
+                os.path.join(tables_dir, "within_cruise_permutation_test_gmm.csv"),
+                index=False,
+            )
+
+        # responsibility-weighted silhouette (uses max_prob as weight if present)
+        sil_gmm_weighted = np.nan
+        if "max_prob" in m.columns:
+            sil_gmm_weighted = responsibility_weighted_silhouette(
+                X_pc_scaled,
+                yp.loc[good_pc],
+                m.loc[good_pc, "max_prob"],
+            )
+        pd.DataFrame([{
+            "space": "PCspace_scaled",
+            "silhouette_gmm_weighted": sil_gmm_weighted,
+        }]).to_csv(
+            os.path.join(tables_dir, "responsibility_weighted_silhouette.csv"),
+            index=False,
+        )
+
+        # low-confidence sweep: silhouette vs threshold (+ agreement vs O2)
+        if "max_prob" in m.columns:
+            thresholds = np.linspace(0.0, 0.95, 20).tolist()
+            sweep_sil = sweep_low_confidence_silhouette(
+                X_pc_scaled,
+                yp.loc[good_pc],
+                m.loc[good_pc, "max_prob"],
+                thresholds,
+            )
+            sweep_sil.to_csv(
+                os.path.join(tables_dir, "low_confidence_silhouette_sweep_pcspace.csv"),
+                index=False,
+            )
+
+            sweep_agree = sweep_low_confidence_agreement(
+                yt.loc[good_pc],
+                yp.loc[good_pc],
+                m.loc[good_pc, "max_prob"],
+                thresholds,
+            )
+            sweep_agree.to_csv(
+                os.path.join(tables_dir, "low_confidence_agreement_sweep.csv"),
+                index=False,
+            )
 
     # ----------------------------
     # NEW (#4): biochem-space quality metrics + medians + effect sizes
@@ -987,7 +1488,7 @@ def main() -> None:
     if "pca_loadings" in pca_tables:
         load_long = pca_loadings_to_long(pca_tables["pca_loadings"])
 
-        # Keep only PCs we actually used in eigengenes (intersection)
+        # Keep only PCs we actually used in eigenvectors (intersection)
         pcs_present = sorted(set(load_long["PC"].unique()).intersection(set(pc_cols)), key=lambda x: int(str(x).replace("PC", "")))
         top_rows = []
         for pc in pcs_present:
@@ -1028,6 +1529,8 @@ def main() -> None:
     print(f"     Agreement: ARI={ari:.3f}, NMI={nmi:.3f}")
     print(f"     Quality (PCspace): silhouette O2={sil_o2_pc:.3f}, GMM={sil_gmm_pc:.3f}")
     print(f"     Quality (Biochem): silhouette O2={sil_o2_bio:.3f}, GMM={sil_gmm_bio:.3f}")
+    if "max_prob" in m.columns and X_pc_good.shape[0] >= 10:
+        print(f"     Quality (PCspace): weighted silhouette GMM={float(pd.read_csv(os.path.join(tables_dir, 'responsibility_weighted_silhouette.csv'))['silhouette_gmm_weighted'].iloc[0]):.3f}")
     if cfg.pca_tables_dir:
         print(f"     PCA tables dir: {cfg.pca_tables_dir}")
         if cfg.pca_loadings_path and os.path.exists(cfg.pca_loadings_path):

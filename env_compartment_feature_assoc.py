@@ -1,48 +1,189 @@
 #!/usr/bin/env python3
+
 """
 SPARK/env_compartment_feature_assoc.py
 
 Purpose
 -------
+Quantify and visualize associations between final GMM-defined environmental compartments and
+individual biogeochemical features in a statistically conservative, reviewer-defensible manner.
+
 Given:
-  1) matrix_cleaned.csv (biochem + metadata per sample)
-  2) compartments_assignments_smoothed.csv (GMM assignments + responsibilities)
+  1) matrix_cleaned.csv
+     (biogeochemical features + metadata per sample; post-QC, post-imputation)
+  2) compartments_assignments_smoothed.csv
+     (final GMM hard assignments + soft responsibilities resp_0..resp_{K-1})
 
-Compute compartment↔feature associations in a reviewer-defensible way:
-  - Effect size (Hedges g) per compartment vs rest
-  - Median/mean shifts + percent shift
-  - Responsibility association: slope of resp_k ~ z(feature)
-  - Cruise-blocked bootstrap CIs for all metrics (blocking unit = Cruise)
-  - Optional depth-adjusted variant (residualize features vs Depth_anchored)
+this script computes, for each compartment × feature pair:
 
-Outputs (in --outdir):
-  tables/
-    associations_raw.csv
-    associations_depth_adjusted.csv
-    associations_raw_toprank.csv
-    associations_depth_adjusted_toprank.csv
-    o2_compartment_confusion_vs_gmm.csv
-    run_config.json
-  plots/
-    lollipop_comp{k}_raw.(png|pdf|svg)
-    lollipop_comp{k}_depthadj.(png|pdf|svg)
-    heatmap_effectsize_raw.(png|pdf|svg)
-    heatmap_effectsize_depthadj.(png|pdf|svg)
+  - Robust effect sizes comparing the compartment to all other samples
+  - Direction and magnitude of feature shifts (median-, mean-, and percent-based)
+  - Continuous responsibility–feature associations
+  - Cruise-blocked bootstrap confidence intervals
+  - Optional depth-adjusted variants that remove linear depth trends
 
-Expected columns
+The goal is not hypothesis testing via p-values, but **effect-size–first characterization**
+with uncertainty quantified by block resampling.
+
+Conceptual framing
+------------------
+Compartments are treated as *environmental states* inferred from multivariate structure.
+Feature associations answer two complementary questions:
+
+1) Discrete contrast:
+   “How different is feature X inside compartment k compared to the rest of the dataset?”
+
+2) Continuous gradient:
+   “Does increasing responsibility for compartment k covary with feature X?”
+
+Both views are reported to avoid over-reliance on hard cluster boundaries.
+
+Inputs
+------
+1) --matrix-cleaned
+   Path to matrix_cleaned.csv.
+
+   Required columns (names configurable via CLI):
+     - Sample ID (default: cruise_year_month_depth)
+     - Cruise identifier (default: Cruise)
+     - Depth (default: Depth)
+     - Anchored depth (default: Depth_anchored)
+     - Oxygen (default: Oxygen; used only for O2 compartment cross-tab)
+     - Optional date column (default: date)
+
+   Feature columns:
+     - If --feature-cols is provided: those columns are used verbatim.
+     - Otherwise: all numeric columns in matrix_cleaned excluding:
+         • metadata (ID, cruise, depth, date, etc.)
+         • any PC columns
+         • any resp_* columns
+         • GMM diagnostic columns if present
+
+2) --assignments
+   Path to compartments_assignments_smoothed.csv.
+
+   Required columns:
+     - Sample ID (same as matrix_cleaned)
+     - Cruise identifier
+     - component (hard GMM label)
+     - resp_0 .. resp_{K-1} (soft responsibilities)
+
+   Optional but used if present:
+     - max_prob, entropy_norm, knn_mean_dist (not required for associations themselves)
+
+Duplicate column labels are explicitly handled by keeping the first occurrence only.
+
+Merging behavior
 ----------------
-Assignments CSV (example):
-  cruise_year_month_depth, Cruise, Year, Month, Day, Depth, date, Depth_anchored,
-  component, max_prob, entropy_norm, knn_mean_dist, resp_0..resp_{K-1}
+Assignments are treated as authoritative for sample inclusion.
 
-Matrix CSV (example):
-  cruise_year_month_depth, Cruise, Year, Month, Day, Depth, date, Depth_anchored,
-  Oxygen, Nitrogen Oxides, ...
+The two tables are merged as:
+  assignments LEFT JOIN matrix_cleaned on id_col
 
-Notes
------
-- Handles duplicate columns by keeping the first occurrence (prevents merge errors).
-- Uses matplotlib only.
+This ensures:
+  - All GMM-labeled samples are retained
+  - Missing feature values propagate as NaN and are handled feature-wise
+
+No assumptions are made about row order or completeness beyond the merge key.
+
+Oxygen compartments (auxiliary)
+-------------------------------
+For contextual comparison only, oxygen-defined compartments are computed from the Oxygen column
+(assumed to be in µM, with no unit conversion):
+
+  - oxic    : O2 > o2_oxic_gt
+  - dysoxic : o2_dysoxic_lo ≤ O2 ≤ o2_dysoxic_hi
+  - suboxic : o2_suboxic_lo ≤ O2 <  o2_suboxic_hi
+  - anoxic  : O2 < o2_anoxic_lt
+  - NA      : Oxygen missing or non-numeric
+
+A simple cross-tab of O2 compartment vs GMM component is written for reference only; it is not
+used in the association statistics.
+
+Association metrics (per component × feature)
+----------------------------------------------
+Let “in” denote samples assigned to component k, and “out” all other samples.
+
+Computed quantities:
+
+1) Location shifts
+   - mean_in, mean_out
+   - median_in, median_out
+   - median_shift = median_in − median_out
+   - percent_shift_vs_out = (median_in − median_out) / |median_out|
+
+2) Effect size (primary)
+   - Hedges’ g (bias-corrected standardized mean difference)
+   - Computed on raw feature values
+   - Returned as NaN when variance or sample size is insufficient
+
+3) Responsibility association (continuous)
+   - Slope of: resp_k ~ z(feature)
+   - Equivalent to cov(z(feature), resp_k) / var(z(feature))
+   - Interpretable as change in responsibility per 1 SD increase in the feature
+
+All metrics are computed feature-wise with NaNs handled explicitly.
+
+Cruise-blocked bootstrap (uncertainty)
+--------------------------------------
+To account for non-independence of samples within cruises, uncertainty is quantified using a
+blocked bootstrap with Cruise as the resampling unit:
+
+  - Cruises are sampled with replacement
+  - All samples from selected cruises are included in each bootstrap replicate
+  - For each replicate:
+      • Hedges’ g
+      • responsibility–feature slope
+    are recomputed
+
+Reported uncertainty:
+  - 2.5% and 97.5% percentile confidence intervals for each metric
+
+Bootstrap size is controlled by --bootstrap-B (default 500).
+
+Depth-adjusted variant (optional)
+---------------------------------
+If --depth-adjust is set:
+
+  - Each feature is residualized against anchored depth using a simple linear model:
+        feature_resid = feature − (a + b·Depth_anchored)
+  - Residualization is performed using only finite (feature, depth) pairs
+  - Features with <20 valid points return NaN residuals
+
+All association metrics and bootstraps are recomputed on the residualized feature matrix and
+written as a separate result set tagged “depth_adjusted”.
+
+Outputs
+-------
+Directory structure under --outdir:
+
+tables/
+  - associations_raw.csv
+  - associations_depth_adjusted.csv              (if enabled)
+  - associations_raw_toprank.csv
+  - associations_depth_adjusted_toprank.csv      (if enabled)
+  - o2_compartment_confusion_vs_gmm.csv
+  - run_config.json
+
+plots/
+  - lollipop_comp{k}_raw.(png|pdf|svg)
+  - lollipop_comp{k}_depth_adjusted.(png|pdf|svg)
+  - heatmap_effectsize_raw.(png|pdf|svg)
+  - heatmap_effectsize_depth_adjusted.(png|pdf|svg)
+
+Plot semantics:
+  - Lollipop plots show Hedges’ g with cruise-blocked CIs for the strongest positive and negative
+    features per compartment.
+  - Heatmaps show Hedges’ g across compartments for the globally strongest features.
+
+Operational notes / invariants
+------------------------------
+- No p-values are computed or reported.
+- All uncertainty reflects cruise-level resampling, not IID assumptions.
+- Hard labels (component) and soft responsibilities (resp_k) are both used, but never conflated.
+- Depth adjustment is strictly linear and optional; raw associations are always preserved.
+- The script makes no assumptions about feature units or scaling beyond what is present in
+  matrix_cleaned.csv.
 """
 
 from __future__ import annotations

@@ -1,30 +1,169 @@
 #!/usr/bin/env python3
+
 """
 env_within_gmm_hdbscan.py
 
-HDBSCAN-within-GMM subclustering in PC space.
+Purpose
+-------
+Run HDBSCAN *within each* previously-defined GMM “environmental compartment” (component) in the same
+environmental PC space, to detect secondary structure (submodes) or isolate rare/episodic patterns that
+the top-level GMM may have merged.
 
-Inputs (from your pipeline):
-1) eigengenes_scores.csv (from env_eigengenes.py)
-   Required cols: cruise_year_month_depth, PC1..PC*
-2) compartments_assignments_smoothed.csv (from env_compartments_gmm.py)
-   Required cols: cruise_year_month_depth, component (and optional max_prob, entropy_norm, resp_*)
+This script is explicitly a *second-stage* / refinement step:
+- It does NOT replace the upstream GMM compartments.
+- It produces subcluster labels (and noise) scoped within each GMM component.
 
-What it does:
-- Merge eigengenes PC coordinates with GMM assignments on cruise_year_month_depth.
-- For each GMM component, run HDBSCAN in PC space to find subclusters (or noise).
-- Saves:
-  - within_gmm_hdbscan_assignments.csv (per-sample: component + subcluster labels)
-  - within_gmm_hdbscan_summary.csv (per component: counts, noise frac, #subclusters, etc.)
-  - Per-component scatter plots (PC1 vs PC2) colored by subcluster
+Inputs (from the pipeline)
+--------------------------
+1) --eigenvectors
+   Path to eigenvectors_scores.csv (from eigenvectors.py; contains PC columns and sample IDs)
+   - Must include a sample ID column (default: cruise_year_month_depth)
+   - Must include PC columns (PC1..PCN or other prefix via --pc-prefix)
 
-Notes:
-- This is NOT a replacement for GMM.
-- It is intended to detect secondary structure (episodic/rare submodes) *within* each GMM component.
+2) --assignments
+   Path to compartments_assignments_smoothed.csv (from your final GMM step; contains component labels)
+   - Must include the same sample ID column used for merging
+   - Must include the GMM component label column (default: component)
+   - Optionally includes max_prob (required only if --high-conf-only is used)
 
-Dependencies:
-- pandas, numpy, matplotlib, scikit-learn
-- hdbscan  (pip/conda install: hdbscan)
+Core workflow
+-------------
+1) Load both tables (CSV/TSV controlled by --sep).
+
+2) (Optional safety) Validate uniqueness of the merge key (--id-col) in BOTH tables
+   - If --strict-unique-ids is set: error out if id_col is not unique in either table.
+   - Otherwise: warn and continue (merge could duplicate rows).
+
+3) Choose PC columns to use for HDBSCAN
+   A) Explicit list: --pc-cols "PC1,PC2,PC3"
+      - Missing requested PCs are ignored with a warning.
+   B) Inferred list (default):
+      - Uses --pc-prefix + integer range [--pc-min, --pc-max]
+      - Includes only columns that actually exist in eigenvectors table
+
+   If no PC columns are found, the script errors with guidance to use --pc-cols or adjust prefix/range.
+
+4) Coerce selected PC columns to numeric (errors="coerce") in the eigenvectors table.
+
+5) Merge assignments + PC coordinates
+   - Merge key: --id-col
+   - Merge direction: keep ALL assignment rows (left join of assignments onto PCs)
+   - If --strict-unique-ids is set, merge uses validate="one_to_one" to hard-fail on duplication.
+
+6) Drop rows missing any selected PC coordinates
+   - Rows are removed if ANY of the selected PC columns are NaN after merge/coercion.
+   - A warning is printed with the number dropped.
+
+7) Optional: “high confidence only” filter for fitting subclusters
+   Enabled by --high-conf-only:
+   - Requires 'max_prob' column in the assignments table.
+   - Only rows with max_prob >= --high-conf-maxprob (default 0.80) are used to *fit* HDBSCAN.
+   - Rows excluded by this filter remain in output, but will have default subcluster labels:
+       subcluster = -1
+       subcluster_in_component = -1
+       subcluster_prob = NaN
+
+Per-component HDBSCAN (main loop)
+---------------------------------
+For each unique value of --component-col in the merged table:
+
+1) Define the rows eligible for fitting (respecting --high-conf-only if set).
+
+2) Skip small components:
+   - If n_used_for_hdbscan < --min-rows-per-component (default 100), HDBSCAN is NOT run.
+   - The component is recorded as skipped in the summary table, with a skip reason.
+
+3) Construct the PC matrix X from selected PC columns.
+
+4) Optional standardization (within this component only)
+   If --standardize-pc-space:
+   - Fit a StandardScaler on X for this component
+   - Transform X and run HDBSCAN in the standardized space
+
+5) Fit HDBSCAN with:
+   - min_cluster_size = --hdbscan-min-cluster-size (default 50)
+   - min_samples      = --hdbscan-min-samples (default None -> library default)
+   - metric           = --hdbscan-metric (default "manhattan")
+   - cluster_selection_method = --hdbscan-cluster-selection-method (default "eom")
+   - allow_single_cluster     = --hdbscan-allow-single-cluster (default False)
+   - prediction_data=True to expose probabilities_ (membership strength)
+
+6) Assign labels for the fitted subset:
+   - HDBSCAN within-component labels: subcluster_in_component
+       * -1 = noise
+       * 0..(n_subclusters-1) = discovered subclusters
+   - “Global” subcluster IDs across ALL components: subcluster
+       * Each within-component cluster ID is remapped to a unique integer across the whole dataset.
+       * Noise remains -1.
+
+7) Membership strength / probability:
+   - subcluster_prob is populated from clusterer.probabilities_ for the fitted subset only.
+   - Noise points typically have low probability; no additional transformation is applied.
+
+Plots
+-----
+If both PC1 and PC2 are among the selected PC columns, the script writes per-component scatter plots:
+- plots/within_gmm_component_{component}_PC1_PC2_subclusters.png
+  - Uses only the rows included in the HDBSCAN fit for that component.
+  - Colors/legend separate noise (-1) from each discovered subcluster label.
+
+Dependency behavior
+-------------------
+- Requires the `hdbscan` Python package.
+- If `hdbscan` fails to import, the script raises a RuntimeError with conda/pip install commands.
+
+Outputs
+-------
+Directory layout under --outdir:
+
+Top-level
+- within_gmm_hdbscan_run_config.json
+  The full RunConfig (CLI arguments) as JSON.
+
+- within_gmm_hdbscan_qc_summary.json
+  Overall stats:
+    n_rows_after_merge_and_pc_complete
+    pc_cols_used
+    n_components_seen
+    n_global_subclusters_assigned
+    frac_rows_noise_overall     (fraction with subcluster_in_component == -1)
+
+tables/
+- within_gmm_hdbscan_assignments.csv
+  Contains:
+    - All columns from the assignments table (as merged)
+    - Selected PC columns
+    - subcluster               (global unique cluster id; -1 noise / unassigned)
+    - subcluster_in_component  (HDBSCAN label within component; -1 noise / unassigned)
+    - subcluster_prob          (membership strength for fitted rows; NaN otherwise)
+
+  Notes:
+  - Rows not used for fitting (low-confidence filtered out, or component skipped) retain default values:
+      subcluster = -1
+      subcluster_in_component = -1
+      subcluster_prob = NaN
+
+- within_gmm_hdbscan_summary.csv
+  One row per GMM component with:
+    component
+    n_total_in_component
+    n_used_for_hdbscan
+    skipped, skip_reason
+    n_subclusters_found
+    n_noise, frac_noise
+    plus the effective HDBSCAN params and flags (metric, min_cluster_size, standardize flag, etc.)
+
+plots/
+- within_gmm_component_{component}_PC1_PC2_subclusters.png (only if PC1 and PC2 are available and component not skipped)
+
+Operational notes / invariants
+------------------------------
+- The merge keeps assignment rows (left join), so any assignment rows missing PC coordinates are dropped later.
+- HDBSCAN is fit independently within each GMM component; cluster labels are not comparable across components
+  unless you use the provided global `subcluster` IDs.
+- Standardization (if enabled) is performed *within each component*, not globally.
+- High-confidence filtering affects only which rows are used to fit HDBSCAN; it does not remove rows
+  from the final assignment table beyond the PC-completeness drop.
 """
 
 from __future__ import annotations
@@ -56,7 +195,7 @@ else:
 
 @dataclass
 class RunConfig:
-    eigengenes: str
+    eigenvectors: str
     assignments: str
     outdir: str
     sep: str
@@ -91,7 +230,7 @@ class RunConfig:
 def parse_args() -> RunConfig:
     ap = argparse.ArgumentParser(description="Run HDBSCAN subclustering within each GMM component in PC space.")
 
-    ap.add_argument("--eigengenes", required=True, help="Path to eigengenes_scores.csv (contains PC columns).")
+    ap.add_argument("--eigenvectors", required=True, help="Path to eigenvectors_scores.csv (contains PC columns).")
     ap.add_argument("--assignments", required=True, help="Path to compartments_assignments_smoothed.csv (contains component).")
     ap.add_argument("--outdir", required=True, help="Output directory.")
     ap.add_argument("--sep", default=",", help="Delimiter (default ','). Use $'\\t' for TSV in bash.")
@@ -173,7 +312,7 @@ def parse_args() -> RunConfig:
         pc_cols = [c.strip() for c in ns.pc_cols.split(",") if c.strip()]
 
     return RunConfig(
-        eigengenes=ns.eigengenes,
+        eigenvectors=ns.eigenvectors,
         assignments=ns.assignments,
         outdir=ns.outdir,
         sep=ns.sep,
@@ -305,11 +444,11 @@ def main() -> None:
     tables_dir, plots_dir = ensure_dirs(cfg.outdir)
 
     # Load
-    df_pc = read_table(cfg.eigengenes, cfg.sep)
+    df_pc = read_table(cfg.eigenvectors, cfg.sep)
     df_asg = read_table(cfg.assignments, cfg.sep)
 
     # Validate ID uniqueness
-    assert_unique_id(df_pc, cfg.id_col, "eigengenes", cfg.strict_unique_ids)
+    assert_unique_id(df_pc, cfg.id_col, "eigenvectors", cfg.strict_unique_ids)
     assert_unique_id(df_asg, cfg.id_col, "assignments", cfg.strict_unique_ids)
 
     if cfg.component_col not in df_asg.columns:
@@ -320,7 +459,7 @@ def main() -> None:
         pc_cols = [c for c in cfg.pc_cols if c in df_pc.columns]
         missing = [c for c in cfg.pc_cols if c not in df_pc.columns]
         if missing:
-            print(f"[WARN] These requested PC columns were missing in eigengenes table and will be ignored: {missing}")
+            print(f"[WARN] These requested PC columns were missing in eigenvectors table and will be ignored: {missing}")
     else:
         pc_cols = infer_pc_cols(df_pc, cfg.pc_prefix, cfg.pc_min, cfg.pc_max)
 

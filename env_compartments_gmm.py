@@ -1,27 +1,253 @@
-# /media/nfs/Ryan/SABer/SI_data/SI_ASV/SPARK/env_compartments_final_gmm.py
 #!/usr/bin/env python3
+
 """
 env_compartments_final_gmm.py
 
-(Original purpose preserved.)
+Purpose
+-------
+Fit a FINAL, fixed-K Gaussian Mixture Model (GMM) to an environmental PC space to define
+“environmental compartments” (clusters), then produce:
+- per-sample compartment assignments + uncertainty metrics
+- per-compartment summaries and “persistent vs episodic” labels
+- covariance diagnostics and simple PC scatter plots
+- optional second-stage “episodic smoothing” (sticky HMM over responsibilities)
+- optional HDBSCAN clustering on the same PC model space as a nonparametric comparator
 
-ADDED (non-breaking):
----------------------
-Optional HDBSCAN clustering on the same PC model space used for the final GMM.
+IMPORTANT terminology note
+-------------------------
+Inputs are PCA scores derived from environmental / biogeochemical variables (environmental eigenvectors / PCs),
+not genomic eigenvectors. This script clusters samples in that environmental PC space.
 
-Why this is defensible:
-- GMM uses fixed K (here K=5).
-- HDBSCAN is density-based; it does NOT take K.
-- We treat K=5 as a *reference point* for interpretation, not a constraint.
-- We report: number of clusters found, noise fraction, cluster sizes,
-  and agreement vs GMM (ARI/NMI) to support discussion.
+Inputs
+------
+Required:
+1) --eigenvectors : eigenvectors_scores.csv (from env_eigenvectors.py)
+   - Must contain PC columns named PC1, PC2, … and metadata columns.
+2) --pc-keep : pc_keep_decision.csv (from env_eigenvectors.py --pc-selection)
+   - Must contain columns:
+       PC   (e.g., "PC1")
+       KEEP (interpreted as boolean)
 
-Outputs added (if --run-hdbscan):
+Optional:
+3) --matrix-cleaned : matrix_cleaned.csv (from env_eigenvectors.py)
+   - If provided, enables post-hoc feature-space inference:
+     * PC↔feature Spearman correlations
+     * per-compartment feature shift z-scores
+
+PC selection (model space)
+--------------------------
+Controlled by --pc-use-mode:
+
+A) keep (default)
+   - Use PCs where pc_keep_decision.csv has KEEP==True
+   - Only PCs that exist as columns in the eigenvectors table are used
+   - Error if this yields zero PCs
+
+B) all
+   - Use all columns starting with "PC", sorted numerically (PC1, PC2, ...)
+
+C) explicit
+   - Use only PCs listed in --pc-explicit (comma-separated list, e.g. "PC1,PC2,PC5")
+   - Error if none exist
+
+Row filtering
+-------------
+After selecting PCs:
+- PC columns are coerced to numeric.
+- Rows with ANY missing values across selected PCs are dropped.
+- All subsequent outputs and any optional inference are computed on this filtered row set.
+
+Two vector spaces are used (do not confuse them)
+------------------------------------------------
+1) Z_model  (used for GMM fitting and (optional) HDBSCAN)
+   - If --standardize-pc-space:
+       Z_model = StandardScaler().fit_transform(selected PC columns)
+     else:
+       Z_model = raw selected PC values
+
+2) Z_density (used ONLY for kNN density diagnostics)
+   Controlled by --density-space:
+   - pc:
+       Z_density = Z_model
+   - pc_depthnorm (default):
+       Z_density = concat(Z_model, zscored_depth)
+       where depth column is chosen by --depth-norm-col (defaults to anchored depth col)
+
+Depth normalization in this script is currently "global" z-score (mean/std over filtered rows).
+
+Stage 1: Fixed-K GMM (core)
+---------------------------
+A scikit-learn GaussianMixture is fit on Z_model with parameters:
+- K (--K, default 5)
+- covariance_type (--covariance-type: full|tied|diag|spherical; default full)
+- n_init (--n-init, default 30)
+- max_iter (--max-iter, default 1000)
+- reg_covar (--reg-covar, default 1e-6)
+- random_state (--random-state, default 42)
+
+Per-sample outputs computed from responsibilities resp = gmm.predict_proba(Z_model):
+- component = argmax_k resp_ik
+- max_prob  = max_k resp_ik
+- entropy_norm = responsibility entropy normalized to [0, 1]:
+      H_i = - sum_k resp_ik log(resp_ik) / log(K)
+- knn_mean_dist = mean distance to k nearest neighbors in Z_density (excluding self)
+
+All responsibilities are also written as resp_0..resp_{K-1}.
+
+Stage 2 (optional): Episodic smoothing of responsibilities
+----------------------------------------------------------
+Enabled by --episodic-smoothing.
+
+Goal:
+- Encourage temporal/depth continuity within blocks (e.g., within each Cruise), without refitting the GMM.
+- This is a post-processing step on the responsibility matrix only.
+
+Method:
+- Construct a “sticky” transition matrix T with:
+    diagonal = --episodic-sticky-prob (default 0.98)
+    off-diagonals = (1 - sticky_prob) / (K - 1)
+- Treat the raw responsibilities as emission probabilities E_tk.
+- Run a forward–backward pass to compute smoothed posteriors gamma_tk.
+
+Application:
+- --episodic-apply-to all:
+    replace ALL rows responsibilities with gamma
+- --episodic-apply-to low_conf_only (default):
+    only replace rows where max_prob < --episodic-lowconf-maxprob (default 0.80)
+
+Blocks and ordering:
+- If --episodic-block-col exists, smoothing is applied within each block independently.
+- Within each block, rows are sorted by --episodic-sort-cols (default: "date,Depth_anchored").
+- If the block col does NOT exist, smoothing is applied once over all rows sorted globally.
+
+Outputs:
+- The script always writes a “base” set of tables/plots from the unsmoothed responsibilities.
+- If smoothing is enabled, it writes a parallel “smoothed” set with tag="smoothed".
+
+Compartment summaries and labeling
+----------------------------------
+For each run tag (base / smoothed), the script writes:
+- compartment_summary_{tag}.csv
+  Includes per-component:
+    n_samples, frac_samples
+    n_cruises (unique values of --cruise-col)
+    n_depth_groups (unique values of depth group column)
+    time_min, time_max, span_days (from --time-col)
+    median_max_prob, median_entropy, median_knn_mean_dist
+
+Depth grouping column:
+- Uses --anchored-depth-col if present in metadata; otherwise falls back to --depth-col.
+
+Persistent vs episodic vs intermediate labeling:
+- persistent if ALL:
+    frac_samples >= --persistent-min-frac-samples (default 0.18)
+    n_cruises    >= --persistent-min-n-cruises   (default 50)
+    span_days    >= --persistent-min-span-days   (default 1000)
+- episodic if BOTH:
+    frac_samples <= --episodic-max-frac-samples  (default 0.06)
+    span_days    <= --episodic-max-span-days     (default very large; effectively “no cap” unless set)
+- else: intermediate
+
+Covariance diagnostics
+----------------------
+Writes covariance_diagnostics_{tag}.csv with per-component summaries derived from fitted covariance matrices:
+- cov_trace
+- cov_det
+- cov_condition_number
+
+(Notes: For covariance_type="tied", the shared covariance is used for all components.
+For "diag" and "spherical", it is expanded to a matrix form for these diagnostics.)
+
+Plots
+-----
+For each run tag (base / smoothed):
+- plots/pc_scatter_PC1_PC2_{tag}.png
+  Scatter of PC1 vs PC2 colored by component (only if PC1 and PC2 exist in the selected PC set).
+
+Optional: Feature-space inference (requires --matrix-cleaned)
+------------------------------------------------------------
+If --matrix-cleaned is provided:
+1) pc_feature_correlations_spearman.csv
+   - Spearman correlation between each selected PC and each feature column
+   - Skips (PC, feature) pairs with <10 complete observations
+
+2) compartment_feature_shifts.csv
+   - For each component, computes feature mean shift vs global mean in z-score units
+   - Reports the top 20 features by absolute shift per component
+
+IMPORTANT: matrix_cleaned.csv is subset to the same filtered row set used for modeling
+(consistent sample ordering).
+
+ADDED (optional): HDBSCAN comparator
+-----------------------------------
+Enabled by --run-hdbscan.
+
+Rationale:
+- GMM is parametric and uses fixed K.
+- HDBSCAN is density-based and does not require specifying K.
+- We treat HDBSCAN as a comparator / sensitivity analysis, not the primary compartment definition.
+
+HDBSCAN is run on the SAME Z_model used for the final GMM (not Z_density).
+Arguments:
+- --hdbscan-min-cluster-size (default 50)
+- --hdbscan-min-samples      (default None -> library default)
+- --hdbscan-metric           (default euclidean)
+- --hdbscan-cluster-selection-method (eom|leaf; default eom)
+- --hdbscan-allow-single-cluster (default False)
+
+If the hdbscan package is unavailable, the script raises a clear error with installation guidance.
+
+HDBSCAN outputs (if enabled):
 - tables/compartments_assignments_hdbscan.csv
+    metadata + hdbscan_component (-1 = noise) + hdbscan_prob
 - tables/hdbscan_cluster_summary.csv
+    n_total, n_clusters, n_noise, frac_noise, min/max/median observed cluster sizes
 - tables/hdbscan_vs_gmm_metrics.csv
+    ARI_gmm_vs_hdbscan, NMI_gmm_vs_hdbscan
+  (Noise (-1) is treated as a label; ARI/NMI are label-permutation invariant.)
 - plots/pc_scatter_PC1_PC2_hdbscan.png
+    PC1 vs PC2 colored by HDBSCAN label (if PC1/PC2 exist)
 
+Outputs (directory structure)
+-----------------------------
+--outdir/
+  run_config.json
+  model_params.json              (GMM params + selected PCs + scaler params if used)
+
+  tables/
+    compartments_assignments_base.csv
+    responsibilities_base.csv
+    compartment_summary_base.csv
+    persistent_episodic_labels_base.csv
+    covariance_diagnostics_base.csv
+
+    (if --episodic-smoothing)
+    compartments_assignments_smoothed.csv
+    responsibilities_smoothed.csv
+    compartment_summary_smoothed.csv
+    persistent_episodic_labels_smoothed.csv
+    covariance_diagnostics_smoothed.csv
+
+    (if --matrix-cleaned)
+    pc_feature_correlations_spearman.csv
+    compartment_feature_shifts.csv
+
+    (if --run-hdbscan)
+    compartments_assignments_hdbscan.csv
+    hdbscan_cluster_summary.csv
+    hdbscan_vs_gmm_metrics.csv
+
+  plots/
+    pc_scatter_PC1_PC2_base.png
+    (if --episodic-smoothing) pc_scatter_PC1_PC2_smoothed.png
+    (if --run-hdbscan)        pc_scatter_PC1_PC2_hdbscan.png
+
+Operational notes / invariants
+------------------------------
+- Modeling space (Z_model) is determined ONLY by selected PCs (and optional standardization).
+- Depth is NEVER included in the GMM fit in this script; it is used only for density diagnostics (Z_density).
+- Smoothing does not refit the GMM; it only replaces responsibilities (optionally selectively).
+- All tables reflect the same filtered sample set (rows with complete selected-PC values).
 """
 
 from __future__ import annotations
@@ -47,7 +273,7 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 @dataclass
 class RunConfig:
-    eigengenes_csv: str
+    eigenvectors_csv: str
     pc_keep_csv: str
     outdir: str
     sep: str
@@ -107,12 +333,12 @@ class RunConfig:
 
 
 def parse_args() -> RunConfig:
-    ap = argparse.ArgumentParser(description="Fit final fixed-K GMM compartments from PCA eigengenes + PC keep table.")
+    ap = argparse.ArgumentParser(description="Fit final fixed-K GMM compartments from PCA eigenvectors + PC keep table.")
 
-    ap.add_argument("--eigengenes", required=True, help="Path to eigengenes_scores.csv (from env_pca/tables).")
+    ap.add_argument("--eigenvectors", required=True, help="Path to eigenvectors_scores.csv (from env_pca/tables).")
     ap.add_argument("--pc-keep", required=True, help="Path to pc_keep_decision.csv (from env_pca/tables).")
     ap.add_argument("--outdir", required=True, help="Output directory.")
-    ap.add_argument("--sep", default=",", help="Delimiter for eigengenes/pc_keep (default ',').")
+    ap.add_argument("--sep", default=",", help="Delimiter for eigenvectors/pc_keep (default ',').")
 
     ap.add_argument("--time-col", default="date", help="Time column name (default date).")
     ap.add_argument("--cruise-col", default="Cruise", help="Cruise column name (default Cruise).")
@@ -205,7 +431,7 @@ def parse_args() -> RunConfig:
         hdbscan_min_samples = None
 
     return RunConfig(
-        eigengenes_csv=ns.eigengenes,
+        eigenvectors_csv=ns.eigenvectors,
         pc_keep_csv=ns.pc_keep,
         outdir=ns.outdir,
         sep=ns.sep,
@@ -292,7 +518,7 @@ def pick_pcs(eig: pd.DataFrame, pc_keep: pd.DataFrame, mode: str, explicit: Opti
             raise ValueError("pc-use-mode=explicit requires --pc-explicit.")
         use = [p for p in explicit if p in eig.columns]
         if not use:
-            raise ValueError("None of the requested --pc-explicit columns exist in eigengenes.")
+            raise ValueError("None of the requested --pc-explicit columns exist in eigenvectors.")
         return use
 
     keep_set = set(pc_keep.loc[pc_keep["KEEP"], "PC"].tolist())
@@ -818,7 +1044,7 @@ def main() -> None:
     with open(os.path.join(cfg.outdir, "run_config.json"), "w") as f:
         json.dump(cfg.__dict__, f, indent=2)
 
-    eig = pd.read_csv(cfg.eigengenes_csv, sep=cfg.sep)
+    eig = pd.read_csv(cfg.eigenvectors_csv, sep=cfg.sep)
     pc_keep = read_pc_keep(cfg.pc_keep_csv, sep=cfg.sep)
     pcs = pick_pcs(eig, pc_keep, cfg.pc_use_mode, cfg.pc_explicit)
 
@@ -856,7 +1082,7 @@ def main() -> None:
     else:
         dcol = cfg.depth_norm_col
         if dcol not in meta.columns:
-            raise ValueError(f"density-space=pc_depthnorm requires depth column '{dcol}' in eigengenes metadata.")
+            raise ValueError(f"density-space=pc_depthnorm requires depth column '{dcol}' in eigenvectors metadata.")
         dz = compute_depth_feature(meta, dcol)
         dz = dz.to_numpy().reshape(-1, 1)
         Z_density = np.hstack([Z_model, dz])

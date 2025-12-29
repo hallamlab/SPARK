@@ -1,63 +1,238 @@
 #!/usr/bin/env python3
+
 """
 scripts/env_compartments_gmm_selectk.py
 
-Goal
-----
-Given PCA eigengenes (scores) and a PC keep-decision table, fit Gaussian Mixture Models
-across a K range and choose K using reviewer-defensible criteria.
+Purpose
+-------
+Select the number of “environmental compartments” (clusters) by fitting Gaussian Mixture Models (GMMs)
+to a low-dimensional environmental feature space (PCA scores) and choosing K using a reviewer-defensible,
+constraint-first selection rule.
+
+This script is intended to be run after your PCA step (env_eigenvectors.py), but note:
+- The inputs are PCA *scores* over environmental / biogeochemical variables.
+- Treat them as environmental eigenvectors / PCs.
+
+Conceptual model
+----------------
+We represent each sample as a point in PC space (PC1..PCn). For each K in [k_min, k_max], we fit a GMM:
+  p(x) = sum_{k=1..K} pi_k * Normal(x | mu_k, Sigma_k)
+
+We then evaluate each fitted model using:
+  1) Information criteria (BIC, ICL)
+  2) Optional K-fold cross-validated test log-likelihood
+  3) Block-bootstrap stability (Adjusted Rand Index vs a base fit)
+  4) A minimum cluster size constraint to avoid tiny “artifact” components
 
 Inputs
 ------
-1) eigengenes_scores.csv  (output of env_eigengenes.py)
-   - contains metadata columns + PC1..PCn columns
+1) eigenvectors_scores.csv  (from env_eigenvectors.py)
+   - Must contain PC score columns named like: PC1, PC2, ..., PCn
+   - May contain metadata columns; they are preserved in output assignment tables.
 
-2) pc_keep_decision.csv   (output of env_eigengenes.py --pc-selection)
-   - contains columns: PC, KEEP (bool), plus optional other keep_* columns
+2) pc_keep_decision.csv   (from env_eigenvectors.py --pc-selection)
+   - Used only if --pc-use-mode keep (default).
+   - Must contain columns:
+       PC   (e.g., "PC1")
+       KEEP (truthy/falsey; parsed with .astype(bool))
 
-Core model-selection metrics (per K)
+PC selection (which PC columns become the clustering space)
+----------------------------------------------------------
+Controlled by --pc-use-mode:
+
+A) keep (default)
+   - Uses PCs where pc_keep_decision.csv has KEEP==True
+   - Only keeps those PCs that also exist as columns in eigenvectors_scores.csv
+   - Fails if none remain (suggests --pc-use-mode all)
+
+B) all
+   - Uses all columns in eigenvectors_scores.csv that start with "PC" (sorted numerically)
+
+C) explicit
+   - Uses only PCs listed in --pc-explicit (comma-separated)
+   - Fails if none of the requested columns exist in eigenvectors_scores.csv
+
+Row filtering
+-------------
+After selecting PCs:
+- PC columns are coerced to numeric with errors="coerce".
+- Rows with ANY missing values across the selected PC columns are dropped before modeling.
+  (If upstream PCA is clean, this should be rare.)
+
+Optional standardization of PC space
 ------------------------------------
-A) Information criteria:
-   - BIC (standard)
-   - ICL (BIC + 2 * sum_i sum_k r_ik log r_ik)  [entropy penalty; favors crisp clusters]
+If --standardize-pc-space is set:
+- A StandardScaler (mean=0, std=1) is fitted on the selected PC columns
+- The scaled PC matrix is used for ALL GMM fits and ALL metrics
 
-B) Cross-validated log-likelihood:
-   - K-fold CV average test log-likelihood (optional; slower but strong)
+This is often recommended for GMMs if PCs have very different variances due to PC selection or upstream changes.
 
-C) Block-bootstrap stability:
-   - Refit GMM on bootstrap-resampled blocks (e.g., Cruise) and compare hard labels on
-     out-of-bag samples to the base model using Adjusted Rand Index (ARI).
+K range and GMM fit settings
+----------------------------
+For each K in [--k-min, --k-max], a scikit-learn GaussianMixture is fit with:
+- n_components = K
+- covariance_type in {full, diag, tied, spherical}
+- n_init, max_iter, reg_covar, random_state as configured
 
-Selection rule (bullet-proof / reviewer-defensible)
----------------------------------------------------
-Hard constraints (MUST pass):
-  - median bootstrap ARI >= --stability-min-ari,
-  - min cluster fraction >= --min-cluster-frac
+Important implementation detail:
+- The “base” labels used for stability are taken from the model fit on the full dataset for that K
+  in the main loop (hard labels = gmm.predict(X)).
 
-If no K passes hard constraints: STOP + explain.
+Per-K metrics computed (written to gmm_model_selection_metrics.csv)
+-------------------------------------------------------------------
+Let n = #samples after row filtering, d = #PC dimensions used.
 
-Then choose the *smallest* K that is within --select-delta of the best (feasible) K under:
-  - ICL (lower is better) or
-  - BIC (lower is better) or
-  - CV loglik (higher is better)
+1) AIC and BIC (from scikit-learn)
+   - AIC = gmm.aic(X)
+   - BIC = gmm.bic(X)
+
+2) Responsibilities entropy (assignment uncertainty)
+   For responsibility matrix R (n x K), r_ik = P(component=k | x_i):
+     entropy_total = -sum_i sum_k r_ik * log(r_ik)
+     mean_resp_entropy = entropy_total / n
+   Lower mean_resp_entropy indicates “crisper” assignments.
+
+3) ICL (Integrated Completed Likelihood proxy)
+   Implemented here as:
+     ICL = BIC + 2 * entropy_total
+   This is a common practical form that penalizes fuzzy assignments (prefers cleaner clustering).
+
+4) Minimum component fraction (anti-fragmentation)
+   - hard labels = gmm.predict(X)
+   - min_cluster_frac = min_k (count_k / n)
+   Used as a hard feasibility constraint.
+
+5) Optional K-fold CV test log-likelihood (--cv-folds > 1)
+   - KFold is shuffle=True with random_state
+   - For each fold:
+       fit GMM on train set
+       score test set with gmm.score(X_test)  (average per-sample log-likelihood)
+   Reported:
+       CV_loglik_mean = mean over folds
+       CV_loglik_std  = std over folds
+
+6) Block-bootstrap stability (Adjusted Rand Index)
+   Controlled by:
+     --stability-R
+     --stability-block-col
+     --stability-oob-min
+     --stability-min-ari
+
+   Block definition:
+   - If --stability-block-col exists in the eigenvectors_scores.csv metadata, blocks are:
+       blocks = df[block_col].astype(str).fillna("NA")
+   - Otherwise, all samples are assigned to a single block "ALL" (stability becomes degenerate).
+
+   One bootstrap replicate:
+   - Sample blocks with replacement (size = number of unique blocks) to form “in-bag”
+   - Out-of-bag (OOB) = blocks not sampled at least once
+   - Fit GMM on in-bag samples only
+   - Predict labels on OOB samples
+   - Compute ARI between:
+       base_labels[OOB] (from the full-data fit for that K)
+       vs
+       oob_labels       (from the bootstrap-fit model predictions)
+
+   Replicates with OOB sample count < --stability-oob-min are skipped.
+
+   Reported per K:
+     stability_median_ARI
+     stability_mean_ARI
+     stability_n_reps     (#valid replicates contributing)
+
+Selection logic (constraint-first, reviewer-defensible)
+------------------------------------------------------
+Selection is performed ONLY after all K models have been fit and metrics saved.
+
+Hard feasibility constraints (MUST pass):
+  1) min_cluster_frac >= --min-cluster-frac
+  2) stability_median_ARI >= --stability-min-ari
+  3) stability_n_reps > 0   (no valid bootstrap replicates is treated as failing stability)
+
+If NO K is feasible:
+- The script stops with a clear SystemExit message explaining:
+  - which hard constraints failed
+  - reviewer-defensible options to adjust thresholds or modeling choices
+- The decision table still includes failure flags / reasons:
+  tables/gmm_k_selection_decision.csv
+
+Primary selection metric (--select-by)
+--------------------------------------
+Among feasible K values only:
+
+A) icl (default)
+   - Best = minimum feasible ICL
+   - Eligible = feasible K with (ICL - best) <= --select-delta
+   - Choose the smallest K in Eligible
+
+B) bic
+   - Best = minimum feasible BIC
+   - Eligible = feasible K with (BIC - best) <= --select-delta
+   - Choose the smallest K in Eligible
+
+C) cv
+   - Requires --cv-folds > 1 (else error)
+   - Best = maximum feasible CV_loglik_mean
+   - Eligible = feasible K with (best - CV_loglik_mean) <= --select-delta
+   - Choose the smallest K in Eligible
+
+This “smallest K within delta of best” rule is explicitly conservative and helps avoid over-partitioning.
 
 Outputs
 -------
-outdir/
-  tables/
-    gmm_model_selection_metrics.csv
-    gmm_k_selection_decision.csv
-  plots/
-    selectk_ic_bic_icl.png
-    selectk_cv_loglik.png            (if --cv-folds > 1)
-    selectk_stability_ari.png
-    selectk_cluster_sizes.png
-    selectk_entropy.png
+Writes into --outdir:
 
-Also writes (for the selected K):
-  tables/gmm_selected_assignments.csv
-  tables/gmm_selected_component_summary.csv
+Top-level
+- run_config.json        (exact config used)
+- SELECTED_K.txt         (one line: selected K)
+
+tables/
+- gmm_model_selection_metrics.csv
+  Columns include:
+    K, AIC, BIC, ICL,
+    entropy_total, mean_resp_entropy,
+    min_cluster_frac,
+    CV_loglik_mean, CV_loglik_std,
+    stability_median_ARI, stability_mean_ARI, stability_n_reps
+
+- gmm_k_selection_decision.csv
+  Contains per-K feasibility flags and within-delta eligibility, plus SELECTED.
+  If no K feasible, includes FAIL_REASONS.
+
+For the selected K (fit on full data in the chosen PC space):
+- gmm_selected_assignments.csv
+  A copy of the filtered eigenvectors_scores.csv rows (metadata preserved), plus:
+    component    (int hard label from 0..K-1)
+    max_prob     (max responsibility for the assigned component)
+    resp_entropy (per-sample responsibility entropy:
+                  -sum_k r_ik log r_ik)
+
+- gmm_selected_component_summary.csv
+  Per component:
+    component
+    n_samples
+    frac_samples
+    median_max_prob
+    median_entropy
+
+plots/
+- selectk_ic_bic_icl.png          (BIC + ICL vs K)
+- selectk_cv_loglik.png           (if --cv-folds > 1)
+- selectk_stability_ari.png       (median ARI vs K with threshold line)
+- selectk_cluster_sizes.png       (min_cluster_frac vs K with threshold line)
+- selectk_entropy.png             (mean_resp_entropy vs K)
+
+Notes / invariants (important)
+------------------------------
+- PC columns are assumed to be named starting with "PC" (e.g., PC1, PC2, ...).
+- Rows with any missing selected-PC values are dropped before fitting any model.
+- If --stability-block-col does not exist, all rows are treated as one block ("ALL"),
+  which makes stability estimates non-informative.
+- Block bootstrap compares OOB labels from bootstrap fits to labels from the full-data “base” fit for that K.
+- Component labels are not post-aligned across fits; stability is measured via ARI which is label-permutation invariant.
+
 """
+
 from __future__ import annotations
 
 import argparse
@@ -82,7 +257,7 @@ from sklearn.metrics import adjusted_rand_score
 
 @dataclass
 class Config:
-    eigengenes_path: str
+    eigenvectors_path: str
     pc_keep_path: str
     outdir: str
     sep: str
@@ -120,7 +295,7 @@ class Config:
 
 def parse_args() -> Config:
     ap = argparse.ArgumentParser(description="Select K for GMM compartments using BIC/ICL + CV + stability.")
-    ap.add_argument("--eigengenes", required=True, help="Path to eigengenes_scores.csv")
+    ap.add_argument("--eigenvectors", required=True, help="Path to eigenvectors_scores.csv")
     ap.add_argument("--pc-keep", required=True, help="Path to pc_keep_decision.csv")
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--sep", default=",", help="CSV separator (default ',')")
@@ -170,7 +345,7 @@ def parse_args() -> Config:
         pc_explicit = [x.strip() for x in ns.pc_explicit.split(",") if x.strip()]
 
     return Config(
-        eigengenes_path=ns.eigengenes,
+        eigenvectors_path=ns.eigenvectors,
         pc_keep_path=ns.pc_keep,
         outdir=ns.outdir,
         sep=ns.sep,
@@ -230,7 +405,7 @@ def choose_pcs(df_eig: pd.DataFrame, df_keep: pd.DataFrame, mode: str, explicit:
             raise ValueError("pc-use-mode explicit requires --pc-explicit")
         pcs = [pc for pc in explicit if pc in df_eig.columns]
         if not pcs:
-            raise ValueError("None of the --pc-explicit columns exist in eigengenes file.")
+            raise ValueError("None of the --pc-explicit columns exist in eigenvectors file.")
         return pcs
     # keep
     if "PC" not in df_keep.columns or "KEEP" not in df_keep.columns:
@@ -238,7 +413,7 @@ def choose_pcs(df_eig: pd.DataFrame, df_keep: pd.DataFrame, mode: str, explicit:
     keep_pcs = df_keep.loc[df_keep["KEEP"].astype(bool), "PC"].astype(str).tolist()
     pcs = [pc for pc in keep_pcs if pc in df_eig.columns]
     if not pcs:
-        raise ValueError("No KEEP PCs found in eigengenes file. Try --pc-use-mode all.")
+        raise ValueError("No KEEP PCs found in eigenvectors file. Try --pc-use-mode all.")
     return pcs
 
 
@@ -512,7 +687,7 @@ def main() -> None:
     with open(os.path.join(cfg.outdir, "run_config.json"), "w") as f:
         json.dump(cfg.__dict__, f, indent=2)
 
-    df_eig = read_df(cfg.eigengenes_path, cfg.sep)
+    df_eig = read_df(cfg.eigenvectors_path, cfg.sep)
     df_keep = read_df(cfg.pc_keep_path, cfg.sep)
 
     pcs = choose_pcs(df_eig, df_keep, cfg.pc_use_mode, cfg.pc_explicit)
