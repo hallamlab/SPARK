@@ -219,6 +219,16 @@ DEFAULT_FEATURE_COLS = [
     "Dimethyl Sulfide",
 ]
 
+BIOCHEM_COLOR_MAP = {
+    "Oxygen": "black",
+    "Nitrogen Oxides": "#E7298A",
+    "Nitrate": "#1B9E77",
+    "Nitrite": "#66A61E",
+    "Nitrous Oxide": "#0C5196",
+    "Ammonium": "#7570B3",
+    "Hydrogen Sulfide": "#D95F02",
+    "Methane": "violet",    
+}
 
 # -----------------------------
 # CLI / config
@@ -1077,6 +1087,278 @@ def plot_pc_scatter(scores_df: pd.DataFrame, outpath: str, time_col: str) -> Non
     plt.title("PC1 vs PC2 (eigenvectors space)")
     save_fig(outpath)
 
+def plot_biplot_core_and_sparse(
+    scores_df: pd.DataFrame,
+    loadings_df: pd.DataFrame,
+    sparse_corr_df: pd.DataFrame,
+    outpath: str,
+    *,
+    top_core: int = 12,
+    top_sparse: int = 12,
+    min_core_norm: float = 0.0,
+    min_sparse_norm: float = 0.0,
+) -> None:
+    """
+    PC1 vs PC2 biplot:
+      - points: sample scores (neutral)
+      - core arrows: PCA loadings (solid)
+      - sparse arrows: Spearman corr vectors (dashed)
+    Colors: BIOCHEM_COLOR_MAP only (anything missing is excluded).
+    """
+    if "PC1" not in scores_df.columns or "PC2" not in scores_df.columns:
+        return
+    if "PC1" not in loadings_df.columns or "PC2" not in loadings_df.columns:
+        return
+    if sparse_corr_df is None or sparse_corr_df.empty:
+        sparse_corr_df = pd.DataFrame(columns=["feature", "PC", "spearman_r"])
+
+    # ---- points (neutral) ----
+    plt.figure(figsize=(8.5, 7.0))
+    plt.scatter(
+        scores_df["PC1"].values,
+        scores_df["PC2"].values,
+        s=14,
+        alpha=0.35,
+        color="0.6",
+        zorder=1,
+    )
+
+    plt.axhline(0, linewidth=0.8, color="0.8")
+    plt.axvline(0, linewidth=0.8, color="0.8")
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.title("PC1 vs PC2 biplot (core loadings + sparse correlations)")
+
+    label_bbox = dict(
+        boxstyle="round,pad=0.15",
+        facecolor="white",
+        edgecolor="none",
+        alpha=0.75,
+    )
+
+    def _repel_texts(ax, text_artists, anchor_xy, *, max_iter=200, pad_px=2.0, step_px=1.0, leader_px=18.0):
+        """
+        Lightweight label repulsion (no external deps).
+        Operates in display/pixel space, then maps back to data coords.
+
+        - text_artists: list[matplotlib.text.Text]
+        - anchor_xy: list[(x_anchor, y_anchor)] in *data coords* (arrow tip positions)
+        """
+        if not text_artists:
+            return
+
+        fig = ax.figure
+        fig.canvas.draw()  # ensure renderer exists
+        renderer = fig.canvas.get_renderer()
+
+        # Track current text positions in *display* coords so we can nudge in pixels
+        disp_pos = []
+        for t in text_artists:
+            x, y = t.get_position()                 # data coords
+            xd, yd = ax.transData.transform((x, y)) # display coords
+            disp_pos.append([float(xd), float(yd)])
+
+        def _bbox_i(i):
+            # Update artist position temporarily to compute bbox at current disp_pos
+            x_data, y_data = ax.transData.inverted().transform(tuple(disp_pos[i]))
+            text_artists[i].set_position((float(x_data), float(y_data)))
+            bb = text_artists[i].get_window_extent(renderer=renderer).expanded(1.02, 1.15)
+            return bb
+
+        # Main repel loop
+        for _ in range(int(max_iter)):
+            moved = False
+            bbs = [_bbox_i(i) for i in range(len(text_artists))]
+
+            for i in range(len(text_artists)):
+                for j in range(i + 1, len(text_artists)):
+                    if not bbs[i].overlaps(bbs[j]):
+                        continue
+
+                    # Compute overlap in display coords
+                    dx = min(bbs[i].x1, bbs[j].x1) - max(bbs[i].x0, bbs[j].x0)
+                    dy = min(bbs[i].y1, bbs[j].y1) - max(bbs[i].y0, bbs[j].y0)
+                    if dx <= 0 or dy <= 0:
+                        continue
+
+                    # Push them apart along the smaller-overlap axis
+                    if dx < dy:
+                        push = (dx / 2.0 + pad_px) * step_px
+                        if bbs[i].x0 < bbs[j].x0:
+                            disp_pos[i][0] -= push
+                            disp_pos[j][0] += push
+                        else:
+                            disp_pos[i][0] += push
+                            disp_pos[j][0] -= push
+                    else:
+                        push = (dy / 2.0 + pad_px) * step_px
+                        if bbs[i].y0 < bbs[j].y0:
+                            disp_pos[i][1] -= push
+                            disp_pos[j][1] += push
+                        else:
+                            disp_pos[i][1] += push
+                            disp_pos[j][1] -= push
+
+                    moved = True
+
+            if not moved:
+                break
+
+        # Apply final positions (data coords) + optional leader lines
+        for i, t in enumerate(text_artists):
+            x_data, y_data = ax.transData.inverted().transform(tuple(disp_pos[i]))
+            t.set_position((float(x_data), float(y_data)))
+
+        # Draw leader lines if label moved far enough (in display coords)
+        for i, t in enumerate(text_artists):
+            # current text position (display)
+            tx_d, ty_d = ax.transData.transform(t.get_position())
+            # anchor position (display)
+            ax_x, ax_y = anchor_xy[i]
+            ax_d, ay_d = ax.transData.transform((ax_x, ax_y))
+            dist = np.sqrt((tx_d - ax_d) ** 2 + (ty_d - ay_d) ** 2)
+
+            if dist >= float(leader_px):
+                # thin leader line in a neutral color behind everything
+                ax.plot([ax_x, t.get_position()[0]], [ax_y, t.get_position()[1]],
+                        linewidth=0.8, color="0.7", zorder=2)
+
+    # ---- define scaling so arrows live comfortably inside the score cloud ----
+    x = scores_df["PC1"].to_numpy()
+    y = scores_df["PC2"].to_numpy()
+    xr = np.nanpercentile(x, 99) - np.nanpercentile(x, 1)
+    yr = np.nanpercentile(y, 99) - np.nanpercentile(y, 1)
+    cloud_scale = 0.35 * float(min(xr, yr)) if np.isfinite(xr) and np.isfinite(yr) else 1.0
+    if cloud_scale <= 0:
+        cloud_scale = 1.0
+
+    # ---- core feature arrows (solid): use PCA loadings ----
+    core = loadings_df[["PC1", "PC2"]].copy()
+    core["feature"] = core.index.astype(str)
+    core = core[core["feature"].isin(BIOCHEM_COLOR_MAP.keys())].copy()  # enforce map
+    core["norm"] = np.sqrt(core["PC1"] ** 2 + core["PC2"] ** 2)
+    core = core.sort_values("norm", ascending=False)
+    core = core[core["norm"] >= float(min_core_norm)].head(int(top_core))
+
+    # ---- sparse feature arrows (dashed): use Spearman corr vectors ----
+    s = sparse_corr_df.copy()
+    # pivot to PC1/PC2
+    s = s[s["PC"].isin(["PC1", "PC2"])].copy()
+    if not s.empty:
+        sp = s.pivot(index="feature", columns="PC", values="spearman_r").reset_index()
+        if "PC1" not in sp.columns:
+            sp["PC1"] = np.nan
+        if "PC2" not in sp.columns:
+            sp["PC2"] = np.nan
+        sp = sp.rename_axis(None, axis=1)
+    else:
+        sp = pd.DataFrame(columns=["feature", "PC1", "PC2"])
+
+    sp["feature"] = sp["feature"].astype(str)
+    sp = sp[sp["feature"].isin(BIOCHEM_COLOR_MAP.keys())].copy()  # enforce map
+    sp["norm"] = np.sqrt(sp["PC1"].fillna(0) ** 2 + sp["PC2"].fillna(0) ** 2)
+    sp = sp.sort_values("norm", ascending=False)
+    sp = sp[sp["norm"] >= float(min_sparse_norm)].head(int(top_sparse))
+
+    # Scale both sets using the largest arrow magnitude among whichever is present
+    max_core = core["norm"].max() if not core.empty else np.nan
+    max_sparse = sp["norm"].max() if not sp.empty else np.nan
+    denom = np.nanmax([max_core, max_sparse])
+    if not np.isfinite(denom) or denom <= 0:
+        denom = 1.0
+    arrow_scale = cloud_scale / denom
+
+    # ---- draw arrows + labels; legend proxies ----
+    core_handles = []
+    sparse_handles = []
+    label_texts = []
+    label_anchors = []
+
+    for _, r in core.iterrows():
+        feat = r["feature"]
+        cx = float(r["PC1"]) * arrow_scale
+        cy = float(r["PC2"]) * arrow_scale
+        col = BIOCHEM_COLOR_MAP[feat]
+        # white outline (draw first)
+        plt.arrow(
+            0, 0, cx, cy,
+            length_includes_head=True,
+            head_width=0.032 * cloud_scale,
+            linewidth=3.2,
+            color="white",
+            zorder=3,
+        )
+
+        # colored arrow on top
+        plt.arrow(
+            0, 0, cx, cy,
+            length_includes_head=True,
+            head_width=0.03 * cloud_scale,
+            linewidth=2.2,
+            color=col,
+            zorder=4,
+        )
+
+        t = plt.text(
+            cx * 1.06, cy * 1.06,
+            feat,
+            fontsize=9,
+            color=col,
+            bbox=label_bbox,
+            zorder=5,
+        )
+        label_texts.append(t)
+        label_anchors.append((cx, cy))  # arrow tip in data coords
+        core_handles.append(plt.Line2D([0], [0], color=col, linewidth=2, label=f"{feat} (core)"))
+
+    for _, r in sp.iterrows():
+        feat = r["feature"]
+        sx = float(r["PC1"]) * arrow_scale
+        sy = float(r["PC2"]) * arrow_scale
+        col = BIOCHEM_COLOR_MAP[feat]
+        # dashed for sparse
+        # white outline (dashed)
+        plt.plot(
+            [0, sx], [0, sy],
+            linestyle="--",
+            linewidth=3.2,
+            color="white",
+            zorder=3,
+        )
+
+        # colored dashed arrow
+        plt.plot(
+            [0, sx], [0, sy],
+            linestyle="--",
+            linewidth=2.2,
+            color=col,
+            zorder=4,
+        )
+
+        plt.scatter([sx], [sy], s=22, color=col, zorder=4)
+
+        t = plt.text(
+            sx * 1.06, sy * 1.06,
+            feat,
+            fontsize=9,
+            color=col,
+            bbox=label_bbox,
+            zorder=5,
+        )
+        label_texts.append(t)
+        label_anchors.append((sx, sy))  # arrow tip in data coords
+        sparse_handles.append(plt.Line2D([0], [0], color=col, linestyle="--", linewidth=2, label=f"{feat} (sparse)"))
+
+    # Repel overlapping labels (lightweight, no deps)
+    ax = plt.gca()
+    _repel_texts(ax, label_texts, label_anchors, max_iter=250, pad_px=2.0, step_px=1.0, leader_px=18.0)
+
+    handles = core_handles + sparse_handles
+    if handles:
+        plt.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0, frameon=False)
+
+    save_fig(outpath)
+
 
 def plot_top_loadings(loadings: pd.DataFrame, outpath: str, pc: str, top_n: int = 25) -> None:
     if pc not in loadings.columns:
@@ -1602,6 +1884,22 @@ def main() -> None:
     )
     dropped_rows.to_csv(os.path.join(tables_dir, "dropped_rows.csv"), index=False)
 
+    # -----------------------------
+    # Option 2A Stage 2 (additive): identify sparse features (excluded by col missingness threshold)
+    # -----------------------------
+    col_missing = df_num[feats].isna().mean()
+    sparse_feats = [c for c in feats if col_missing[c] > cfg.dropna_col_thresh]
+    core_feats = [c for c in feats if col_missing[c] <= cfg.dropna_col_thresh]  # should match feats_kept
+
+    core_sparse_tbl = pd.DataFrame({
+        "feature": feats,
+        "status": ["core" if c in core_feats else "sparse" for c in feats],
+        "frac_missing": [float(col_missing[c]) for c in feats],
+        "dropna_col_thresh": float(cfg.dropna_col_thresh),
+    }).sort_values(["status", "frac_missing", "feature"], ascending=[True, False, True])
+
+    core_sparse_tbl.to_csv(os.path.join(tables_dir, "core_vs_sparse_features.csv"), index=False)
+
     miss1 = basic_missingness_stats(df_filt, feats_kept)
     miss1.to_csv(os.path.join(tables_dir, "missingness_post_drop.csv"), index=False)
     plot_missingness(miss1, os.path.join(plots_dir, "missingness_post_drop.png"))
@@ -1610,6 +1908,7 @@ def main() -> None:
 
     # X_preimpute is the coverage-truth for PC selection
     X_preimpute = df_filt[feats_kept].copy()
+    X_sparse = df_filt[sparse_feats].copy()
 
     # Impute
     if cfg.impute_scope == "by_depth":
@@ -1656,6 +1955,10 @@ def main() -> None:
     cleaned = pd.concat([meta.reset_index(drop=True), X_imp.reset_index(drop=True)], axis=1)
     cleaned.to_csv(os.path.join(tables_dir, "matrix_cleaned.csv"), index=False)
 
+    # Save cleaned matrix (post-impute / post-clamp / post-log)
+    cleaned_sparse = pd.concat([cleaned.reset_index(drop=True), X_sparse.reset_index(drop=True)], axis=1)
+    cleaned_sparse.to_csv(os.path.join(tables_dir, "matrix_cleaned_with_sparse.csv"), index=False)
+
     # Scale
     scaler = StandardScaler(with_mean=True, with_std=True)
     X_scaled = scaler.fit_transform(X_imp.values)
@@ -1694,6 +1997,45 @@ def main() -> None:
     eigenvectors = pd.concat([meta.reset_index(drop=True), scores_df], axis=1)
     eigenvectors.to_csv(os.path.join(tables_dir, "eigenvectors_scores.csv"), index=False)
 
+    # -----------------------------
+    # Option 2A Stage 2 (additive): Spearman correlations of sparse features vs retained PC scores
+    #   - NEVER refits PCA; uses existing scores_df
+    # -----------------------------
+    sparse_corr_rows = []
+    n_total = int(df_filt.shape[0])
+
+    # Align sparse-feature values rowwise to the same ordering used in scores_df/meta (reset_index(drop=True))
+    if sparse_feats:
+        X_sparse = df_filt[sparse_feats].reset_index(drop=True)
+    else:
+        X_sparse = pd.DataFrame(index=scores_df.index)
+
+    for feat in X_sparse.columns:
+        x = X_sparse[feat]
+        for pc in scores_df.columns:
+            y = scores_df[pc]
+            m = x.notna() & y.notna()
+            n_used = int(m.sum())
+            if n_used >= 3:
+                r = float(x[m].corr(y[m], method="spearman"))
+            else:
+                r = np.nan
+            cov = float(n_used / n_total) if n_total > 0 else np.nan
+
+            sparse_corr_rows.append({
+                "feature": str(feat),
+                "PC": str(pc),
+                "spearman_r": r,
+                "n_samples_used": n_used,
+                "coverage": cov,
+            })
+
+    sparse_corr_df = pd.DataFrame(sparse_corr_rows)
+
+    # write the full table (all sparse features x all PCs)
+    sparse_corr_df.to_csv(os.path.join(tables_dir, "sparse_feature_pc_spearman.csv"), index=False)
+
+
     # QC summary
     qc = {
         "id_col": cfg.id_col,
@@ -1729,6 +2071,20 @@ def main() -> None:
     plot_scree(pca, os.path.join(plots_dir, "scree.png"))
     plot_cumvar(pca, os.path.join(plots_dir, "cumulative_variance.png"))
     plot_pc_scatter(eigenvectors, os.path.join(plots_dir, "pc1_vs_pc2.png"), cfg.time_col)
+
+    # Option 2A biplot: core loadings (solid) + sparse correlations (dashed)
+    # Enforce BIOCHEM_COLOR_MAP strictly for sparse features (and also for core arrows to avoid unmapped colors).
+    sparse_corr_mapped = sparse_corr_df[sparse_corr_df["feature"].isin(BIOCHEM_COLOR_MAP.keys())].copy()
+    plot_biplot_core_and_sparse(
+        scores_df=eigenvectors,          # eigenvectors includes meta + PCs; function uses PC1/PC2 columns
+        loadings_df=loadings,            # PCA loadings for core features
+        sparse_corr_df=sparse_corr_mapped,
+        outpath=os.path.join(plots_dir, "pc1_vs_pc2_biplot_core_sparse.png"),
+        top_core=12,
+        top_sparse=12,
+        min_core_norm=0.0,
+        min_sparse_norm=0.0,
+    )
 
     for i in range(1, min(6, pca.n_components_ + 1)):
         pc = f"PC{i}"

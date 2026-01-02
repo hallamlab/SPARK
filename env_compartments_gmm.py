@@ -793,17 +793,62 @@ def covariance_diagnostics(gmm: GaussianMixture) -> pd.DataFrame:
 # Plots
 # -----------------------------
 
-def plot_pc_scatter(df: pd.DataFrame, pc1: str, pc2: str, comp_col: str, outpath: str, title: str) -> None:
-    if pc1 not in df.columns or pc2 not in df.columns:
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_pc_scatter(
+    df: pd.DataFrame,
+    pc1: str,
+    pc2: str,
+    comp_col: str,
+    outpath: str,
+    title: str,
+) -> None:
+    if pc1 not in df.columns or pc2 not in df.columns or comp_col not in df.columns:
         return
-    c = pd.to_numeric(df[comp_col], errors="coerce").fillna(-1).to_numpy()
+
+    # categorical integer labels
+    labels = pd.to_numeric(df[comp_col], errors="coerce").fillna(-1).astype(int)
+    uniq = np.sort(labels.unique())
+    if len(uniq) == 0:
+        return
+
+    # build grayscale colors (no white, no black)
+    n = len(uniq)
+    grays = np.linspace(0.15, 0.85, n)  # avoid 0.0 (black) and 1.0 (white)
+    label_to_color = {
+        lab: (g, g, g) for lab, g in zip(uniq, grays)
+    }
+
     plt.figure(figsize=(7, 6))
-    plt.scatter(df[pc1].values, df[pc2].values, c=c)
+
+    # plot each category separately so legend is categorical
+    for lab in uniq:
+        msk = labels == lab
+        plt.scatter(
+            df.loc[msk, pc1].values,
+            df.loc[msk, pc2].values,
+            color=label_to_color[lab],
+            s=20,
+            alpha=0.8,
+            edgecolors="none",
+            label=str(lab),
+        )
+
     plt.xlabel(pc1)
     plt.ylabel(pc2)
     plt.title(title)
-    plt.colorbar(label=comp_col)
+
+    plt.legend(
+        title=comp_col,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        frameon=False,
+    )
+
+    plt.tight_layout()
     save_fig(outpath)
+    plt.close()
 
 
 # -----------------------------

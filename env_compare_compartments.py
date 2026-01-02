@@ -281,8 +281,8 @@ except Exception:
 
 O2_COMPARTMENT_PALETTE = {
     "oxic": "red",
-    "dysoxic": "lightblue",
-    "suboxic": "green",
+    "dysoxic": "green",
+    "suboxic": "teal",
     "anoxic": "purple",
 }
 
@@ -411,7 +411,7 @@ def parse_args() -> Config:
     ap.add_argument("--umap-n-neighbors", type=int, default=30)
     ap.add_argument("--umap-min-dist", type=float, default=0.05)
     ap.add_argument("--umap-random-state", type=int, default=42)
-    ap.add_argument("--umap-metric", default="manhattan")
+    ap.add_argument("--umap-metric", default="euclidean")
 
     ap.add_argument("--bubble-q-low", type=float, default=0.01)
     ap.add_argument("--bubble-q-high", type=float, default=0.99)
@@ -616,7 +616,7 @@ def scatter_depth_profile(
     classes = sorted(d[color_col].astype("object").fillna("NA").unique(), key=lambda z: str(z))
     for cls in classes:
         sub = d[d[color_col].astype("object").fillna("NA") == cls]
-        ax.scatter(sub[xcol].values, sub[ycol].values, s=14, alpha=0.65, label=str(cls), c=color_map.get(cls, None))
+        ax.scatter(sub[xcol].values, sub[ycol].values, s=16, alpha=0.40, label=str(cls), color=color_map.get(cls, None), linewidth=0)
 
     ax.invert_yaxis()
     ax.set_xlabel(xcol)
@@ -641,13 +641,32 @@ def scatter_depth_profile_categorical(
     d[ycol] = pd.to_numeric(d[ycol], errors="coerce")
     d = d.dropna(subset=[xcol, ycol])
 
+    # categorical integer labels
+    labels = pd.to_numeric(df[cat_col], errors="coerce").fillna(-1).astype(int)
+    uniq = np.sort(labels.unique())
+    if len(uniq) == 0:
+        return
+
+    # build grayscale colors (no white, no black)
+    n = len(uniq)
+    grays = np.linspace(0.15, 0.85, n)  # avoid 0.0 (black) and 1.0 (white)
+    label_to_color = {
+        lab: (g, g, g) for lab, g in zip(uniq, grays)
+    }
+
     fig = plt.figure(figsize=(7.5, 6.5))
     ax = plt.gca()
 
     cats = sorted(d[cat_col].astype("object").fillna("NA").unique(), key=lambda z: str(z))
     for cat in cats:
         sub = d[d[cat_col].astype("object").fillna("NA") == cat]
-        ax.scatter(sub[xcol].values, sub[ycol].values, s=14, alpha=0.65, label=str(cat))
+        ax.scatter(sub[xcol].values,
+                   sub[ycol].values, 
+                   s=14,
+                   alpha=0.65,
+                   label=str(cat),
+                   color=label_to_color[cat],
+                   )
 
     ax.invert_yaxis()
     ax.set_xlabel(xcol)
@@ -656,6 +675,8 @@ def scatter_depth_profile_categorical(
     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
 
     save_all_formats(fig, out_base, cfg)
+
+    return label_to_color
 
 
 def plot_umap_categorical(
@@ -674,7 +695,7 @@ def plot_umap_categorical(
     for cls in classes:
         mask = (lab == cls).to_numpy()
         c = palette.get(cls, None) if palette else None
-        ax.scatter(emb[mask, 0], emb[mask, 1], s=14, alpha=0.70, label=str(cls), c=c)
+        ax.scatter(emb[mask, 0], emb[mask, 1], s=14, alpha=0.70, label=str(cls), color=c)
 
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
@@ -740,11 +761,74 @@ def plot_umap_bubble_single_color(
     ax = plt.gca()
 
     sizes = scale_bubble_sizes(values, cfg.bubble_q_low, cfg.bubble_q_high, cfg.bubble_size_min, cfg.bubble_size_max)
-    ax.scatter(emb[:, 0], emb[:, 1], s=sizes, alpha=0.55, c=color, edgecolors="none")
+    ax.scatter(emb[:, 0], emb[:, 1], s=sizes, alpha=0.55, color=color, edgecolors="none")
 
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
     ax.set_title(title)
+    save_all_formats(fig, out_base, cfg)
+
+
+def build_categorical_grayscale_palette(labels: pd.Series) -> Dict[str, Tuple[float, float, float]]:
+    """
+    Stable categorical grayscale palette (no white, no black).
+    Keys are string labels; values are RGB tuples.
+    """
+    lab = labels.astype("object").fillna("NA").astype(str)
+    uniq = sorted(lab.unique(), key=lambda z: str(z))
+    n = len(uniq)
+    if n == 0:
+        return {}
+    grays = np.linspace(0.15, 0.85, n)  # avoid pure black/white
+    return {str(u): (g, g, g) for u, g in zip(uniq, grays)}
+
+
+def plot_pc1_vs_pc2_categorical(
+    df: pd.DataFrame,
+    pc1: str,
+    pc2: str,
+    label_col: str,
+    palette: Dict[str, object],
+    title: str,
+    out_base: str,
+    cfg: Config,
+    s: float = 14.0,
+    alpha: float = 0.70,
+) -> None:
+    if pc1 not in df.columns or pc2 not in df.columns or label_col not in df.columns:
+        return
+
+    d = df[[pc1, pc2, label_col]].copy()
+    d[pc1] = pd.to_numeric(d[pc1], errors="coerce")
+    d[pc2] = pd.to_numeric(d[pc2], errors="coerce")
+    d = d.dropna(subset=[pc1, pc2])
+    if d.shape[0] < 3:
+        return
+
+    fig = plt.figure(figsize=(7.5, 6.5))
+    ax = plt.gca()
+
+    lab = d[label_col].astype("object").fillna("NA").astype(str)
+    classes = sorted(lab.unique(), key=lambda z: str(z))
+
+    for cls in classes:
+        mask = (lab == cls).to_numpy()
+        c = palette.get(str(cls), None)
+        ax.scatter(
+            d.loc[mask, pc1].to_numpy(),
+            d.loc[mask, pc2].to_numpy(),
+            s=s,
+            alpha=alpha,
+            label=str(cls),
+            color=c,
+            edgecolors="none",
+        )
+
+    ax.set_xlabel(pc1)
+    ax.set_ylabel(pc2)
+    ax.set_title(title)
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+
     save_all_formats(fig, out_base, cfg)
 
 
@@ -1129,7 +1213,8 @@ def main() -> None:
 
     # Biochem columns = everything in matrix except merge key + meta + legacy id if present
     exclude = set([cfg.derived_key_col] + meta_cols_present + [cfg.id_col])
-    biochem_cols = [c for c in df_matrix.columns if c not in exclude]
+    biochem_all_cols = [c for c in df_matrix.columns if c not in exclude]
+    biochem_cols = [c for c in biochem_all_cols if pd.to_numeric(df_matrix[c], errors="coerce").notna().all()]
 
     if cfg.oxygen_col not in df_matrix.columns:
         raise ValueError(f"matrix_cleaned missing oxygen col: {cfg.oxygen_col}")
@@ -1139,13 +1224,18 @@ def main() -> None:
     # Merge master
     keep_matrix = [cfg.derived_key_col] + meta_cols_present + biochem_cols
     keep_eig = [cfg.derived_key_col] + pc_cols
+    keep_sparce = [cfg.derived_key_col] + meta_cols_present + biochem_all_cols
 
     m = df_assign.merge(df_matrix[keep_matrix], on=cfg.derived_key_col, how="left", suffixes=("", "_matrix"))
     m = m.merge(df_eig[keep_eig], on=cfg.derived_key_col, how="left", suffixes=("", "_eig"))
 
+    m_sp = df_assign.merge(df_matrix[keep_sparce], on=cfg.derived_key_col, how="left", suffixes=("", "_matrix"))
+
     # Label O2
     m["o2_compartment"] = label_o2_compartment(m[cfg.oxygen_col], cfg)
     m[cfg.depth_anchored_col] = pd.to_numeric(m[cfg.depth_anchored_col], errors="coerce")
+    m_sp["o2_compartment"] = label_o2_compartment(m_sp[cfg.oxygen_col], cfg)
+    m_sp[cfg.depth_anchored_col] = pd.to_numeric(m_sp[cfg.depth_anchored_col], errors="coerce")
 
     # Save merged table
     m.to_csv(os.path.join(tables_dir, "merged_for_comparison.csv"), index=False)
@@ -1157,12 +1247,12 @@ def main() -> None:
     # ----------------------------
     # A) Depth profiles: biochem
     # ----------------------------
-    for feat in biochem_cols:
-        x = pd.to_numeric(m[feat], errors="coerce")
+    for feat in biochem_all_cols:
+        x = pd.to_numeric(m_sp[feat], errors="coerce")
         if x.notna().sum() < 3:
             continue
         scatter_depth_profile(
-            df=m,
+            df=m_sp,
             xcol=feat,
             ycol=cfg.depth_anchored_col,
             color_col="o2_compartment",
@@ -1171,8 +1261,8 @@ def main() -> None:
             out_base=os.path.join(plots_dir, f"A1_depth_vs_{sanitize_filename(feat)}__color_o2"),
             cfg=cfg,
         )
-        scatter_depth_profile_categorical(
-            df=m,
+        GMM_COMPARTMENT_PALETTE = scatter_depth_profile_categorical(
+            df=m_sp,
             xcol=feat,
             ycol=cfg.depth_anchored_col,
             cat_col="component",
@@ -1451,7 +1541,7 @@ def main() -> None:
                 title=f"UMAP (metric={cfg.umap_metric}) colored by GMM compartments",
                 out_base=os.path.join(plots_dir, "B2_umap_color_gmm"),
                 cfg=cfg,
-                palette=None,
+                palette=GMM_COMPARTMENT_PALETTE,
             )
             plot_umap_depth(
                 emb=emb,
@@ -1461,10 +1551,8 @@ def main() -> None:
                 cfg=cfg,
             )
 
-            for feat in biochem_cols:
-                v = pd.to_numeric(m_bio[feat], errors="coerce")
-                if v.notna().sum() < 3:
-                    continue
+            for feat in biochem_all_cols:
+                v = pd.to_numeric(m_sp[feat], errors="coerce")
                 color = BIOCHEM_COLOR_MAP.get(feat, "#4A4A4A")
                 plot_umap_bubble_single_color(
                     emb=emb,
@@ -1518,6 +1606,44 @@ def main() -> None:
             conc2 = conc[conc_cols].copy()
             conc2 = conc2[conc2["PC"].astype(str).isin([str(x) for x in pc_cols])]
             conc2.to_csv(os.path.join(tables_dir, "pc_loading_concentration_merged.csv"), index=False)
+    
+    # ----------------------------
+    # NEW: PC1 vs PC2 scatter overlays
+    # ----------------------------
+    if "PC1" in m.columns and "PC2" in m.columns:
+        # 1) PC1 vs PC2 colored by O2 compartments (fixed palette)
+        plot_pc1_vs_pc2_categorical(
+            df=m,
+            pc1="PC1",
+            pc2="PC2",
+            label_col="o2_compartment",
+            palette=O2_COMPARTMENT_PALETTE,
+            title="PC1 vs PC2 (color = O2 compartment)",
+            out_base=os.path.join(plots_dir, "D1_pc1_vs_pc2__color_o2"),
+            cfg=cfg,
+            s=14.0,
+            alpha=0.70,
+        )
+
+        # 2) PC1 vs PC2 colored by GMM compartments (categorical grayscale)
+        # Use existing GMM palette if already created; otherwise build deterministically from labels
+        if "GMM_COMPARTMENT_PALETTE" in locals() and isinstance(GMM_COMPARTMENT_PALETTE, dict) and len(GMM_COMPARTMENT_PALETTE) > 0:
+            gmm_pal = {str(k): v for k, v in GMM_COMPARTMENT_PALETTE.items()}
+        else:
+            gmm_pal = build_categorical_grayscale_palette(m["component"])
+
+        plot_pc1_vs_pc2_categorical(
+            df=m,
+            pc1="PC1",
+            pc2="PC2",
+            label_col="component",
+            palette=gmm_pal,
+            title="PC1 vs PC2 (color = GMM compartment)",
+            out_base=os.path.join(plots_dir, "D2_pc1_vs_pc2__color_gmm"),
+            cfg=cfg,
+            s=14.0,
+            alpha=0.70,
+        )
 
     # ----------------------------
     # Final print
