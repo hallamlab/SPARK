@@ -256,6 +256,7 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
@@ -282,7 +283,7 @@ except Exception:
 O2_COMPARTMENT_PALETTE = {
     "oxic": "red",
     "dysoxic": "green",
-    "suboxic": "teal",
+    "suboxic": "lightblue",
     "anoxic": "purple",
 }
 
@@ -294,7 +295,15 @@ BIOCHEM_COLOR_MAP = {
     "Nitrous Oxide": "#0C5196",
     "Ammonium": "#7570B3",
     "Hydrogen Sulfide": "#D95F02",
+    "Dimethyl Sulfide": "#E6AB02",
     "Methane": "violet",
+    "Fe": "red",
+    "Fluorescence": "limegreen",
+    "Temperature": "gray",
+    "Salinity": "darkviolet",
+    "Phosphate": "brown",
+    "Silicate": "peru",
+    "PAR": "tan",
 }
 
 
@@ -415,7 +424,7 @@ def parse_args() -> Config:
 
     ap.add_argument("--bubble-q-low", type=float, default=0.01)
     ap.add_argument("--bubble-q-high", type=float, default=0.99)
-    ap.add_argument("--bubble-size-min", type=float, default=8.0)
+    ap.add_argument("--bubble-size-min", type=float, default=1.0)
     ap.add_argument("--bubble-size-max", type=float, default=120.0)
 
     ap.add_argument("--pc-cols", default=None, help="Optional comma-separated PCs for stats (e.g. 'PC1,PC2,PC3'). If omitted, auto-detect.")
@@ -616,13 +625,39 @@ def scatter_depth_profile(
     classes = sorted(d[color_col].astype("object").fillna("NA").unique(), key=lambda z: str(z))
     for cls in classes:
         sub = d[d[color_col].astype("object").fillna("NA") == cls]
-        ax.scatter(sub[xcol].values, sub[ycol].values, s=16, alpha=0.40, label=str(cls), color=color_map.get(cls, None), linewidth=0)
+        ax.scatter(sub[xcol].values,
+                   sub[ycol].values,
+                   s=16, alpha=0.40,
+                   label=str(cls),
+                   color=color_map.get(cls, None),
+                   linewidths=0)
 
     ax.invert_yaxis()
     ax.set_xlabel(xcol)
     ax.set_ylabel("Depth (m)")
     ax.set_title(title)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+
+    handles = []
+    for k, c in color_map.items():
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="None",
+                markersize=6,
+                markerfacecolor=c,
+                markeredgecolor="none",
+                label=str(k),
+            )
+        )
+
+    ax.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+    )
 
     save_all_formats(fig, out_base, cfg)
 
@@ -649,7 +684,7 @@ def scatter_depth_profile_categorical(
 
     # build grayscale colors (no white, no black)
     n = len(uniq)
-    grays = np.linspace(0.15, 0.85, n)  # avoid 0.0 (black) and 1.0 (white)
+    grays = np.linspace(0.0, 1.0, n)  # avoid 0.0 (black) and 1.0 (white)
     label_to_color = {
         lab: (g, g, g) for lab, g in zip(uniq, grays)
     }
@@ -663,9 +698,11 @@ def scatter_depth_profile_categorical(
         ax.scatter(sub[xcol].values,
                    sub[ycol].values, 
                    s=14,
-                   alpha=0.65,
+                   alpha=0.40,
                    label=str(cat),
                    color=label_to_color[cat],
+                   linewidths=0.25,
+                   edgecolors="gray"
                    )
 
     ax.invert_yaxis()
@@ -695,12 +732,50 @@ def plot_umap_categorical(
     for cls in classes:
         mask = (lab == cls).to_numpy()
         c = palette.get(cls, None) if palette else None
-        ax.scatter(emb[mask, 0], emb[mask, 1], s=14, alpha=0.70, label=str(cls), color=c)
+        ax.scatter(emb[mask, 0], emb[mask, 1],
+                   s=14, alpha=0.40,
+                   label=str(cls), 
+                   color=c,
+                   linewidths=0.25,
+                   edgecolors="gray"
+                   )
 
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
     ax.set_title(title)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+
+    if palette is not None:
+        present = set(lab.unique())
+
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="None",
+                markersize=6,
+                markerfacecolor=color,
+                markeredgecolor="gray",
+                markeredgewidth=0.25,
+                label=str(key),
+            )
+            for key, color in palette.items()
+            if key in present
+        ]
+
+        ax.legend(
+            handles=handles,
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+        )
+    else:
+        ax.legend(
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+        )
+
     save_all_formats(fig, out_base, cfg)
 
 
@@ -715,7 +790,7 @@ def plot_umap_depth(
     ax = plt.gca()
 
     d = pd.to_numeric(depth, errors="coerce")
-    sc = ax.scatter(emb[:, 0], emb[:, 1], s=14, alpha=0.75, c=d, cmap=depth_cmap())
+    sc = ax.scatter(emb[:, 0], emb[:, 1], s=14, alpha=0.40, c=d, cmap=depth_cmap())
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
     ax.set_title(title)
@@ -761,7 +836,7 @@ def plot_umap_bubble_single_color(
     ax = plt.gca()
 
     sizes = scale_bubble_sizes(values, cfg.bubble_q_low, cfg.bubble_q_high, cfg.bubble_size_min, cfg.bubble_size_max)
-    ax.scatter(emb[:, 0], emb[:, 1], s=sizes, alpha=0.55, color=color, edgecolors="none")
+    ax.scatter(emb[:, 0], emb[:, 1], s=sizes, alpha=0.40, color=color, edgecolors="none")
 
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
@@ -821,13 +896,38 @@ def plot_pc1_vs_pc2_categorical(
             alpha=alpha,
             label=str(cls),
             color=c,
-            edgecolors="none",
+            linewidths=0.25,
+            edgecolors="gray",
         )
 
     ax.set_xlabel(pc1)
     ax.set_ylabel(pc2)
     ax.set_title(title)
-    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+
+    present = set(lab.unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.25,
+            label=str(key),
+        )
+        for key, color in palette.items()
+        if str(key) in present
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+    )
 
     save_all_formats(fig, out_base, cfg)
 
@@ -1622,7 +1722,7 @@ def main() -> None:
             out_base=os.path.join(plots_dir, "D1_pc1_vs_pc2__color_o2"),
             cfg=cfg,
             s=14.0,
-            alpha=0.70,
+            alpha=0.40,
         )
 
         # 2) PC1 vs PC2 colored by GMM compartments (categorical grayscale)
@@ -1642,7 +1742,7 @@ def main() -> None:
             out_base=os.path.join(plots_dir, "D2_pc1_vs_pc2__color_gmm"),
             cfg=cfg,
             s=14.0,
-            alpha=0.70,
+            alpha=0.40,
         )
 
     # ----------------------------

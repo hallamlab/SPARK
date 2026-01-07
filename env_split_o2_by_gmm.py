@@ -56,6 +56,7 @@ import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import pairwise_distances
@@ -67,8 +68,8 @@ from sklearn.metrics import pairwise_distances
 
 O2_COMPARTMENT_PALETTE = {
     "oxic": "red",
-    "dysoxic": "lightblue",
-    "suboxic": "green",
+    "dysoxic": "green",
+    "suboxic": "lightblue",
     "anoxic": "purple",
 }
 
@@ -200,7 +201,7 @@ def parse_args() -> Config:
     )
     ap.add_argument("--borderline-max-prob", type=float, default=None)
     ap.add_argument("--core-min-prob", type=float, default=None)
-    ap.add_argument("--reassign-radius-quantile", type=float, default=0.95)
+    ap.add_argument("--reassign-radius-quantile", type=float, default=0.90)
     ap.add_argument("--reassign-min-core-n", type=int, default=20)
 
     ap.add_argument("--plots", action="store_true", help="Write summary plots per O2 compartment.")
@@ -987,7 +988,31 @@ def plot_pc_scatter_subcompartments(
     ax.set_xlabel(pc_x)
     ax.set_ylabel(pc_y)
     ax.set_title(f"{o2}: PC scatter by subcompartment")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8, frameon=False)
+    present = set(d["o2_subcompartment_final"].astype(str).unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.5,
+            label=str(key),
+        )
+        for key, color in sub_palette.items()
+        if str(key) in present
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        fontsize=7,
+        frameon=False,
+    )
     fig.subplots_adjust(right=0.75)
 
     outbase = os.path.join(plots_dir, f"o2_{o2}_pc_scatter_subcompartments_{pc_x}_vs_{pc_y}")
@@ -1037,7 +1062,31 @@ def plot_pc_scatter_all_subcompartments(
     ax.set_xlabel(pc_x)
     ax.set_ylabel(pc_y)
     ax.set_title("All subcompartments: PC scatter (EDA)")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=7, frameon=False)
+    present = set(d["o2_subcompartment_final"].astype(str).unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.5,
+            label=str(key),
+        )
+        for key, color in sub_palette.items()
+        if str(key) in present
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        fontsize=7,
+        frameon=False,
+    )
     fig.subplots_adjust(right=0.70)
 
     outbase = os.path.join(plots_dir, f"EDA_all_subcompartments_pc_scatter_{pc_x}_vs_{pc_y}")
@@ -1098,7 +1147,31 @@ def plot_depth_profile_all_subcompartments(
     ax.set_xlabel(value_col)
     ax.set_ylabel(depth_col)
     ax.set_title(f"All subcompartments: depth profile of {value_col} (EDA)")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=7, frameon=False)
+    present = set(d["o2_subcompartment_final"].astype(str).unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.5,
+            label=str(key),
+        )
+        for key, color in sub_palette.items()
+        if str(key) in present
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        fontsize=7,
+        frameon=False,
+    )
     fig.subplots_adjust(right=0.70)
 
     outbase = os.path.join(plots_dir, f"EDA_all_subcompartments_depth_profile_{value_col}")
@@ -1214,7 +1287,31 @@ def plot_depth_profile_subcompartments(
     ax.set_xlabel(value_col)
     ax.set_ylabel(depth_col)
     ax.set_title(f"{o2}: depth profile colored by subcompartment")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8, frameon=False)
+    present = set(d["o2_subcompartment_final"].astype(str).unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.5,
+            label=str(key),
+        )
+        for key, color in sub_palette.items()
+        if str(key) in present
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        fontsize=8,
+        frameon=False,
+    )
     fig.subplots_adjust(right=0.75)
 
     outbase = os.path.join(plots_dir, f"o2_{o2}_depth_profile_{value_col}_by_subcompartment")
@@ -1265,12 +1362,32 @@ def plot_umap_subcompartments(
     ax.set_xlabel("UMAP1")
     ax.set_ylabel("UMAP2")
     ax.set_title("UMAP embedding colored by final O₂ × GMM subcompartments")
+    present = set(d["o2_subcompartment_final"].astype(str).unique())
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="None",
+            markersize=6,
+            markerfacecolor=color,
+            markeredgecolor="gray",
+            markeredgewidth=0.4,
+            label=str(key),
+        )
+        for key, color in sub_palette.items()
+        if str(key) in present
+    ]
+
     ax.legend(
+        handles=handles,
         loc="upper left",
         bbox_to_anchor=(1.02, 1.0),
         fontsize=8,
         frameon=False,
     )
+
     fig.subplots_adjust(right=0.72)
 
     outbase = os.path.join(plots_dir, "umap_final_subcompartments")
@@ -1585,6 +1702,12 @@ def main() -> None:
 
         # Build COMPLETE deterministic palette (covers every '<o2>__gmmK' and '<o2>__other')
         pal_df = build_full_subcompartment_palette(m, cfg, sat_floor=0.50)
+        order_map = {v: i for i, v in enumerate(O2_COMPARTMENT_PALETTE.keys())}
+        pal_df = pal_df.sort_values(
+            by=["o2_compartment", "label"],
+            key=lambda s: s.map(order_map) if s.name == "o2_compartment" else s
+        )
+
         pal_df.to_csv(os.path.join(tables_dir, "subcompartment_palette.csv"), index=False)  # audit/stability
         sub_palette = palette_df_to_dict(pal_df)
 

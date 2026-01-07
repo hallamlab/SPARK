@@ -227,7 +227,15 @@ BIOCHEM_COLOR_MAP = {
     "Nitrous Oxide": "#0C5196",
     "Ammonium": "#7570B3",
     "Hydrogen Sulfide": "#D95F02",
-    "Methane": "violet",    
+    "Dimethyl Sulfide": "#E6AB02",
+    "Methane": "violet",
+    "Fe": "red",
+    "Fluorescence": "limegreen",
+    "Temperature": "gray",
+    "Salinity": "darkviolet",
+    "Phosphate": "brown",
+    "Silicate": "peru",
+    "PAR": "tan",
 }
 
 # -----------------------------
@@ -301,19 +309,19 @@ def parse_args() -> RunConfig:
     ap.add_argument("--outdir", required=True, help="Output directory.")
     ap.add_argument("--sep", default="\t", help="Delimiter (default: tab). Use ',' for CSV.")
 
-    ap.add_argument("--n-components", type=int, default=5, help="Number of PCA components.")
+    ap.add_argument("--n-components", type=int, default=10, help="Number of PCA components (defaul 10).")
     ap.add_argument("--log1p", action="store_true", help="Apply log1p to features after cleaning (negatives clamped to 0).")
 
     ap.add_argument(
         "--impute",
         choices=["median", "mean", "knn", "iterative"],
-        default="iterative",
+        default="median",
         help="Imputation strategy.",
     )
     ap.add_argument(
         "--impute-scope",
         choices=["global", "by_depth"],
-        default="global",
+        default="by_depth",
         help="Imputation scope. 'by_depth' learns imputation within anchored depth groups (recommended for profiles).",
     )
     ap.add_argument(
@@ -328,13 +336,13 @@ def parse_args() -> RunConfig:
     ap.add_argument(
         "--dropna-row-thresh",
         type=float,
-        default=0.4,
+        default=0.5,
         help="Drop rows if missing fraction among features is > this value (default 0.4).",
     )
     ap.add_argument(
         "--dropna-col-thresh",
         type=float,
-        default=0.4,
+        default=0.5,
         help="Drop feature columns if missing fraction is > this value (default 0.4).",
     )
     ap.add_argument("--random-state", type=int, default=42, help="Random state for reproducibility.")
@@ -379,17 +387,17 @@ def parse_args() -> RunConfig:
     # ---- PC selection flags ----
     ap.add_argument("--pc-selection", action="store_true", help="Run keep-able PC selection + feature clustering.")
     ap.add_argument("--pcsel-parallel-B", type=int, default=500, help="Parallel analysis replicates (default 500).")
-    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.95, help="Null quantile (default 0.95).")
+    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.90, help="Null quantile (default 0.90).")
 
-    ap.add_argument("--pcsel-support-min-cov", type=float, default=0.70, help="Min per-feature coverage threshold (default 0.70).")
-    ap.add_argument("--pcsel-support-median-cov", type=float, default=0.70, help="Median coverage threshold on top features (default 0.70).")
-    ap.add_argument("--pcsel-support-min-n", type=int, default=5, help="Min number of well-covered top features (default 6).")
+    ap.add_argument("--pcsel-support-min-cov", type=float, default=0.50, help="Min per-feature coverage threshold (default 0.50).")
+    ap.add_argument("--pcsel-support-median-cov", type=float, default=0.60, help="Median coverage threshold on top features (default 0.60).")
+    ap.add_argument("--pcsel-support-min-n", type=int, default=3, help="Min number of well-covered top features (default 3).")
 
     ap.add_argument("--pcsel-top-frac", type=float, default=0.15, help="Fraction of features for top-loading set Tk (default 0.15).")
-    ap.add_argument("--pcsel-top-min", type=int, default=8, help="Minimum size of top-loading set Tk (default 8).")
+    ap.add_argument("--pcsel-top-min", type=int, default=3, help="Minimum size of top-loading set Tk (default 3).")
 
     ap.add_argument("--pcsel-feature-clusters", type=int, default=8, help="Number of feature clusters (default 8).")
-    ap.add_argument("--pcsel-coherence-min-frac", type=float, default=0.30, help="Min dominant cluster fraction in Tk (default 0.60).")
+    ap.add_argument("--pcsel-coherence-min-frac", type=float, default=0.30, help="Min dominant cluster fraction in Tk (default 0.30).")
 
     ap.add_argument(
         "--pcsel-block-col",
@@ -409,7 +417,7 @@ def parse_args() -> RunConfig:
     ap.add_argument(
         "--pcsel-pr-max",
         type=float,
-        default=8.0,
+        default=8,
         help=(
             "Max participation ratio to treat a PC as 'concentrated' (roughly 'effective #features'). "
             "Default 8."
@@ -417,8 +425,8 @@ def parse_args() -> RunConfig:
     )
 
     ap.add_argument("--pcsel-stability-R", type=int, default=200, help="Stability bootstrap replicates (default 200).")
-    ap.add_argument("--pcsel-stability-min-load-corr", type=float, default=0.85, help="Min median abs corr for loadings (default 0.85).")
-    ap.add_argument("--pcsel-stability-min-score-corr", type=float, default=0.80, help="Min median abs corr for scores (default 0.80).")
+    ap.add_argument("--pcsel-stability-min-load-corr", type=float, default=0.70, help="Min median abs corr for loadings (default 0.70).")
+    ap.add_argument("--pcsel-stability-min-score-corr", type=float, default=0.65, help="Min median abs corr for scores (default 0.65).")
 
     ns = ap.parse_args()
 
@@ -1078,8 +1086,7 @@ def plot_pc_scatter(scores_df: pd.DataFrame, outpath: str, time_col: str) -> Non
     if time_col in scores_df.columns:
         t = pd.to_datetime(scores_df[time_col], errors="coerce")
         rank = t.rank(method="first").fillna(0).to_numpy()
-        plt.scatter(scores_df["PC1"], scores_df["PC2"], c=rank)
-        plt.colorbar(label="Time rank")
+        plt.scatter(scores_df["PC1"], scores_df["PC2"], c='gray', alpha=0.4)
     else:
         plt.scatter(scores_df["PC1"], scores_df["PC2"])
     plt.xlabel("PC1")

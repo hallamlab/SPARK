@@ -350,18 +350,18 @@ def parse_args() -> RunConfig:
     ap.add_argument("--pc-explicit", default=None,
                     help="If pc-use-mode=explicit: comma-separated list like 'PC1,PC2,PC3'.")
 
-    ap.add_argument("--standardize-pc-space", action="store_true",
+    ap.add_argument("--standardize-pc-space", action="store_true", default=True,
                     help="Standardize selected PC columns before GMM (recommended).")
 
     ap.add_argument("--depth-norm", choices=["global"], default="global",
                     help="Depth normalization mode. Currently: global zscore of depth feature (default global).")
     ap.add_argument("--depth-norm-col", default=None,
                     help="Which depth column to use for depth feature in density_space=pc_depthnorm (default anchored depth col).")
-    ap.add_argument("--density-space", choices=["pc", "pc_depthnorm"], default="pc_depthnorm",
+    ap.add_argument("--density-space", choices=["pc", "pc_depthnorm"], default="pc",
                     help="Space used for density diagnostics (default pc_depthnorm).")
 
-    ap.add_argument("--K", type=int, default=5, help="Final number of components (default 5).")
-    ap.add_argument("--covariance-type", choices=["full", "tied", "diag", "spherical"], default="full",
+    ap.add_argument("--K", type=int, required=True, help="Final number of components.")
+    ap.add_argument("--covariance-type", choices=["full", "tied", "diag", "spherical"], default="tied",
                     help="GMM covariance type (default full).")
     ap.add_argument("--n-init", type=int, default=30, help="GMM n_init (default 30).")
     ap.add_argument("--max-iter", type=int, default=1000, help="GMM max_iter (default 1000).")
@@ -376,7 +376,7 @@ def parse_args() -> RunConfig:
     ap.add_argument("--episodic-block-col", default="Cruise", help="Block col for smoothing (default Cruise).")
     ap.add_argument("--episodic-sort-cols", default="date,Depth_anchored",
                     help="Within-block sort cols, comma-separated (default 'date,Depth_anchored').")
-    ap.add_argument("--episodic-sticky-prob", type=float, default=0.98,
+    ap.add_argument("--episodic-sticky-prob", type=float, default=0.90,
                     help="Self-transition probability in sticky smoothing (default 0.98).")
     ap.add_argument("--episodic-apply-to", choices=["all", "low_conf_only"], default="low_conf_only",
                     help="Smooth all samples or only low-confidence ones (default low_conf_only).")
@@ -386,10 +386,10 @@ def parse_args() -> RunConfig:
     # persistent vs episodic labeling thresholds (applied after K fixed)
     ap.add_argument("--persistent-min-frac-samples", type=float, default=0.18,
                     help="Persistent if frac_samples >= this (default 0.18).")
-    ap.add_argument("--persistent-min-n-cruises", type=int, default=50,
-                    help="Persistent if n_cruises >= this (default 50).")
-    ap.add_argument("--persistent-min-span-days", type=int, default=1000,
-                    help="Persistent if span_days >= this (default 1000).")
+    ap.add_argument("--persistent-min-n-cruises", type=int, default=10,
+                    help="Persistent if n_cruises >= this (default 20).")
+    ap.add_argument("--persistent-min-span-days", type=int, default=365,
+                    help="Persistent if span_days >= this (default 20).")
 
     ap.add_argument("--episodic-max-frac-samples", type=float, default=0.06,
                     help="Episodic if frac_samples <= this (default 0.06).")
@@ -758,20 +758,23 @@ def label_persistent_episodic(
 
 
 def covariance_diagnostics(gmm: GaussianMixture) -> pd.DataFrame:
-    K = gmm.n_components
+    K = int(gmm.n_components)
+    cov_type = gmm.covariance_type
     covs = gmm.covariances_
 
     rows = []
+    p = int(gmm.means_.shape[1])
+
     for k in range(K):
-        C = covs[k]
-        if gmm.covariance_type == "full":
-            M = C
-        elif gmm.covariance_type == "tied":
-            M = covs
-        elif gmm.covariance_type == "diag":
-            M = np.diag(C)
-        else:
-            M = np.eye(gmm.means_.shape[1]) * float(C)
+        # Build an actual (p x p) matrix M for component k
+        if cov_type == "full":
+            M = covs[k]                      # (p, p)
+        elif cov_type == "tied":
+            M = covs                         # (p, p), shared for all k
+        elif cov_type == "diag":
+            M = np.diag(covs[k])             # (p, p)
+        else:  # spherical
+            M = np.eye(p) * float(covs[k])   # (p, p)
 
         try:
             tr = float(np.trace(M))
@@ -786,6 +789,7 @@ def covariance_diagnostics(gmm: GaussianMixture) -> pd.DataFrame:
             "cov_det": det,
             "cov_condition_number": cond,
         })
+
     return pd.DataFrame(rows)
 
 

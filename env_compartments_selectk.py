@@ -305,13 +305,13 @@ def parse_args() -> Config:
     ap.add_argument("--pc-explicit", default=None,
                     help="Comma-separated PC list for pc-use-mode explicit, e.g. 'PC1,PC2,PC3'")
 
-    ap.add_argument("--standardize-pc-space", action="store_true",
+    ap.add_argument("--standardize-pc-space", action="store_true", default=True,
                     help="Standardize selected PC columns before GMM (recommended).")
 
     ap.add_argument("--k-min", type=int, default=2)
     ap.add_argument("--k-max", type=int, default=16)
 
-    ap.add_argument("--covariance-type", choices=["full", "diag", "tied", "spherical"], default="full")
+    ap.add_argument("--covariance-type", choices=["full", "diag", "tied", "spherical"], default="tied")
     ap.add_argument("--n-init", type=int, default=20, help="GMM n_init (default 20)")
     ap.add_argument("--max-iter", type=int, default=500, help="GMM max_iter (default 500)")
     ap.add_argument("--reg-covar", type=float, default=1e-6, help="GMM reg_covar (default 1e-6)")
@@ -320,13 +320,13 @@ def parse_args() -> Config:
     ap.add_argument("--cv-folds", type=int, default=5,
                     help="K-fold CV for test log-likelihood. Set 1 to disable (default 5).")
 
-    ap.add_argument("--stability-R", type=int, default=100,
+    ap.add_argument("--stability-R", type=int, default=200,
                     help="Block-bootstrap replicates for stability (default 100).")
     ap.add_argument("--stability-block-col", default="Cruise",
                     help="Column for block bootstrap (default Cruise).")
     ap.add_argument("--stability-oob-min", type=int, default=200,
                     help="Min out-of-bag samples required to compute ARI for a replicate (default 200).")
-    ap.add_argument("--stability-min-ari", type=float, default=0.70,
+    ap.add_argument("--stability-min-ari", type=float, default=0.65,
                     help="Median ARI threshold (default 0.70).")
 
     ap.add_argument("--min-cluster-frac", type=float, default=0.02,
@@ -334,8 +334,8 @@ def parse_args() -> Config:
 
     ap.add_argument("--select-by", choices=["icl", "bic", "cv"], default="icl",
                     help="Primary selection metric (default icl).")
-    ap.add_argument("--select-delta", type=float, default=10.0,
-                    help="Choose smallest K within delta of best metric (default 10). "
+    ap.add_argument("--select-delta", type=float, default=5,
+                    help="Choose smallest K within delta of best metric (default 5). "
                          "For ICL/BIC this is in IC units; for CV loglik it's absolute loglik units.")
 
     ns = ap.parse_args()
