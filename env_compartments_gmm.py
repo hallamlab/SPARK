@@ -374,12 +374,12 @@ def parse_args() -> RunConfig:
     ap.add_argument("--episodic-smoothing", action="store_true",
                     help="Apply sticky smoothing within each block (e.g., Cruise) to respect episodic structure.")
     ap.add_argument("--episodic-block-col", default="Cruise", help="Block col for smoothing (default Cruise).")
-    ap.add_argument("--episodic-sort-cols", default="date,Depth_anchored",
-                    help="Within-block sort cols, comma-separated (default 'date,Depth_anchored').")
-    ap.add_argument("--episodic-sticky-prob", type=float, default=0.90,
-                    help="Self-transition probability in sticky smoothing (default 0.98).")
-    ap.add_argument("--episodic-apply-to", choices=["all", "low_conf_only"], default="low_conf_only",
-                    help="Smooth all samples or only low-confidence ones (default low_conf_only).")
+    ap.add_argument("--episodic-sort-cols", default="Depth_anchored",
+                    help="Within-block sort cols, comma-separated (default 'Depth_anchored').")
+    ap.add_argument("--episodic-sticky-prob", type=float, default=0.85,
+                    help="Self-transition probability in sticky smoothing (default 0.85).")
+    ap.add_argument("--episodic-apply-to", choices=["all", "low_conf_only"], default="all",
+                    help="Smooth all samples or only low-confidence ones (default all).")
     ap.add_argument("--episodic-lowconf-maxprob", type=float, default=0.80,
                     help="If apply_to=low_conf_only, max_prob < this is low-confidence (default 0.80).")
 
