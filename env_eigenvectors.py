@@ -186,6 +186,7 @@ pd.set_option('future.no_silent_downcasting', True)
 
 DEFAULT_ID_COL = "cruise_year_month_depth"
 DERIVED_TIME_COL = "date"
+DERIVED_SEASON_COL = "Season"
 
 YEAR_COL = "Year"
 MONTH_COL = "Month"
@@ -257,10 +258,12 @@ class RunConfig:
     include_depth_as_feature: bool
     n_components: int
     log1p: bool
+    negatives: str
 
     # Imputation
     impute: str
     impute_scope: str
+    depth_interp_block_col: str
     impute_min_group_size: int
     knn_k: int
     iterative_max_iter: int
@@ -311,18 +314,41 @@ def parse_args() -> RunConfig:
 
     ap.add_argument("--n-components", type=int, default=10, help="Number of PCA components (defaul 10).")
     ap.add_argument("--log1p", action="store_true", help="Apply log1p to features after cleaning (negatives clamped to 0).")
+    ap.add_argument(
+        "--negatives",
+        choices=["clamp", "impute"],
+        default="clamp",
+        help=(
+            "How to handle negative feature values. "
+            "'clamp' sets negatives to 0 (current behavior). "
+            "'impute' treats negatives as missing (NaN) and fills them via the selected imputer."
+        ),
+    )
 
     ap.add_argument(
         "--impute",
-        choices=["median", "mean", "knn", "iterative"],
+        choices=["median", "mean", "knn", "iterative", "depth_interp"],
         default="median",
-        help="Imputation strategy.",
+        help=(
+            "Imputation strategy. "
+            "'depth_interp' does per-feature linear interpolation along Depth (optionally within a block), "
+            "then falls back to global median if a feature is entirely missing in a group."
+        ),
     )
+
     ap.add_argument(
         "--impute-scope",
         choices=["global", "by_depth"],
         default="by_depth",
         help="Imputation scope. 'by_depth' learns imputation within anchored depth groups (recommended for profiles).",
+    )
+    ap.add_argument(
+        "--depth-interp-block-col",
+        default="ALL",
+        help=(
+            "Metadata column to block depth interpolation by when --impute depth_interp is used. "
+            "Examples: Cruise, Cast, Station. Use 'ALL' to interpolate across all rows (not recommended)."
+        ),
     )
     ap.add_argument(
         "--impute-min-group-size",
@@ -336,13 +362,13 @@ def parse_args() -> RunConfig:
     ap.add_argument(
         "--dropna-row-thresh",
         type=float,
-        default=0.5,
+        default=0.4,
         help="Drop rows if missing fraction among features is > this value (default 0.4).",
     )
     ap.add_argument(
         "--dropna-col-thresh",
         type=float,
-        default=0.5,
+        default=0.4,
         help="Drop feature columns if missing fraction is > this value (default 0.4).",
     )
     ap.add_argument("--random-state", type=int, default=42, help="Random state for reproducibility.")
@@ -387,7 +413,7 @@ def parse_args() -> RunConfig:
     # ---- PC selection flags ----
     ap.add_argument("--pc-selection", action="store_true", help="Run keep-able PC selection + feature clustering.")
     ap.add_argument("--pcsel-parallel-B", type=int, default=500, help="Parallel analysis replicates (default 500).")
-    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.90, help="Null quantile (default 0.90).")
+    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.90, help="Null quantile (default 0.90rqq).")
 
     ap.add_argument("--pcsel-support-min-cov", type=float, default=0.50, help="Min per-feature coverage threshold (default 0.50).")
     ap.add_argument("--pcsel-support-median-cov", type=float, default=0.60, help="Median coverage threshold on top features (default 0.60).")
@@ -455,9 +481,11 @@ def parse_args() -> RunConfig:
         include_depth_as_feature=ns.include_depth_as_feature,
         n_components=ns.n_components,
         log1p=ns.log1p,
+        negatives=ns.negatives,
 
         impute=ns.impute,
         impute_scope=ns.impute_scope,
+        depth_interp_block_col=ns.depth_interp_block_col,
         impute_min_group_size=ns.impute_min_group_size,
         knn_k=ns.knn_k,
         iterative_max_iter=ns.iterative_max_iter,
@@ -548,6 +576,13 @@ def clamp_negatives_to_zero(X: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
         X2[neg_mask] = 0.0
     return X2, n_clamped
 
+def negatives_to_nan(X: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    X2 = X.copy()
+    neg_mask = X2 < 0
+    n_neg = int(neg_mask.sum().sum())
+    if n_neg > 0:
+        X2[neg_mask] = np.nan
+    return X2, n_neg
 
 def maybe_log1p(X: pd.DataFrame) -> pd.DataFrame:
     return np.log1p(X)
@@ -912,9 +947,313 @@ def drop_sparse(
     return df_num.loc[keep_rows].copy(), kept_feats, dropped
 
 
+# --- Season binning (for seasonal-aware fallback imputation) ---
+def month_to_season(m: float | int | None) -> str:
+    """
+    Map month -> meteorological season:
+      DJF, MAM, JJA, SON
+    """
+    try:
+        mi = int(m)
+    except Exception:
+        return "NA"
+
+    if mi in (12, 1, 2):
+        return "DJF"
+    if mi in (3, 4, 5):
+        return "MAM"
+    if mi in (6, 7, 8):
+        return "JJA"
+    if mi in (9, 10, 11):
+        return "SON"
+    return "NA"
+
+
+def make_season_column(df: pd.DataFrame, *, time_col: str) -> pd.DataFrame:
+    """
+    Add Season column if possible.
+    Priority:
+      1) If time_col exists and is parseable -> use dt.month
+      2) Else if Month exists -> use Month
+      3) Else Season='NA'
+    """
+    out = df.copy()
+
+    if DERIVED_SEASON_COL in out.columns:
+        return out
+
+    if time_col in out.columns:
+        t = pd.to_datetime(out[time_col], errors="coerce")
+        m = t.dt.month
+        out[DERIVED_SEASON_COL] = m.apply(month_to_season)
+        return out
+
+    if MONTH_COL in out.columns:
+        m = pd.to_numeric(out[MONTH_COL], errors="coerce")
+        out[DERIVED_SEASON_COL] = m.apply(month_to_season)
+        return out
+
+    out[DERIVED_SEASON_COL] = "NA"
+    return out
+
 # -----------------------------
 # Imputation
 # -----------------------------
+
+def impute_matrix_depth_interp(
+    X: pd.DataFrame,
+    depth: pd.Series,
+    block: Optional[pd.Series],
+    *,
+    season: Optional[pd.Series] = None,
+    depth_anchored: Optional[pd.Series] = None,
+    fallback: str = "median",
+    write_cell_provenance: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.DataFrame, pd.DataFrame]:
+    """
+    Depth-interpolation imputation (physically sensible for profiles), with hierarchy:
+
+    (1) Within-block depth interpolation along Depth.
+    (2) If a feature is entirely missing within a block -> fill from (Season, Depth_anchored).
+    (3) If still missing -> fill from (Depth_anchored) across all seasons.
+    (4) Final backstop: global fill (median/mean).
+
+    VERBOSE logging:
+      - block_audit_df: per-block missingness + how many cells filled by each stage
+      - fallback_audit_df: per (feature) counts for seasonal-depth vs depth-only vs global
+      - cell_provenance_df: one row per imputed cell (row_index, block, feature, method, donor keys)
+
+    Returns:
+      (X_imputed, block_audit_df, summary_series, fallback_audit_df, cell_provenance_df)
+    """
+    if fallback not in ("median", "mean"):
+        raise ValueError("fallback must be 'median' or 'mean'")
+
+    X_out = X.copy()
+
+    # Normalize block
+    if block is None:
+        block = pd.Series(["ALL"] * len(X_out), index=X_out.index)
+    else:
+        block = block.astype(str).fillna("NA")
+
+    # Numeric depth for interpolation
+    depth_num = pd.to_numeric(depth, errors="coerce")
+
+    # Season and depth_anchored required for the hierarchical fallback
+    if season is None:
+        season = pd.Series(["NA"] * len(X_out), index=X_out.index)
+    else:
+        season = season.astype(str).fillna("NA")
+
+    if depth_anchored is None:
+        depth_anchored = pd.Series(["NA"] * len(X_out), index=X_out.index)
+    else:
+        # keep as string key to avoid float formatting mismatches
+        depth_anchored = depth_anchored.astype(str).fillna("NA")
+
+    # Global fallback per feature (final backstop)
+    global_fill = X.median(axis=0, skipna=True) if fallback == "median" else X.mean(axis=0, skipna=True)
+
+    # Precompute fallback medians/means from observed data ONLY (do not use imputed values as donors)
+    # (Season, Depth_anchored) -> per-feature fill
+    donor_key_sd = pd.DataFrame({
+        "_season": season,
+        "_danch": depth_anchored,
+    }, index=X.index)
+
+    # compute per-group fill vectors
+    if fallback == "median":
+        sd_fill = X.join(donor_key_sd).groupby(["_season", "_danch"]).median(numeric_only=True)
+        d_fill = X.join(donor_key_sd).groupby(["_danch"]).median(numeric_only=True)
+    else:
+        sd_fill = X.join(donor_key_sd).groupby(["_season", "_danch"]).mean(numeric_only=True)
+        d_fill = X.join(donor_key_sd).groupby(["_danch"]).mean(numeric_only=True)
+
+    # Verbose logging containers
+    block_audit_rows = []
+    fallback_audit_rows = []
+    cell_rows = []
+
+    # Helper for cell provenance (optional but requested)
+    def _log_cell(row_i, feat, method, b, di, da, seas, donor_seas=None, donor_da=None):
+        if not write_cell_provenance:
+            return
+        cell_rows.append({
+            "row_index": int(row_i),
+            "block": str(b),
+            "depth": (float(di) if pd.notna(di) else np.nan),
+            "Depth_anchored": str(da),
+            "Season": str(seas),
+            "feature": str(feat),
+            "method": str(method),
+            "donor_season": (str(donor_seas) if donor_seas is not None else ""),
+            "donor_depth_anchored": (str(donor_da) if donor_da is not None else ""),
+        })
+
+    # Do per-block interpolation, then hierarchical fallback
+    for b, idx in block.groupby(block).groups.items():
+        rows = list(idx)
+        Xb = X_out.loc[rows].copy()
+        db = depth_num.loc[rows]
+        sb = season.loc[rows]
+        dab = depth_anchored.loc[rows]
+
+        n_rows = int(len(rows))
+        n_missing_before = int(Xb.isna().sum().sum())
+
+        # Track per-block fill counts by stage
+        filled_interp = 0
+        filled_sd = 0
+        filled_d = 0
+        filled_global = 0
+
+        # If no usable depth, skip interpolation stage (we still do seasonal/depth fallback below)
+        did_interp = False
+        if db.notna().sum() >= 2:
+            did_interp = True
+            order = db.sort_values(kind="mergesort").index
+            Xs = Xb.loc[order]
+            ds = db.loc[order]
+
+            Xi = pd.DataFrame(index=order, columns=X.columns, dtype=float)
+
+            for col in X.columns:
+                s = pd.to_numeric(Xs[col], errors="coerce")
+                s2 = pd.Series(s.values, index=ds.values)
+
+                if s2.notna().sum() == 0:
+                    # leave entirely NA here; will be handled by hierarchy below
+                    Xi[col] = np.nan
+                    continue
+
+                s2 = s2.sort_index()
+                s2i = s2.interpolate(method="index")
+                # fill interior gaps + ends with nearest observed
+                s2i = s2i.ffill().bfill()
+
+                # assign positionally back to the sorted rows
+                Xi[col] = pd.Series(s2i.values[: len(order)], index=order)
+
+            # Count what interpolation actually filled (NA->value)
+            before_mask = Xb.isna()
+            after_mask = Xi.loc[rows].isna()
+            filled_interp = int((before_mask & ~after_mask).sum().sum())
+
+            # Cell provenance for interpolation
+            if write_cell_provenance and filled_interp > 0:
+                newly_filled = (before_mask & ~after_mask)
+                for rr in newly_filled.index:
+                    for feat in newly_filled.columns[newly_filled.loc[rr]].tolist():
+                        _log_cell(
+                            row_i=rr, feat=feat, method="depth_interp_within_block",
+                            b=b, di=db.loc[rr], da=dab.loc[rr], seas=sb.loc[rr]
+                        )
+
+            Xb = Xi.loc[rows].copy()
+
+        # Now hierarchical fallback for remaining NAs in this block
+        # We fill per-row based on that row's (Season, Depth_anchored) then (Depth_anchored) then global
+        rem_mask = Xb.isna()
+        if rem_mask.any().any():
+            for rr in Xb.index:
+                if not rem_mask.loc[rr].any():
+                    continue
+
+                seas = sb.loc[rr]
+                da = dab.loc[rr]
+                di = db.loc[rr]
+
+                # Stage (2): (Season, Depth_anchored)
+                key_sd = (seas, da)
+                if key_sd in sd_fill.index:
+                    fill_vec = sd_fill.loc[key_sd]
+                    # fill only missing entries
+                    miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
+                    for feat in miss_feats:
+                        val = fill_vec.get(feat, np.nan)
+                        if pd.notna(val):
+                            Xb.at[rr, feat] = float(val)
+                            filled_sd += 1
+                            rem_mask.at[rr, feat] = False
+                            _log_cell(
+                                row_i=rr, feat=feat, method="fallback_season_depth_anchored",
+                                b=b, di=di, da=da, seas=seas,
+                                donor_seas=seas, donor_da=da,
+                            )
+
+                # Stage (3): Depth_anchored across all seasons
+                if rem_mask.loc[rr].any():
+                    key_d = da
+                    if key_d in d_fill.index:
+                        fill_vec = d_fill.loc[key_d]
+                        miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
+                        for feat in miss_feats:
+                            val = fill_vec.get(feat, np.nan)
+                            if pd.notna(val):
+                                Xb.at[rr, feat] = float(val)
+                                filled_d += 1
+                                rem_mask.at[rr, feat] = False
+                                _log_cell(
+                                    row_i=rr, feat=feat, method="fallback_depth_anchored_all_seasons",
+                                    b=b, di=di, da=da, seas=seas,
+                                    donor_seas="ALL", donor_da=da,
+                                )
+
+                # Stage (4): Global backstop
+                if rem_mask.loc[rr].any():
+                    miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
+                    for feat in miss_feats:
+                        val = global_fill.get(feat, np.nan)
+                        if pd.notna(val):
+                            Xb.at[rr, feat] = float(val)
+                            filled_global += 1
+                            rem_mask.at[rr, feat] = False
+                            _log_cell(
+                                row_i=rr, feat=feat, method="fallback_global_fill",
+                                b=b, di=di, da=da, seas=seas,
+                                donor_seas="GLOBAL", donor_da="GLOBAL",
+                            )
+
+        n_missing_after = int(pd.DataFrame(Xb).isna().sum().sum())
+
+        block_audit_rows.append({
+            "block": str(b),
+            "n_rows": n_rows,
+            "did_depth_interp": bool(did_interp),
+            "n_missing_before": n_missing_before,
+            "n_missing_after": n_missing_after,
+            "n_imputed_total": int(n_missing_before - n_missing_after),
+            "n_filled_by_depth_interp": int(filled_interp),
+            "n_filled_by_season_depth_anchored": int(filled_sd),
+            "n_filled_by_depth_anchored_all_seasons": int(filled_d),
+            "n_filled_by_global_backstop": int(filled_global),
+        })
+
+        # per-feature fallback auditing (how many cells each method filled in this block)
+        # (this stays fairly verbose without exploding)
+        fallback_audit_rows.append({
+            "block": str(b),
+            "filled_by_season_depth_anchored": int(filled_sd),
+            "filled_by_depth_anchored_all_seasons": int(filled_d),
+            "filled_by_global_backstop": int(filled_global),
+        })
+
+        X_out.loc[rows] = Xb
+
+    X_out = pd.DataFrame(X_out, columns=X.columns, index=X.index)
+
+    block_audit_df = pd.DataFrame(block_audit_rows).sort_values(["n_rows", "block"], ascending=[False, True])
+    fallback_audit_df = pd.DataFrame(fallback_audit_rows).sort_values(["block"], ascending=[True])
+
+    summary = X_out.mean(axis=0)
+    summary.name = "imputed_feature_mean"
+
+    cell_prov_df = pd.DataFrame(cell_rows)
+    if not cell_prov_df.empty:
+        cell_prov_df = cell_prov_df.sort_values(["block", "row_index", "feature"], ascending=[True, True, True])
+
+    return X_out, block_audit_df, summary, fallback_audit_df, cell_prov_df
 
 def impute_matrix_global(
     X: pd.DataFrame,
@@ -1807,6 +2146,7 @@ def main() -> None:
 
     df_raw = load_table(cfg.input_path, cfg.sep)
     df_raw = make_date_column(df_raw, cfg.time_col)
+    df_raw = make_season_column(df_raw, time_col=cfg.time_col)
 
     missing_features = [c for c in cfg.feature_cols if c not in df_raw.columns]
     missing_meta = [c for c in cfg.meta_cols if c not in df_raw.columns]
@@ -1833,6 +2173,8 @@ def main() -> None:
     meta_cols = [c for c in cfg.meta_cols if c in df_num.columns]
     if cfg.time_col in df_num.columns and cfg.time_col not in meta_cols:
         meta_cols.append(cfg.time_col)
+    if DERIVED_SEASON_COL in df_num.columns and DERIVED_SEASON_COL not in meta_cols:
+        meta_cols.append(DERIVED_SEASON_COL)
 
     feats = [c for c in cfg.feature_cols if c in df_num.columns]
     if not feats:
@@ -1917,9 +2259,60 @@ def main() -> None:
     X_preimpute = df_filt[feats_kept].copy()
     X_sparse = df_filt[sparse_feats].copy()
 
+    # Negative handling (pre-impute)
+    n_neg_as_missing_pre = 0
+    n_neg_imputed_post = 0
+
+    if cfg.negatives == "impute":
+        X_preimpute, n_neg_as_missing_pre = negatives_to_nan(X_preimpute)
+
     # Impute
-    if cfg.impute_scope == "by_depth":
-        if cfg.anchored_depth_col not in meta.columns:
+    if cfg.impute == "depth_interp":
+        # Block depth interpolation by chosen metadata column (e.g., Cruise)
+        if cfg.depth_interp_block_col != "ALL" and cfg.depth_interp_block_col in meta.columns:
+            block_series = meta[cfg.depth_interp_block_col]
+        else:
+            block_series = None
+
+        X_imp, block_audit_df, fill_values, fallback_audit_df, cell_prov_df = impute_matrix_depth_interp(
+            X=X_preimpute,
+            depth=meta[cfg.depth_col] if cfg.depth_col in meta.columns else meta.get(cfg.anchored_depth_col, pd.Series(index=meta.index)),
+            block=block_series,
+            season=meta[DERIVED_SEASON_COL] if DERIVED_SEASON_COL in meta.columns else None,
+            depth_anchored=meta[cfg.anchored_depth_col] if cfg.anchored_depth_col in meta.columns else None,
+            fallback="median",              # keep robust; matches your preference
+            write_cell_provenance=True,     # VERY verbose (one row per imputed cell)
+        )
+
+        block_audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_block_audit.csv"), index=False)
+        fallback_audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_fallback_audit.csv"), index=False)
+
+        # Extremely verbose: one row per imputed cell
+        cell_prov_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_cell_provenance.csv"), index=False)
+
+    else:
+        if cfg.impute_scope == "by_depth":
+            if cfg.anchored_depth_col not in meta.columns:
+                X_imp, fill_values = impute_matrix_global(
+                    X=X_preimpute,
+                    strategy=cfg.impute,
+                    knn_k=cfg.knn_k,
+                    iterative_max_iter=cfg.iterative_max_iter,
+                    random_state=cfg.random_state,
+                )
+            else:
+                depth_groups = meta[cfg.anchored_depth_col].astype(str).fillna("NA")
+                X_imp, audit_df, fill_values = impute_matrix_by_depth(
+                    X=X_preimpute,
+                    depth_groups=depth_groups,
+                    strategy=cfg.impute,
+                    knn_k=cfg.knn_k,
+                    iterative_max_iter=cfg.iterative_max_iter,
+                    min_group_size=cfg.impute_min_group_size,
+                    random_state=cfg.random_state,
+                )
+                audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_group_audit.csv"), index=False)
+        else:
             X_imp, fill_values = impute_matrix_global(
                 X=X_preimpute,
                 strategy=cfg.impute,
@@ -1927,32 +2320,20 @@ def main() -> None:
                 iterative_max_iter=cfg.iterative_max_iter,
                 random_state=cfg.random_state,
             )
-        else:
-            depth_groups = meta[cfg.anchored_depth_col].astype(str).fillna("NA")
-            X_imp, audit_df, fill_values = impute_matrix_by_depth(
-                X=X_preimpute,
-                depth_groups=depth_groups,
-                strategy=cfg.impute,
-                knn_k=cfg.knn_k,
-                iterative_max_iter=cfg.iterative_max_iter,
-                min_group_size=cfg.impute_min_group_size,
-                random_state=cfg.random_state,
-            )
-            audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_group_audit.csv"), index=False)
-    else:
-        X_imp, fill_values = impute_matrix_global(
-            X=X_preimpute,
-            strategy=cfg.impute,
-            knn_k=cfg.knn_k,
-            iterative_max_iter=cfg.iterative_max_iter,
-            random_state=cfg.random_state,
-        )
 
     fill_values.rename("impute_value" if cfg.impute in ("median", "mean") else "imputed_feature_mean") \
         .to_csv(os.path.join(tables_dir, "impute_values.csv"), header=True)
 
-    # Clamp negatives to 0 (always, per your preference)
-    X_imp, n_clamped = clamp_negatives_to_zero(X_imp)
+    # Negative handling (post-impute)
+    n_clamped = 0
+    if cfg.negatives == "clamp":
+        X_imp, n_clamped = clamp_negatives_to_zero(X_imp)
+    else:
+        # 'impute' mode: if any negatives survive the imputer, treat them as missing and fill per-feature median
+        X_imp, n_neg_imputed_post = negatives_to_nan(X_imp)
+        if n_neg_imputed_post > 0:
+            fill_med = X_imp.median(axis=0, skipna=True)
+            X_imp = X_imp.fillna(fill_med)
 
     # Optional log1p
     if cfg.log1p:
@@ -2066,7 +2447,10 @@ def main() -> None:
         "anchor_margin": float(cfg.anchor_margin),
         "anchor_proto_min_n": int(cfg.anchor_proto_min_n),
         "log1p": bool(cfg.log1p),
+        "negatives_policy": str(cfg.negatives),
         "n_negative_values_clamped_to_zero": int(n_clamped),
+        "n_negative_values_treated_as_missing_pre_impute": int(n_neg_as_missing_pre),
+        "n_negative_values_re_imputed_post_impute": int(n_neg_imputed_post),
         "n_negative_values_clamped_to_zero_during_anchoring_similarity": int(anchoring_clamped_count),
         "n_components_fit": int(pca.n_components_),
         "pc_selection_ran": bool(cfg.pc_selection),
