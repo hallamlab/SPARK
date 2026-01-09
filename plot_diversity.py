@@ -179,21 +179,45 @@ def scatter_umap(df: pd.DataFrame,
                  palette: dict | str,
                  title: str,
                  out_base: Path,
+                 label: str | None = None,
                  size_range=(40, 400),
                  edgecolor="lightgray"):
+
     fig, ax = plt.subplots(figsize=(12, 10))
+
     sns.scatterplot(
-        data=df, x=x, y=y, hue=hue, size=size, style=style,
-        palette=palette, sizes=size_range, alpha=0.8,
-        edgecolor=edgecolor, linewidth=0.5, ax=ax,
-        hue_order=palette.keys()
+        data=df, x=x, y=y,
+        hue=hue, size=size, style=style,
+        palette=palette, sizes=size_range,
+        alpha=0.8,
+        edgecolor=edgecolor, linewidth=0.5,
+        ax=ax,
+        hue_order=palette.keys() if isinstance(palette, dict) else None
     )
+
+    # --- ADD LABELS IF PROVIDED ---
+    if label is not None:
+        for _, r in df.iterrows():
+            ax.annotate(
+                text=str(r[label]),
+                xy=(r[x], r[y]),
+                xytext=(5, 2),
+                textcoords="offset points",
+                fontsize=6,
+                alpha=0.85,
+                ha="left",
+                va="center",
+            )
+
     ax.set_title(title)
     ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1), frameon=False)
+
     fig.tight_layout()
     for ext in ("svg", "pdf"):
         fig.savefig(out_base.with_suffix(f".{ext}"))
+
     plt.close(fig)
+
 
 # -------------------------- run block --------------------------
 def run_one_pass(name: str,
@@ -257,7 +281,7 @@ def run_one_pass(name: str,
     type_palette = {k: PALETTE_TYPES.get(k, PALETTE_TYPES.get("Failed-QC", "#999999")) for k in order}
 
     # ---------- Alpha t-tests + boxplot with visible alpha ----------
-    out_alpha = outdir / ("alpha_ttest.tsv" if name == "micro" else "alpha_ttest_mito.tsv")
+    out_alpha = outdir / ("tables/alpha_ttest.tsv" if name == "micro" else "tables/alpha_ttest_mito.tsv")
     if {"Shannon", "type_group"} <= set(df.columns):
         ttab = fdr_ttests_by_group(df, "type_group", "Shannon")
         ttab.to_csv(out_alpha, sep="\t", index=False)
@@ -283,7 +307,7 @@ def run_one_pass(name: str,
         ax.tick_params(axis='x', rotation=45)
         fig.tight_layout()
         for ext in ("svg", "pdf"):
-            fig.savefig(outdir / f"Alpha_type_boxplot_{name}.{ext}")
+            fig.savefig(outdir / f"plots/Alpha_type_boxplot_{name}.{ext}")
         plt.close(fig)
 
         # Faceted by status (boxed with alpha’d palette)
@@ -303,7 +327,7 @@ def run_one_pass(name: str,
 
             g.figure.tight_layout()
             for ext in ("svg", "pdf"):
-                g.figure.savefig(outdir / f"Alpha_status_boxplot_{name}.{ext}")
+                g.figure.savefig(outdir / f"plots/Alpha_status_boxplot_{name}.{ext}")
             plt.close(g.figure)
 
     # ---------- PERMANOVA ----------
@@ -311,15 +335,15 @@ def run_one_pass(name: str,
         # Align groups to Bray
         groups = df.set_index("sample").loc[bray.index.intersection(df["sample"]), "type_group"]
         glob, pair = global_and_pairwise_permanova(bray, groups, permutations=permutations)
-        glob.to_csv(outdir / ("permanova_global.tsv" if name == "micro" else "permanova_global_mito.tsv"), sep="\t", index=False)
-        pair.to_csv(outdir / ("permanova_pairwise.tsv" if name == "micro" else "permanova_pairwise_mito.tsv"), sep="\t", index=False)
+        glob.to_csv(outdir / ("tables/permanova_global.tsv" if name == "micro" else "tables/permanova_global_mito.tsv"), sep="\t", index=False)
+        pair.to_csv(outdir / ("tables/permanova_pairwise.tsv" if name == "micro" else "tables/permanova_pairwise_mito.tsv"), sep="\t", index=False)
 
         # Heatmap of pairwise q-values
-        heatmap_pairwise_q(
-            pair,
-            outdir / f"Beta_Heatmap_permanova_{name}",
-            title="Pairwise PERMANOVA (q-values)\nBlue = Not Significant, Red = Significant"
-        )
+        #heatmap_pairwise_q(
+        #    pair,
+        #    outdir / f"Beta_Heatmap_permanova_{name}",
+        #    title="Pairwise PERMANOVA (q-values)\nBlue = Not Significant, Red = Significant"
+        #)
 
     # ---------- UMAP figures (Bray) ----------
     have_umap = {"UMAP1", "UMAP2"}.issubset(df.columns)
@@ -331,7 +355,15 @@ def run_one_pass(name: str,
             hue="type_group", size=size_col, style=None,
             palette=type_palette,
             title="UMAP colored by Sample Type",
-            out_base=outdir / f"Beta_UMAP_type_{name}"
+            out_base=outdir / f"plots/Beta_UMAP_type_{name}"
+        )
+        scatter_umap(
+            df, "UMAP1", "UMAP2",
+            hue="type_group", size=size_col, style=None,
+            palette=type_palette,
+            label="sample_code",
+            title="UMAP colored by Sample Type",
+            out_base=outdir / f"plots/Beta_UMAP_type_labelled_{name}"
         )
         if "lung_code" in df.columns:
             scatter_umap(
@@ -339,7 +371,7 @@ def run_one_pass(name: str,
                 hue="type_group", size=size_col, style="lung_code",
                 palette=type_palette,
                 title="UMAP by Type (style = lung_code)",
-                out_base=outdir / f"Beta_UMAP_type_lung_{name}"
+                out_base=outdir / f"plots/Beta_UMAP_type_lung_{name}"
             )
         if "status" in df.columns:
             scatter_umap(
@@ -347,14 +379,14 @@ def run_one_pass(name: str,
                 hue="type_group", size=size_col, style="status",
                 palette=type_palette,
                 title="UMAP by Type (style = status)",
-                out_base=outdir / f"Beta_UMAP_type_status_{name}"
+                out_base=outdir / f"plots/Beta_UMAP_type_status_{name}"
             )
             scatter_umap(
                 df, "UMAP1", "UMAP2",
                 hue="status", size=size_col, style=None,
                 palette=PALETTE_STATUS,
                 title="UMAP colored by Cancer Status",
-                out_base=outdir / f"Beta_UMAP_status_{name}"
+                out_base=outdir / f"plots/Beta_UMAP_status_{name}"
             )
         for flag, label in (("overall_OL", "study-wide outliers"), ("typ_grp_OL", "type-wise outliers")):
             if flag in df.columns:
@@ -363,7 +395,7 @@ def run_one_pass(name: str,
                     hue="type_group", size=size_col, style=flag,
                     palette=type_palette,
                     title=f"UMAP by Type (style = {label})",
-                    out_base=outdir / f"Beta_UMAP_type_{flag}_{name}"
+                    out_base=outdir / f"plots/Beta_UMAP_type_{flag}_{name}"
                 )
 
 # -------------------------- CLI --------------------------
@@ -434,7 +466,7 @@ def main():
 
     # MITO pass (optional)
     if args.mito_alpha or args.mito_bray or args.mito_jacc:
-        mito_dir = args.mito_outdir if args.mito_outdir else args.outdir.parent / "mito" / "diversity"
+        mito_dir = args.mito_outdir if args.mito_outdir else args.outdir.parent / "M6_downstream_analysis" / "diversity" / "mitochondrial"
         ensure_dir(mito_dir)
         mito_alpha = read_tsv(args.mito_alpha, index_col=0) if args.mito_alpha else pd.DataFrame()
         mito_bray  = read_tsv(args.mito_bray,  index_col=0) if args.mito_bray  else pd.DataFrame()

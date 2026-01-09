@@ -71,6 +71,10 @@ def parse_kv_csv(s: str, cast: Optional[type] = None) -> Dict[str, object]:
     return out
 
 
+def comma_list(s):
+    return [x.strip() for x in s.split(",") if x]
+
+
 def parse_list_csv(s: str) -> List[str]:
     return [x.strip() for x in s.split(',') if x.strip()] if s else []
 
@@ -371,10 +375,12 @@ def plot_grouppair_violins_sns(
 def compute_and_save_block(
     mode_name: str,                      # "micro" or "mito"
     asv_path: Path,
+    data_loss: Path,
     out_root: Path,                      # e.g., <data>/<sub>/metadata or <data>/<sub>/mito/metadata
     asv_out_root: Path,                  # e.g., <data>/<sub>/ASVs or <data>/<sub>/mito/ASVs
     meta: pd.DataFrame,
     tax_df: pd.DataFrame,
+    exclude_taxa: list,
     meta_sample_col: str,
     type_col: str,
     type_palette: Dict[str, str],
@@ -392,6 +398,8 @@ def compute_and_save_block(
     # Long ASV
     long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, id_suffix_underscores_asv, id_regex_asv, tax_df.index)
     asv_tax = add_taxonomy(long_asv, tax_df)
+
+    data_loss_df = pd.read_csv(data_loss, sep='\t', header=0)
 
     # Merge with metadata
     if 'sample' not in asv_tax.columns:
@@ -413,22 +421,55 @@ def compute_and_save_block(
     long_df = metastat.groupby([type_col, 'pass_filter', 'sample'])['raw_count'].sum().reset_index()
     long_df = long_df[long_df['raw_count'] > 0]
 
-    # Box + swarm
+    # Raw Samples - Box + swarm
     plt.figure(figsize=(10, 10))
     ax = sns.boxplot(x=type_col, y='raw_count', data=long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
                      order=list(keep_types))
     sns.stripplot(data=long_df, x=type_col, y='raw_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
-                  jitter=0.25, palette=type_palette)
+                  jitter=0.25, palette=type_palette, order=list(keep_types))
     if dashed_line_y is not None:
         plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
     plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
-    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
-    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.pdf")
+    plt.savefig(out_root / f"plots/swarmplot_raw_{mode_name}.svg")
+    plt.savefig(out_root / f"plots/swarmplot_raw_{mode_name}.pdf")
+    plt.close()
+
+    filter_long_df = metastat.groupby([type_col, 'pass_filter', 'sample'])['count'].sum().reset_index()
+
+    # Postfilter Samples - Box + swarm
+    plt.figure(figsize=(10, 10))
+    ax = sns.boxplot(x=type_col, y='count', data=filter_long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
+                     order=list(keep_types))
+    sns.stripplot(data=filter_long_df, x=type_col, y='count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
+                  jitter=0.25, palette=type_palette, order=list(keep_types))
+    if dashed_line_y is not None:
+        plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
+    plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
+    plt.savefig(out_root / f"plots/swarmplot_postfilter_{mode_name}.svg")
+    plt.savefig(out_root / f"plots/swarmplot_postfilter_{mode_name}.pdf")
     plt.close()
 
     # Control subtraction (scope+skin), pivot to ASV x sample corrected counts
     corr_meta = correct_counts_against_controls(asv_meta, meta, 'sample', type_col)
+    corr_meta['pass_filter'] = [t if s in set(asv_meta['sample']) else 'Failed-QC'
+                                for s, t in zip(corr_meta['sample'], corr_meta[type_col])]
+    corr_long_df = corr_meta.groupby([type_col, 'pass_filter', 'sample'])['corr_count'].sum().reset_index()
+    corr_long_df = corr_long_df[corr_long_df['corr_count'] > 0]    
     cleaned = corr_meta.pivot_table(index='ASV_ID', columns='sample', values='corr_count', aggfunc='sum', fill_value=0)
+
+    # Corrected Samples - Box + swarm
+    plt.figure(figsize=(10, 10))
+    ax = sns.boxplot(x=type_col, y='corr_count', data=corr_long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
+                     order=list([t for t in list(keep_types)if t in set(corr_long_df['pass_filter'])]))
+    sns.stripplot(data=corr_long_df, x=type_col, y='corr_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
+                  jitter=0.25, palette=type_palette,
+                  order=list([t for t in list(keep_types)if t in set(corr_long_df['pass_filter'])]))
+    if dashed_line_y is not None:
+        plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
+    plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
+    plt.savefig(out_root / f"plots/swarmplot_corr_{mode_name}.svg")
+    plt.savefig(out_root / f"plots/swarmplot_corr_{mode_name}.pdf")
+    plt.close()
 
     # Keep only assigned Domain and only kept samples
     keep_asvs = corr_meta[corr_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
@@ -436,11 +477,16 @@ def compute_and_save_block(
     final_mat = cleaned.reindex(index=keep_asvs).dropna(how='all')
     final_mat = final_mat[[c for c in final_mat.columns if c in kept_samples]].fillna(0).astype(int)
 
+    # prune out columns from master and add dataloss
+    master_table_df = metastat.drop(columns=["raw_count"])
+    master_table_df = master_table_df.merge(corr_meta.groupby('sample')['corr_count'].sum(), on='sample', how='left')
+    master_table_df = master_table_df.merge(data_loss_df, on=['sample', 'type_group'], how='left')
+
     # Write outputs
-    save_df(corr_meta, out_root / f"ASV_meta_{mode_name}.tsv")
+    save_df(corr_meta, asv_out_root / f"ASV_meta_{mode_name}.tsv")
     save_mat(final_mat, asv_out_root / f"ASV_final.{mode_name}.tsv")
-    save_df(metastat, out_root / f"master_table_{mode_name}.tsv")
-    save_df(meta, out_root / f"metadata_updated_{mode_name}.tsv")
+    save_df(master_table_df, asv_out_root / f"master_table_{mode_name}.tsv")
+    save_df(meta, asv_out_root / f"metadata_updated_{mode_name}.tsv")
 
     # Legends (sample colors)
     m_df = metastat[metastat['sample'].isin(final_mat.columns)].set_index('sample')
@@ -457,8 +503,8 @@ def compute_and_save_block(
         shared_pct,
         col_legend_df=col_colors_df,
         row_legend_df=row_colors_df,
-        out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
-        out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.pdf",
+        out_svg=out_root / f"plots/clustermap_ASVpercent_{mode_name}.svg",
+        out_pdf=out_root / f"plots/clustermap_ASVpercent_{mode_name}.pdf",
     )
 
     # Violin pairs (only for selected groups present)
@@ -478,8 +524,8 @@ def compute_and_save_block(
             ax=ax,
         )
         plt.tight_layout()
-        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.svg", bbox_inches='tight')
-        plt.savefig(out_root / f"violin_ASVpercent_{mode_name}.pdf", bbox_inches='tight')
+        plt.savefig(out_root / f"plots/violin_ASVpercent_{mode_name}.svg", bbox_inches='tight')
+        plt.savefig(out_root / f"plots/violin_ASVpercent_{mode_name}.pdf", bbox_inches='tight')
         plt.close()
 
 
@@ -513,6 +559,7 @@ def get_parser() -> argparse.ArgumentParser:
     asv.add_argument("--asv-mito", type=Path, required=True, help="ASV_target.mito.tsv")
     asv.add_argument("--asv-id-suffix-underscores", type=int, default=2, help="Chop N underscore tokens from end for ASV column IDs")
     asv.add_argument("--asv-id-regex", default="", help="Regex with one capture group for ASV column IDs")
+    asv.add_argument("--data-loss", type=Path, required=True, help="data_loss_sankey.sample_stage_counts.tsv")
 
     vis = p.add_argument_group("Palettes / Visual")
     vis.add_argument("--type-palette",
@@ -529,7 +576,8 @@ def get_parser() -> argparse.ArgumentParser:
 
     misc = p.add_argument_group("Misc")
     misc.add_argument("--verbose", action="store_true", help="Verbose logging")
-
+    misc.add_argument("--exclude-taxa", default="Vertebrata", type=comma_list,
+                     help="Specific ranks to exclude, comma-separated 'Ranks,to,exclude")
     return p
 
 
@@ -552,6 +600,7 @@ def main():
     fastq_stats_path = resolve(args.fastq_stats)
     asv_micro_path = resolve(args.asv_micro)
     asv_mito_path = resolve(args.asv_mito)
+    data_loss_path = resolve(args.data_loss)
     taxonomy_path = resolve(args.taxonomy)
 
     if args.verbose:
@@ -560,6 +609,7 @@ def main():
         print(f"[i] Fastq stats: {fastq_stats_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
         print(f"[i] ASV mito : {asv_mito_path}")
+        print(f"[i] Data Loss : {data_loss_path}")
 
     # Read data
     meta = read_metadata(meta_path, args.meta_sample_col, keep_types)
@@ -572,10 +622,11 @@ def main():
     )
 
     # Output roots
-    meta_root = data_dir / sub_dir / "metadata"
-    mito_meta_root = data_dir / sub_dir / "mito" / "metadata"
-    asv_root = data_dir / sub_dir / "ASVs"
-    mito_asv_root = data_dir / sub_dir / "mito" / "ASVs"
+    data_root = data_dir / sub_dir
+    meta_root = data_root / "M6_downstream_analysis/metadata_summaries"
+    mito_meta_root = data_root / "M6_downstream_analysis/metadata_summaries/mitochondrial/metadata_summaries"
+    asv_root = meta_root / "tables"
+    mito_asv_root = mito_meta_root / "tables"
 
     # If neither toggle provided, run both
     run_micro = args.make_micro or (not args.make_micro and not args.make_mito)
@@ -587,10 +638,12 @@ def main():
         compute_and_save_block(
             mode_name="micro",
             asv_path=asv_micro_path,
+            data_loss=data_loss_path,
             out_root=meta_root,
             asv_out_root=asv_root,
             meta=meta.copy(),
             tax_df=tax_df,
+            exclude_taxa=args.exclude_taxa,
             meta_sample_col=args.meta_sample_col,
             type_col=args.type_col,
             type_palette=type_palette,
@@ -609,10 +662,12 @@ def main():
         compute_and_save_block(
             mode_name="mito",
             asv_path=asv_mito_path,
+            data_loss=data_loss_path,
             out_root=mito_meta_root,
             asv_out_root=mito_asv_root,
             meta=meta.copy(),
             tax_df=tax_df,
+            exclude_taxa=[],
             meta_sample_col=args.meta_sample_col,
             type_col=args.type_col,
             type_palette=type_palette,

@@ -190,6 +190,9 @@ def compute_sig_table(
     return df
 
 
+# FILE: <the .py file where this currently lives>
+# LOCATION: Ctrl+F -> "def plot_p_vs_stat_no_overlap(" and replace the whole function.
+
 def plot_p_vs_stat_no_overlap(
     df: pd.DataFrame,
     output_file: Path,
@@ -200,6 +203,10 @@ def plot_p_vs_stat_no_overlap(
     style_col: str | None = None,
     type_palette: dict | None = None,
     marker_dict: dict | None = None,
+    # NEW: point label controls
+    label_col: str | None = None,
+    label_fontsize: int = 8,
+    label_max_points: int | None = None,  # e.g. 200 to avoid labeling everything
     # Jitter controls (normalized units)
     min_dist_x=0.02,
     min_dist_y=0.03,
@@ -229,6 +236,9 @@ def plot_p_vs_stat_no_overlap(
     if x_col not in dd.columns or y_col not in dd.columns:
         raise ValueError(f"x_col={x_col!r} or y_col={y_col!r} not present in DataFrame")
 
+    if label_col is not None and label_col not in dd.columns:
+        raise ValueError(f"label_col={label_col!r} not present in DataFrame")
+
     dd[x_col] = pd.to_numeric(dd[x_col], errors="coerce")
     dd[y_col] = pd.to_numeric(dd[y_col], errors="coerce")
     dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=[x_col, y_col])
@@ -241,9 +251,11 @@ def plot_p_vs_stat_no_overlap(
     xmin, xmax = float(np.nanmin(x)), float(np.nanmax(x))
     ymin, ymax = float(np.nanmin(y)), float(np.nanmax(y))
     if xmin == xmax:
-        xmin -= 0.05; xmax += 0.05
+        xmin -= 0.05
+        xmax += 0.05
     if ymin == ymax:
-        ymin -= 0.05; ymax += 0.05
+        ymin -= 0.05
+        ymax += 0.05
 
     # normalize and repulse
     nx = (x - xmin) / (xmax - xmin)
@@ -259,10 +271,12 @@ def plot_p_vs_stat_no_overlap(
         mask = eye_mask & (np.abs(dx) < min_dist_x) & (np.abs(dy) < min_dist_y)
         if not mask.any():
             break
-        sign_x = np.sign(dx); sign_y = np.sign(dy)
+        sign_x = np.sign(dx)
+        sign_y = np.sign(dy)
         sign_x[sign_x == 0] = np.random.choice([-1.0, 1.0], size=(sign_x == 0).sum())
         sign_y[sign_y == 0] = np.random.choice([-1.0, 1.0], size=(sign_y == 0).sum())
-        force_x = np.zeros_like(dx); force_y = np.zeros_like(dy)
+        force_x = np.zeros_like(dx)
+        force_y = np.zeros_like(dy)
         force_x[mask] = (min_dist_x - np.abs(dx[mask])) * sign_x[mask]
         force_y[mask] = (min_dist_y - np.abs(dy[mask])) * sign_y[mask]
         pos[:, 0] += step_x * force_x.sum(axis=1) - anchor * (pos[:, 0] - orig[:, 0])
@@ -281,7 +295,6 @@ def plot_p_vs_stat_no_overlap(
     palette = None
     if hue_col is not None:
         if type_palette:
-            # Use given mapping, but only for categories present
             present = [h for h in dd[hue_col].dropna().unique().tolist() if h in type_palette]
             palette = {k: type_palette[k] for k in present}
         else:
@@ -299,27 +312,37 @@ def plot_p_vs_stat_no_overlap(
 
     # Legend handles
     color_handles = []
-    '''
-    if show_legend and hue_col is not None:
-        levels = dd[hue_col].dropna().unique().tolist()
-        if type_palette:
-            for name in levels:
-                col = type_palette.get(name, "lightgray")
-                '''
-    for name in type_palette:
-        col = type_palette.get(name, "lightgray")
-        color_handles.append(
-        mlines.Line2D([], [], marker="o", linestyle="None",
-                        markerfacecolor=col, markeredgecolor="black",
-                        markeredgewidth=0.5, markersize=8, label=str(name))
-        )
+    if type_palette:
+        for name in type_palette:
+            col = type_palette.get(name, "lightgray")
+            color_handles.append(
+                mlines.Line2D(
+                    [],
+                    [],
+                    marker="o",
+                    linestyle="None",
+                    markerfacecolor=col,
+                    markeredgecolor="black",
+                    markeredgewidth=0.5,
+                    markersize=8,
+                    label=str(name),
+                )
+            )
 
     marker_handles = []
     if show_legend and style_col is not None and markers:
         for name, mk in markers.items():
             marker_handles.append(
-                mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
-                              markeredgewidth=0.5, markersize=8, label=str(name))
+                mlines.Line2D(
+                    [],
+                    [],
+                    color="gray",
+                    marker=mk,
+                    linestyle="None",
+                    markeredgewidth=0.5,
+                    markersize=8,
+                    label=str(name),
+                )
             )
 
     # Measure legend sizes
@@ -327,8 +350,9 @@ def plot_p_vs_stat_no_overlap(
         if not handles:
             return (0.0, 0.0)
         ftmp, axtmp = plt.subplots(figsize=(2, 2), dpi=100)
-        leg = axtmp.legend(handles=handles, title=title, frameon=True, loc="upper left",
-                           fontsize=fontsize, title_fontsize=fontsize)
+        leg = axtmp.legend(
+            handles=handles, title=title, frameon=True, loc="upper left", fontsize=fontsize, title_fontsize=fontsize
+        )
         ftmp.canvas.draw()
         bbox = leg.get_window_extent(ftmp.canvas.get_renderer())
         w_in = bbox.width / ftmp.dpi
@@ -350,9 +374,12 @@ def plot_p_vs_stat_no_overlap(
     pane_w_in = plot_w_in + padL + padR
     pane_h_in = plot_h_in + padT + padB
 
-    fig_w_in = (figure_edge_pad_in + pane_w_in +
-                ((legend_pad_in + legend_w_in) if (show_legend and legend_w_in > 0) else 0.0) +
-                figure_edge_pad_in)
+    fig_w_in = (
+        figure_edge_pad_in
+        + pane_w_in
+        + ((legend_pad_in + legend_w_in) if (show_legend and legend_w_in > 0) else 0.0)
+        + figure_edge_pad_in
+    )
     fig_h_in = figure_edge_pad_in + max(pane_h_in, legend_h_in if show_legend else pane_h_in) + figure_edge_pad_in
 
     fig = plt.figure(figsize=(fig_w_in, fig_h_in), dpi=100)
@@ -367,19 +394,24 @@ def plot_p_vs_stat_no_overlap(
     if show_legend and legend_w_in > 0:
         leg_left = (figure_edge_pad_in + pane_w_in + legend_pad_in) / fig_w_in
         leg_w = legend_w_in / fig_w_in
-        leg_ax = fig.add_axes([leg_left, figure_edge_pad_in / fig_h_in, leg_w,
-                               1.0 - 2 * figure_edge_pad_in / fig_h_in])
+        leg_ax = fig.add_axes([leg_left, figure_edge_pad_in / fig_h_in, leg_w, 1.0 - 2 * figure_edge_pad_in / fig_h_in])
         leg_ax.axis("off")
 
-    # Plot
+    # Plot points
     sns.scatterplot(
-        data=dd, x="_x_", y="_y_",
+        data=dd,
+        x="_x_",
+        y="_y_",
         hue=hue_col if hue_col else None,
         style=style_col if style_col else None,
-        palette=palette, markers=markers,
-        s=point_size, alpha=alpha,
-        linewidth=0.5, edgecolor="black",
-        legend=False, ax=ax,
+        palette=palette,
+        markers=markers,
+        s=point_size,
+        alpha=alpha,
+        linewidth=0.5,
+        edgecolor="black",
+        legend=False,
+        ax=ax,
     )
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
@@ -390,19 +422,72 @@ def plot_p_vs_stat_no_overlap(
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(axis="both", which="both", length=4, width=1)
 
+    # NEW: labels with intelligent spacing
+    if label_col is not None:
+        lab = dd[label_col].astype("object").fillna("").astype(str)
+        mask = lab.str.len() > 0
+        dd_lab = dd.loc[mask, ["_x_", "_y_"]].copy()
+        lab = lab.loc[mask]
+
+        if label_max_points is not None and len(dd_lab) > label_max_points:
+            dd_lab = dd_lab.iloc[:label_max_points].copy()
+            lab = lab.iloc[:label_max_points]
+
+        texts = []
+        # start with a tiny offset so labels don't sit exactly on the marker
+        xspan = (xmax - xmin) if (xmax != xmin) else 1.0
+        yspan = (ymax - ymin) if (ymax != ymin) else 1.0
+        dx0 = 0.01 * xspan
+        dy0 = 0.01 * yspan
+
+        for (xv, yv), s in zip(dd_lab[["_x_", "_y_"]].to_numpy(), lab.to_numpy()):
+            texts.append(ax.text(xv + dx0, yv + dy0, s, fontsize=label_fontsize))
+
+        try:
+            # pip install adjustText  (or: conda install -c conda-forge adjusttext)
+            from adjustText import adjust_text
+
+            adjust_text(
+                texts,
+                ax=ax,
+                x=dd_lab["_x_"].to_numpy(),
+                y=dd_lab["_y_"].to_numpy(),
+                expand_points=(1.2, 1.4),
+                expand_text=(1.2, 1.4),
+                force_points=(0.2, 0.4),
+                force_text=(0.2, 0.4),
+                lim=200,
+                arrowprops=dict(arrowstyle="-", lw=0.4, alpha=0.6),
+            )
+        except Exception:
+            # Fallback: keep initial offsets (still readable; just no label repulsion)
+            pass
+
     # Legend pane
     if show_legend and leg_ax is not None:
         y_cursor = 1.0
         if color_handles:
-            leg1 = leg_ax.legend(handles=color_handles, title=legend_color_title,
-                                 loc="upper left", bbox_to_anchor=(0.0, y_cursor),
-                                 frameon=True, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+            leg1 = leg_ax.legend(
+                handles=color_handles,
+                title=legend_color_title,
+                loc="upper left",
+                bbox_to_anchor=(0.0, y_cursor),
+                frameon=True,
+                fontsize=legend_fontsize,
+                title_fontsize=legend_fontsize,
+            )
             leg_ax.add_artist(leg1)
             y_cursor -= ((color_h if color_h else 0.0) + legend_vgap_in) / fig_h_in
         if marker_handles:
-            leg_ax.legend(handles=marker_handles, title=legend_marker_title,
-                          loc="upper left", bbox_to_anchor=(0.0, y_cursor),
-                          frameon=True, fontsize=legend_fontsize, title_fontsize=legend_fontsize)
+            leg_ax.legend(
+                handles=marker_handles,
+                title=legend_marker_title,
+                loc="upper left",
+                bbox_to_anchor=(0.0, y_cursor),
+                frameon=True,
+                fontsize=legend_fontsize,
+                title_fontsize=legend_fontsize,
+            )
 
     # Save (SVG + PDF)
     output_file = Path(output_file)
@@ -421,8 +506,10 @@ def main():
                     help="indicspecies sign table for type_group (TSV).")
     ap.add_argument("--status-results", type=Path, required=True,
                     help="indicspecies sign table for status (TSV).")
-    ap.add_argument("--venn", type=Path, default=None,
-                    help="Optional Venn presence table (cols: grouping, ASV_ID).")
+    ap.add_argument("--type-venn", type=Path, default=None,
+                    help="Optional Type Venn presence table (cols: grouping, ASV_ID).")
+    ap.add_argument("--status-venn", type=Path, default=None,
+                    help="Optional Status Venn presence table (cols: grouping, ASV_ID).")
     ap.add_argument("--taxonomy", type=Path, default=None,
                     help="Optional taxonomy table (taxonomy_updated.tsv).")
     ap.add_argument("--outdir", type=Path, required=True,
@@ -459,10 +546,25 @@ def main():
     ap.add_argument("--plot-width", type=float, default=8.0)
     ap.add_argument("--plot-height", type=float, default=6.0)
 
+    # --- point label controls ---
+    ap.add_argument("--label-col", default=None,
+        help="DataFrame column to use as text labels for each plotted point (default: no labels).",
+    )
+    ap.add_argument("--label-fontsize", type=int, default=8,
+        help="Font size for point labels (default: 8).",
+    )
+    ap.add_argument("--label-max-points", type=int, default=None,
+        help="If set, only label the first N points (useful to avoid clutter).",
+    )
+
     args = ap.parse_args()
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
+    tables_outdir = outdir / "tables"
+    tables_outdir.mkdir(parents=True, exist_ok=True)
+    plots_outdir = outdir / "plots"
+    plots_outdir.mkdir(parents=True, exist_ok=True)
 
     # ---- Read inputs ----
     tdf = pd.read_csv(args.type_results, sep="\t", header=0)
@@ -478,11 +580,17 @@ def main():
     else:
         sdf.rename(columns={sdf.columns[0]: "ASV_ID"}, inplace=True)
 
-    venn_df = None
-    if args.venn and args.venn.exists():
-        venn_df = pd.read_csv(args.venn, sep="\t", header=0)
-        ensure_cols(venn_df, ["ASV_ID", "grouping"], "Venn table")
-        venn_df["grouping"] = venn_df["grouping"].astype(str).map(normalize_combo)
+    type_venn_df = None
+    if args.type_venn and args.type_venn.exists():
+        type_venn_df = pd.read_csv(args.type_venn, sep="\t", header=0)
+        ensure_cols(type_venn_df, ["ASV_ID", "grouping"], "Venn table")
+        type_venn_df["grouping"] = type_venn_df["grouping"].astype(str).map(normalize_combo)
+
+    status_venn_df = None
+    if args.status_venn and args.status_venn.exists():
+        status_venn_df = pd.read_csv(args.status_venn, sep="\t", header=0)
+        ensure_cols(status_venn_df, ["ASV_ID", "grouping"], "Venn table")
+        status_venn_df["grouping"] = status_venn_df["grouping"].astype(str).map(normalize_combo)
 
     tax_df = None
     if args.taxonomy:
@@ -506,7 +614,7 @@ def main():
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
         force_all_sig=False, prefix="type"
     )
-    type_sig.to_csv(outdir / "type_group_ISA_enriched.tsv", sep="\t", index=False)
+    type_sig.to_csv(tables_outdir / "type_group_ISA_enriched.tsv", sep="\t", index=False)
 
     status_sig = compute_sig_table(
         sdf, index_map=status_index_map, palette=status_palette,
@@ -514,12 +622,12 @@ def main():
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
         force_all_sig=False, prefix="status"
     )
-    status_sig.to_csv(outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
+    status_sig.to_csv(tables_outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
 
     # ---- Type plot (ISA) ----
     plot_p_vs_stat_no_overlap(
         type_sig,
-        outdir / "type_group_ISA_plot.svg",
+        plots_outdir / "type_group_ISA_plot.svg",
         x_col="type_stat", y_col="type_log_p",
         hue_col="type_label",
         type_palette=type_palette,
@@ -527,45 +635,90 @@ def main():
     )
 
     # ---- Type plot using Venn membership (optional; force all sig for color only) ----
-    if venn_df is not None:
-        vmap = dict(zip(venn_df["ASV_ID"], venn_df["grouping"]))
+    if type_venn_df is not None:
+        tv_map = dict(zip(type_venn_df["ASV_ID"], type_venn_df["grouping"]))
         # Map Venn label -> normalized, then to index_map labels
         # Convert to the index label set used in palette (normalize for consistent keys)
         # If a Venn label isn't present in your palette, it'll fall back to lightgray.
-        v_sub = tdf.copy()
-        if "ASV_ID" not in v_sub.columns:
-            v_sub.rename(columns={v_sub.columns[0]: "ASV_ID"}, inplace=True)
-        v_sub["ASV_ID"] = v_sub["ASV_ID"].astype(str)
-        v_sub["__venn_label__"] = v_sub["ASV_ID"].map(vmap).dropna()
+        tv_sub = tdf.copy()
+        if "ASV_ID" not in tv_sub.columns:
+            tv_sub.rename(columns={tv_sub.columns[0]: "ASV_ID"}, inplace=True)
+        tv_sub["ASV_ID"] = tv_sub["ASV_ID"].astype(str)
+        tv_sub["__venn_label__"] = tv_sub["ASV_ID"].map(tv_map).dropna()
 
-        venn_sig = compute_sig_table(
-            v_sub, index_map={}, palette={},  # labels come from Venn below
+        tvenn_sig = compute_sig_table(
+            tv_sub, index_map={}, palette={},  # labels come from Venn below
             p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
             p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
             force_all_sig=True, prefix="type"
         )
-        venn_sig["type_label"] = venn_sig["ASV_ID"].map(vmap).map(normalize_combo).fillna("not_indicator")
+        tvenn_sig["type_label"] = tvenn_sig["ASV_ID"].map(tv_map).map(normalize_combo).fillna("not_indicator")
         # Convert Venn labels to palette keys if you used a different wording
         # Example mapping often needed:
         # "Oral Rinse + BAL" -> "BAL+Oral Rinse"
-        venn_label_to_palette_key = {normalize_combo(k): k for k in type_palette.keys()}  # identity by default
-        venn_sig["type_label"] = venn_sig["type_label"].map(lambda s: venn_label_to_palette_key.get(s, s))
-        venn_sig["type_color"] = venn_sig["type_label"].map(lambda k: type_palette.get(k, "lightgray"))
+        tvenn_label_to_palette_key = {normalize_combo(k): k for k in type_palette.keys()}  # identity by default
+        tvenn_sig["type_label"] = tvenn_sig["type_label"].map(lambda s: tvenn_label_to_palette_key.get(s, s))
+        tvenn_sig["type_color"] = tvenn_sig["type_label"].map(lambda k: type_palette.get(k, "lightgray"))
 
-        venn_sig.to_csv(outdir / "type_group_Venn_enriched.tsv", sep="\t", index=False)
+        tvenn_sig.to_csv(tables_outdir / "type_group_Venn_enriched.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
-            venn_sig,
-            outdir / "type_group_Venn_plot.svg",
+            tvenn_sig,
+            plots_outdir / "type_group_Venn_plot.svg",
             x_col="type_stat", y_col="type_log_p",
             hue_col="type_label",
             type_palette=type_palette,
             plot_size_in=(args.plot_width, args.plot_height),
         )
 
+    # ---- Status plot using Venn membership (optional; force all sig for color only) ----
+    if status_venn_df is not None:
+        sv_map = dict(zip(status_venn_df["ASV_ID"], status_venn_df["grouping"]))
+        # Map Venn label -> normalized, then to index_map labels
+        # Convert to the index label set used in palette (normalize for consistent keys)
+        # If a Venn label isn't present in your palette, it'll fall back to lightgray.
+        sv_sub = sdf.copy()
+        if "ASV_ID" not in sv_sub.columns:
+            sv_sub.rename(columns={sv_sub.columns[0]: "ASV_ID"}, inplace=True)
+        sv_sub["ASV_ID"] = sv_sub["ASV_ID"].astype(str)
+        sv_sub["__venn_label__"] = sv_sub["ASV_ID"].map(sv_map).dropna()
+
+        svenn_sig = compute_sig_table(
+            sv_sub, index_map={}, palette={},  # labels come from Venn below
+            p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
+            p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
+            force_all_sig=True, prefix="status"
+        )
+        svenn_sig["status_label"] = svenn_sig["ASV_ID"].map(sv_map).map(normalize_combo).fillna("not_indicator")
+        # Convert Venn labels to palette keys if you used a different wording
+        # Example mapping often needed:
+        # "Oral Rinse + BAL" -> "BAL+Oral Rinse"
+        svenn_label_to_palette_key = {normalize_combo(k): k for k in status_palette.keys()}  # identity by default
+        svenn_sig["status_label"] = svenn_sig["status_label"].map(lambda s: svenn_label_to_palette_key.get(s, s))
+        svenn_sig["status_color"] = svenn_sig["status_label"].map(lambda k: status_palette.get(k, "lightgray"))
+
+        svenn_sig.to_csv(tables_outdir / "status_group_Venn_enriched.tsv", sep="\t", index=False)
+        plot_p_vs_stat_no_overlap(
+            svenn_sig,
+            plots_outdir / "status_group_Venn_plot.svg",
+            x_col="status_stat", y_col="status_log_p",
+            hue_col="status_label",
+            type_palette=status_palette,
+            plot_size_in=(args.plot_width, args.plot_height),
+        )
+    
+    if ((type_venn_df is not None) and (status_venn_df is not None)):
+        # ---- Venn Combined tables/plots: join type + status on ASV ----
+        venn_combined = pd.merge(tvenn_sig[["ASV_ID", "type_stat", "type_p_value", "type_log_p",
+                                    "type_significance", "type_label", "type_color"]],
+                            svenn_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
+                                        "status_significance", "status_label"]],
+                            on="ASV_ID", how="outer")
+        venn_combined.to_csv(tables_outdir / "Type_status_Venn_results.tsv", sep="\t", index=False)
+    
     # ---- Status plot (ISA) ----
     plot_p_vs_stat_no_overlap(
         status_sig,
-        outdir / "status_ISA_plot.svg",
+        plots_outdir / "status_ISA_plot.svg",
         x_col="status_stat", y_col="status_log_p",
         hue_col="status_label",
         type_palette=status_palette,
@@ -578,16 +731,52 @@ def main():
                         status_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
                                     "status_significance", "status_label"]],
                         on="ASV_ID", how="outer")
-    combined.to_csv(outdir / "Type_status_ISA_results.tsv", sep="\t", index=False)
+    combined.to_csv(tables_outdir / "Type_status_ISA_results.tsv", sep="\t", index=False)
 
     plot_p_vs_stat_no_overlap(
         combined,
-        outdir / "Combined_ISA_plot.svg",
+        plots_outdir / "Combined_ISA_plot.svg",
         x_col="status_stat", y_col="status_log_p",
         hue_col="type_label", style_col="status_label",
         type_palette=type_palette, marker_dict=status_markers,
         legend_color_title="Type", legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
+    )
+
+    plot_p_vs_stat_no_overlap(
+        combined,
+        plots_outdir / "Combined_ISA_plot_labelled.svg",
+        x_col="status_stat", y_col="status_log_p",
+        hue_col="type_label", style_col="status_label",
+        type_palette=type_palette, marker_dict=status_markers,
+        legend_color_title="Type", legend_marker_title="Status",
+        plot_size_in=(args.plot_width, args.plot_height),
+        label_col=args.label_col,
+        label_fontsize=args.label_fontsize,
+        label_max_points=args.label_max_points,
+    )
+
+    plot_p_vs_stat_no_overlap(
+        venn_combined,
+        plots_outdir / "Combined_Venn_plot.svg",
+        x_col="status_stat", y_col="status_log_p",
+        hue_col="type_label", style_col="status_label",
+        type_palette=type_palette, marker_dict=status_markers,
+        legend_color_title="Type", legend_marker_title="Status",
+        plot_size_in=(args.plot_width, args.plot_height),
+    )
+
+    plot_p_vs_stat_no_overlap(
+        venn_combined,
+        plots_outdir / "Combined_Venn_plot_labelled.svg",
+        x_col="status_stat", y_col="status_log_p",
+        hue_col="type_label", style_col="status_label",
+        type_palette=type_palette, marker_dict=status_markers,
+        legend_color_title="Type", legend_marker_title="Status",
+        plot_size_in=(args.plot_width, args.plot_height),
+        label_col=args.label_col,
+        label_fontsize=args.label_fontsize,
+        label_max_points=args.label_max_points,
     )
 
     # ---- Phylum-colored variants (if taxonomy provided) ----
@@ -596,10 +785,10 @@ def main():
         type_tax = type_sig.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
         phyla = type_tax["Phylum"].dropna().unique().tolist()
         phyl_pal = {p: c for p, c in zip(phyla, sns.color_palette('tab20', len(phyla)).as_hex())}
-        type_tax.to_csv(outdir / "type_group_ISA_with_taxonomy.tsv", sep="\t", index=False)
+        type_tax.to_csv(tables_outdir / "type_group_ISA_with_taxonomy.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
             type_tax,
-            outdir / "type_group_ISA_plot_Phylum.svg",
+            plots_outdir / "type_group_ISA_plot_Phylum.svg",
             x_col="type_stat", y_col="type_log_p",
             hue_col="Phylum", type_palette=phyl_pal,
             legend_color_title="Phylum",
@@ -608,15 +797,54 @@ def main():
 
         # Combined + taxonomy
         comb_tax = combined.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
-        comb_tax.to_csv(outdir / "Combined_ISA_with_taxonomy.tsv", sep="\t", index=False)
+        comb_tax.to_csv(tables_outdir / "Combined_ISA_with_taxonomy.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
             comb_tax,
-            outdir / "Combined_ISA_plot_Phylum.svg",
+            plots_outdir / "Combined_ISA_plot_Phylum.svg",
             x_col="status_stat", y_col="status_log_p",
             hue_col="Phylum", style_col="status_label",
             type_palette=phyl_pal, marker_dict=status_markers,
             legend_color_title="Phylum", legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
+        )
+
+        plot_p_vs_stat_no_overlap(
+            comb_tax,
+            plots_outdir / "Combined_ISA_plot_Phylum_labelled.svg",
+            x_col="status_stat", y_col="status_log_p",
+            hue_col="Phylum", style_col="status_label",
+            type_palette=phyl_pal, marker_dict=status_markers,
+            legend_color_title="Phylum", legend_marker_title="Status",
+            plot_size_in=(args.plot_width, args.plot_height),
+            label_col=args.label_col,
+            label_fontsize=args.label_fontsize,
+            label_max_points=args.label_max_points,           
+        )
+
+        # Venn Combined + taxonomy
+        venn_comb_tax = venn_combined.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
+        venn_comb_tax.to_csv(tables_outdir / "Combined_Venn_with_taxonomy.tsv", sep="\t", index=False)
+        plot_p_vs_stat_no_overlap(
+            venn_comb_tax,
+            plots_outdir / "Combined_Venn_plot_Phylum.svg",
+            x_col="status_stat", y_col="status_log_p",
+            hue_col="Phylum", style_col="status_label",
+            type_palette=phyl_pal, marker_dict=status_markers,
+            legend_color_title="Phylum", legend_marker_title="Status",
+            plot_size_in=(args.plot_width, args.plot_height),
+        )
+
+        plot_p_vs_stat_no_overlap(
+            venn_comb_tax,
+            plots_outdir / "Combined_Venn_plot_Phylum_labelled.svg",
+            x_col="status_stat", y_col="status_log_p",
+            hue_col="Phylum", style_col="status_label",
+            type_palette=phyl_pal, marker_dict=status_markers,
+            legend_color_title="Phylum", legend_marker_title="Status",
+            plot_size_in=(args.plot_width, args.plot_height),
+            label_col=args.label_col,
+            label_fontsize=args.label_fontsize,
+            label_max_points=args.label_max_points,           
         )
 
     print(f"Done. Outputs in: {outdir}")

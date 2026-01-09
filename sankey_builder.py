@@ -1,39 +1,10 @@
-#!/usr/bin/env python3
-"""
-data_loss_sankey.py
-Build Sankey diagrams for read/ASV flow with flexible I/O, grouping, and colors.
-
-Two modes:
-A) COMPUTE from pipeline TSVs (default)
-B) MANUAL via --steps/--lmp-in/--lmp-out
-
-Examples
---------
-# A) Compute from files (defaults mirror your script paths/columns)
-python data_loss_sankey.py \
-  --data-dir /path/to/project \
-  --sub-dir spark_combined_output \
-  --metadata /path/to/project/ref_db/spark_metadata.tsv \
-  --type-col type_group \
-  --samp-col lmp_id \
-  --keep-types "Oral Rinse,Lung Brush,BAL,Skin Brush,Scope Flush" \
-  --fastq-stats stats/fastq_stats.tsv --fastq-id-suffix-underscores 4 \
-  --filtered-stats stats/filtered_fastqs.tsv --filtered-id-suffix-underscores 2 \
-  --asv-raw ASVs/ASV_counts.tsv --asv-id-suffix-underscores 2 \
-  --asv-decon ASVs/ASV_target.decon.tsv \
-  --asv-micro ASVs/ASV_target.micro.tsv \
-  --palette "Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
-  --title "Data Loss Flow" \
-  --output-prefix metadata/data_loss_sankey --make-labeled --make-unlabeled
-
-# B) Manual counts
-python data_loss_sankey.py \
-  --steps "Quality Control:123456,Error Correction:110000,Decontamination:98000,Off-Target Filtering:82000,Finished Data:76000" \
-  --lmp-in "Oral Rinse:40000,Lung Brush:35000,BAL:28000,Skin Brush:12000,Scope Flush:8400" \
-  --lmp-out "Oral Rinse:18000,Lung Brush:22000,BAL:24000,Skin Brush:9000,Scope Flush:5100" \
-  --palette "Oral Rinse:#6A3D9A,Lung Brush:#009E73,BAL:#0072B2,Skin Brush:#CC79A7,Scope Flush:#E69F00" \
-  --output-prefix out/sankey --make-labeled --make-unlabeled
-"""
+# file: data_loss_sankey.py
+# edits:
+#   1) Replace build_sankey() with the version below (Ctrl+F: "def build_sankey(")
+#   2) Add build_sample_stage_df() helper (place it just ABOVE "def get_parser()")
+#   3) In main() compute-mode, build sample_stage_df and pass it into build_sankey()
+#
+# NOTE: In manual mode, sample-level linking is unavailable, so the bottom block is omitted.
 
 from __future__ import annotations
 
@@ -180,42 +151,376 @@ def group_counts_by_type(long_counts: pd.DataFrame, metadata: pd.DataFrame,
 
 
 # =========================
+# NEW: per-sample stage table (compute-mode)
+# =========================
+def build_sample_stage_df(
+    meta: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    filt_df: pd.DataFrame,
+    asv_erc_long: pd.DataFrame,
+    asv_decon_long: pd.DataFrame,
+    asv_micro_long: pd.DataFrame,
+    asv_mito_long: pd.DataFrame,
+    samp_col: str,
+    type_col: str,
+) -> pd.DataFrame:
+    """
+    Returns a per-sample table linking each stage's counts to samples.
+    Columns:
+      - samp_col
+      - type_col
+      - qc_raw_pairs
+      - error_correct_filtered_reads
+      - asv_raw_reads
+      - asv_decon_reads
+      - asv_micro_reads
+    """
+
+    # base: unique samples + types from metadata (filtered to keep_types upstream)
+    base = meta[[samp_col, type_col]].drop_duplicates().copy()
+    base[samp_col] = base[samp_col].astype(str)
+
+    # QC raw pairs
+    raw_df = raw_df[[samp_col, "num_seqs"]].copy()
+    raw_df[samp_col] = raw_df[samp_col].astype(str)
+    raw_df["raw_reads"] = (raw_df["num_seqs"].fillna(0).astype("int64") // 2).astype("int64")
+    raw_df = raw_df[[samp_col, "raw_reads"]]
+
+    # Filtered reads (already single-end in your semantics)
+    flt = filt_df[[samp_col, "num_seqs"]].copy()
+    flt[samp_col] = flt[samp_col].astype(str)
+    flt["qc_reads"] = flt["num_seqs"].fillna(0).astype("int64")
+    flt = flt[[samp_col, "qc_reads"]]
+
+    def asv_sum(long_df: pd.DataFrame, out_col: str) -> pd.DataFrame:
+        if long_df.empty:
+            return pd.DataFrame({samp_col: [], out_col: []})
+        tmp = long_df.groupby(samp_col, as_index=False)["count"].sum().copy()
+        tmp[samp_col] = tmp[samp_col].astype(str)
+        tmp[out_col] = tmp["count"].fillna(0).astype("int64")
+        return tmp[[samp_col, out_col]]
+
+    a_erc = asv_sum(asv_erc_long, "error_correct_reads")
+    a_dec = asv_sum(asv_decon_long, "asv_decon_reads")
+    a_mic = asv_sum(asv_micro_long, "asv_micro_reads")
+    a_mit = asv_sum(asv_mito_long, "asv_mito_reads")
+
+    # Merge all stages onto base
+    out = base.merge(raw_df, on=samp_col, how="left") \
+              .merge(flt, on=samp_col, how="left") \
+              .merge(a_erc, on=samp_col, how="left") \
+              .merge(a_dec, on=samp_col, how="left") \
+              .merge(a_mic, on=samp_col, how="left") \
+              .merge(a_mit, on=samp_col, how="left")
+
+    out['asv_unassigned_tax'] = out['asv_decon_reads'] - (out['asv_micro_reads'] + out['asv_mito_reads'])
+    # Fill missing with 0 and cast to int
+    for c in ["raw_reads", "qc_reads", "error_correct_reads", "asv_decon_reads", "asv_micro_reads", "asv_mito_reads", "asv_unassigned_tax"]:
+        out[c] = out[c].fillna(0).astype("int64")
+
+    # Nice default ordering: by type then sample
+    out = out.sort_values([type_col, samp_col], kind="mergesort").reset_index(drop=True)
+    return out
+
+
+# =========================
 # Sankey construction
 # =========================
-def build_sankey(steps: List[str], counts: List[int],
-                 lmp_in: Dict[str, int], lmp_out: Dict[str, int],
-                 palette: Dict[str, str], title: str,
-                 output_html: Path, labeled: bool) -> None:
+def build_sankey(
+    steps: List[str],
+    counts: List[int],
+    lmp_in: Dict[str, int],
+    lmp_out: Dict[str, int],
+    palette: Dict[str, str],
+    title: str,
+    output_html: Path,
+    labeled: bool,
+    sample_stage_df: Optional[pd.DataFrame] = None,
+    samp_col: str = "lmp_id",
+    type_col: str = "type_group",
+) -> None:
     """
-    Build and save a Plotly HTML sankey.
+    Two behaviors:
+      1) If sample_stage_df is provided (compute-mode): build the NEW Sankey:
+           raw split by type_group
+           -> raw total
+           -> after QC
+           -> after error correction
+           -> after decontamination
+           -> after off-target filtering
+           -> finished data
+           -> finished split by type_group
+
+         Semantics:
+           - asv_decon_reads = target + non-target
+           - finished/off-target output = asv_micro_reads
+           - non-target removed at off-target step = asv_decon_reads - asv_micro_reads
+
+      2) Otherwise (manual-mode): keep the OLD type-based Sankey behavior.
+
+    Also: if sample_stage_df is provided, append the bottom sortable per-sample table block (unchanged).
     """
+
+    # ---------------------------------------------------------------------
+    # Helper: minimal HTML escape
+    def _esc(x: object) -> str:
+        s = str(x)
+        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                 .replace('"', "&quot;").replace("'", "&#39;"))
+
+    # ---------------------------------------------------------------------
+    # NEW: table-driven Sankey (compute-mode) — SPLIT BY TYPE_GROUP (NOT SAMPLE)
+    if sample_stage_df is not None and not sample_stage_df.empty:
+        df = sample_stage_df.copy()
+
+        required_cols = {type_col, "raw_reads", "qc_reads", "error_correct_reads", "asv_decon_reads", "asv_micro_reads"}
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"sample_stage_df missing required columns: {missing}")
+
+        df[type_col] = df[type_col].astype(str)
+        for c in ["raw_reads", "qc_reads", "error_correct_reads", "asv_decon_reads", "asv_micro_reads"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype("int64")
+
+        # per-type (for split ends)
+        by_type = df.groupby(type_col, as_index=False)[["raw_reads", "asv_micro_reads"]].sum()
+        types = list(by_type[type_col].astype(str).tolist())
+
+        raw_by_type = {t: int(by_type.loc[by_type[type_col] == t, "raw_reads"].iloc[0]) for t in types}
+        fin_by_type = {t: int(by_type.loc[by_type[type_col] == t, "asv_micro_reads"].iloc[0]) for t in types}
+
+        # totals (for the middle chain)
+        total_raw = int(df["raw_reads"].sum())
+        total_qc = int(df["qc_reads"].sum())
+        total_ec = int(df["error_correct_reads"].sum())
+        total_decon = int(df["asv_decon_reads"].sum())
+        total_micro = int(df["asv_micro_reads"].sum())
+
+        # Nodes / links
+        nodes: List[Dict[str, str]] = []
+        links: List[Dict[str, int]] = []
+        link_colors: List[str] = []
+        node_idx: Dict[str, int] = {}
+
+        def add_node(key: str, label_txt: str, color: str) -> int:
+            nodes.append({"key": key, "label": label_txt, "color": color})
+            node_idx[key] = len(nodes) - 1
+            return node_idx[key]
+
+        def add_link(src_key: str, dst_key: str, value: int, color: str = "grey") -> None:
+            if value <= 0:
+                return
+            links.append({"source": node_idx[src_key], "target": node_idx[dst_key], "value": int(value)})
+            link_colors.append(color)
+
+        # Left: raw split by type_group
+        for t in types:
+            v = raw_by_type.get(t, 0)
+            col = palette.get(t, "black")
+            lab = f"{t} ({v})" if labeled else ""
+            add_node(f"raw_type::{t}", lab, col)
+
+        # Middle: stage totals
+        add_node("stage::raw_total", f"Raw total ({total_raw})" if labeled else "", "black")
+        add_node("stage::qc_total", f"Quality Control ({total_qc})" if labeled else "", "black")
+        add_node("stage::ec_total", f"Error Correction ({total_ec})" if labeled else "", "black")
+        add_node("stage::decon_total", f"Decontamination ({total_decon})" if labeled else "", "black")
+        add_node("stage::offtarget_total", f"Non-Target Filtering ({total_micro})" if labeled else "", "black")
+        add_node("stage::finished_total", f"Finished Data ({total_micro})" if labeled else "", "black")
+
+        # Right: finished split by type_group (asv_micro_reads)
+        for t in types:
+            v = fin_by_type.get(t, 0)
+            col = palette.get(t, "black")
+            lab = f"{t} ({v})" if labeled else ""
+            add_node(f"fin_type::{t}", lab, col)
+
+        # raw split -> raw total
+        for t in types:
+            add_link(f"raw_type::{t}", "stage::raw_total", raw_by_type.get(t, 0), "grey")
+
+        # Chain totals with loss nodes
+        add_link("stage::raw_total", "stage::qc_total", total_qc, "grey")
+        if total_raw > total_qc:
+            loss_val = total_raw - total_qc
+            add_node("loss::after_raw", f"Loss after Quality Control ({loss_val})" if labeled else "", "lightgrey")
+            add_link("stage::raw_total", "loss::after_raw", loss_val, "lightgrey")
+
+        add_link("stage::qc_total", "stage::ec_total", total_ec, "grey")
+        if total_qc > total_ec:
+            loss_val = total_qc - total_ec
+            add_node("loss::after_qc", f"Loss after Error Correction ({loss_val})" if labeled else "", "lightgrey")
+            add_link("stage::qc_total", "loss::after_qc", loss_val, "lightgrey")
+
+        add_link("stage::ec_total", "stage::decon_total", total_decon, "grey")
+        if total_ec > total_decon:
+            loss_val = total_ec - total_decon
+            add_node("loss::after_ec", f"Loss after Decontamination ({loss_val})" if labeled else "", "lightgrey")
+            add_link("stage::ec_total", "loss::after_ec", loss_val, "lightgrey")
+
+        # This is the off-target removal step: decon (target+non-target) -> micro (target only)
+        add_link("stage::decon_total", "stage::offtarget_total", total_micro, "grey")
+        if total_decon > total_micro:
+            loss_val = total_decon - total_micro
+            add_node("loss::nontarget_removed", f"Lost after Non-target Filtering ({loss_val})" if labeled else "", "lightgrey")
+            add_link("stage::decon_total", "loss::nontarget_removed", loss_val, "lightgrey")
+
+        # Off-target -> Finished (same)
+        add_link("stage::offtarget_total", "stage::finished_total", total_micro, "grey")
+
+        # finished total -> finished split (by type_group)
+        for t in types:
+            add_link("stage::finished_total", f"fin_type::{t}", fin_by_type.get(t, 0), "grey")
+
+        fig = go.Figure(data=[go.Sankey(
+            node=dict(
+                pad=15,
+                thickness=18,
+                line=dict(color="black", width=0.5),
+                label=[n["label"] for n in nodes],
+                color=[n["color"] for n in nodes],
+            ),
+            link=dict(
+                source=[l["source"] for l in links],
+                target=[l["target"] for l in links],
+                value=[l["value"] for l in links],
+                color=link_colors,
+            ),
+        )])
+        fig.update_layout(title_text=title, font_size=12)
+        output_html.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write HTML so we can append bottom table block (per-sample)
+        html = fig.to_html(full_html=True, include_plotlyjs="cdn")
+
+        # Bottom block: keep as per-sample table; just fix stage_specs to match actual cols
+        stage_specs = [
+            ("Raw total", "raw_reads"),
+            ("After QC", "qc_reads"),
+            ("After Error Correction", "error_correct_reads"),
+            ("After Decontamination", "asv_decon_reads"),
+            ("After Off-Target Filtering / Finished", "asv_micro_reads"),
+        ]
+
+        required_for_block = {samp_col, type_col} | {c for _, c in stage_specs}
+        missing_block = [c for c in required_for_block if c not in df.columns]
+        if not missing_block:
+            headers = [samp_col, type_col] + [c for _, c in stage_specs]
+            totals = {label: int(df[col].sum()) for label, col in stage_specs}
+
+            rows_html = []
+            for _, r in df.iterrows():
+                rows_html.append("<tr>" + "".join([f"<td>{_esc(r[h])}</td>" for h in headers]) + "</tr>")
+            rows_html = "\n".join(rows_html)
+
+            links_html = []
+            for label, col in stage_specs:
+                col_index = headers.index(col)
+                links_html.append(
+                    f'<li><a href="#sample_counts" onclick="sortSampleTable({col_index});">'
+                    f'{_esc(label)}: {totals[label]}</a></li>'
+                )
+            links_html = "\n".join(links_html)
+
+            bottom_block = f"""
+<div id="counts_to_samples_block" style="max-width: 1100px; margin: 24px auto 48px auto; padding: 16px;">
+  <a id="sample_counts"></a>
+  <h2 style="margin: 0 0 8px 0;">Counts ↔ Samples (all stages)</h2>
+  <p style="margin: 0 0 12px 0;">Click a stage total to jump here and sort the table by that stage.</p>
+
+  <ul style="margin: 0 0 16px 18px;">
+    {links_html}
+  </ul>
+
+  <style>
+    #sample_counts_table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
+    #sample_counts_table th, #sample_counts_table td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; }}
+    #sample_counts_table th {{ position: sticky; top: 0; background: #f7f7f7; cursor: pointer; }}
+    #sample_counts_table tr:nth-child(even) {{ background: #fafafa; }}
+    .col-hilite {{ outline: 2px solid #000; }}
+  </style>
+
+  <table id="sample_counts_table">
+    <thead>
+      <tr>
+        {''.join([f'<th onclick="sortSampleTable({i})">{_esc(h)}</th>' for i, h in enumerate(headers)])}
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+
+  <script>
+    function sortSampleTable(colIndex) {{
+      const table = document.getElementById("sample_counts_table");
+      const tbody = table.tBodies[0];
+      const rows = Array.from(tbody.rows);
+
+      Array.from(table.tHead.rows[0].cells).forEach(th => th.classList.remove("col-hilite"));
+      table.tHead.rows[0].cells[colIndex].classList.add("col-hilite");
+
+      const isNumeric = rows.every(r => {{
+        const v = r.cells[colIndex].innerText.trim();
+        return v === "" || !isNaN(Number(v));
+      }});
+
+      rows.sort((a, b) => {{
+        const av = a.cells[colIndex].innerText.trim();
+        const bv = b.cells[colIndex].innerText.trim();
+
+        if (isNumeric) {{
+          const an = Number(av || 0);
+          const bn = Number(bv || 0);
+          if (bn !== an) return bn - an;
+          return a.cells[0].innerText.localeCompare(b.cells[0].innerText);
+        }} else {{
+          const cmp = av.localeCompare(bv);
+          if (cmp !== 0) return cmp;
+          return a.cells[0].innerText.localeCompare(b.cells[0].innerText);
+        }}
+      }});
+
+      rows.forEach(r => tbody.appendChild(r));
+    }}
+  </script>
+</div>
+"""
+            if "</body>" in html:
+                html = html.replace("</body>", bottom_block + "\n</body>")
+            else:
+                html += bottom_block
+
+        with open(output_html, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        print(f"✔ Sankey saved: {output_html}")
+        return
+
+    # ---------------------------------------------------------------------
+    # OLD: type-based Sankey (manual-mode / no sample_stage_df) — unchanged
     nodes: List[Dict[str, str]] = []
     links: List[Dict[str, int]] = []
-    node_idx: Dict[Tuple[str, str], int] = {}  # (name, role) -> idx
+    node_idx: Dict[Tuple[str, str], int] = {}
     link_colors: List[str] = []
 
-    # Input-type nodes
     for k, v in lmp_in.items():
         nodes.append({"label": f"{k} ({v})" if labeled else "", "color": palette.get(k, "black")})
         node_idx[(k, "in")] = len(nodes) - 1
 
-    # Process nodes
     for step, cnt in zip(steps, counts):
         nodes.append({"label": f"{step} ({cnt})" if labeled else "", "color": "black"})
         node_idx[(step, "proc")] = len(nodes) - 1
 
-    # Output-type nodes
     for k, v in lmp_out.items():
         nodes.append({"label": f"{k} ({v})" if labeled else "", "color": palette.get(k, "black")})
         node_idx[(k, "out")] = len(nodes) - 1
 
-    # Links: input -> first step
     first_step = steps[0]
     for k, v in lmp_in.items():
         links.append({"source": node_idx[(k, "in")], "target": node_idx[(first_step, "proc")], "value": v})
         link_colors.append("grey")
 
-    # Links: step -> next step (+ loss nodes)
     for i in range(len(steps) - 1):
         s, t = steps[i], steps[i + 1]
         links.append({"source": node_idx[(s, "proc")], "target": node_idx[(t, "proc")], "value": counts[i + 1]})
@@ -229,7 +534,6 @@ def build_sankey(steps: List[str], counts: List[int],
             links.append({"source": node_idx[(s, "proc")], "target": loss_idx, "value": loss_val})
             link_colors.append("lightgrey")
 
-    # Links: last step -> outputs
     last_step = steps[-1]
     for k, v in lmp_out.items():
         links.append({"source": node_idx[(last_step, "proc")], "target": node_idx[(k, "out")], "value": v})
@@ -291,20 +595,21 @@ def get_parser() -> argparse.ArgumentParser:
                     help="Chop N underscore tokens (filtered reads)")
     io.add_argument("--filtered-id-regex", default="", help="Regex for filtered sample id extraction")
 
-    io.add_argument("--asv-raw", default="ASVs/ASV_counts.tsv", help="Wide ASV counts matrix")
+    io.add_argument("--asv-erc", default="ASVs/ASV_filtered.tsv", help="Error corrected ASV")
     io.add_argument("--asv-id-suffix-underscores", type=int, default=2,
                     help="Chop N underscore tokens (ASV matrices)")
     io.add_argument("--asv-id-regex", default="", help="Regex for ASV sample id extraction")
 
-    io.add_argument("--asv-decon", default="ASVs/ASV_target.decon.tsv", help="Wide ASV after decontamination")
-    io.add_argument("--asv-micro", default="ASVs/ASV_target.micro.tsv", help="Wide ASV microbial (finished)")
+    io.add_argument("--asv-decon", default="ASVs/ASV_target.decon.tsv", help="ASV after decontamination")
+    io.add_argument("--asv-micro", default="ASVs/ASV_target.micro.tsv", help="ASV microbial (finished)")
+    io.add_argument("--asv-mito", default="ASVs/ASV_target.mito.tsv", help="ASV mitochondrial (finished)")
 
     # --- Appearance / output
     out = p.add_argument_group("Output")
     out.add_argument("--palette", default="Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
                      help="Comma-separated 'Group:#HEX' list")
     out.add_argument("--title", default="Data Loss Flow", help="Plot title")
-    out.add_argument("--output-prefix", default="metadata/data_loss_sankey",
+    out.add_argument("--output-prefix", default="data_loss_sankey",
                      help="Output prefix ('.html' appended automatically)")
     out.add_argument("--make-labeled", action="store_true", help="Create labeled-node HTML")
     out.add_argument("--make-unlabeled", action="store_true", help="Create unlabeled-node HTML")
@@ -332,9 +637,21 @@ def main():
 
         out_pref = Path(args.output_prefix)
         if args.make_labeled:
-            build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".label.html"), True)
+            build_sankey(
+                steps, counts, lmp_in, lmp_out, palette, args.title,
+                out_pref.with_suffix(".label.html"), True,
+                sample_stage_df=None,  # manual mode has no sample-level info
+                samp_col=args.samp_col,
+                type_col=args.type_col,
+            )
         if args.make_unlabeled:
-            build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".html"), False)
+            build_sankey(
+                steps, counts, lmp_in, lmp_out, palette, args.title,
+                out_pref.with_suffix(".html"), False,
+                sample_stage_df=None,
+                samp_col=args.samp_col,
+                type_col=args.type_col,
+            )
         return
 
     # ---- Compute mode ----
@@ -352,9 +669,10 @@ def main():
     metadata_path = args.metadata or (data_dir / "ref_db" / "spark_metadata.tsv")
     fastq_stats_path = resolve(args.fastq_stats)
     filtered_stats_path = resolve(args.filtered_stats)
-    asv_raw_path = resolve(args.asv_raw)
+    asv_erc_path = resolve(args.asv_erc)
     asv_decon_path = resolve(args.asv_decon)
     asv_micro_path = resolve(args.asv_micro)
+    asv_mito_path = resolve(args.asv_mito)
 
     keep_types = [t.strip() for t in args.keep_types.split(',')] if args.keep_types.strip() else None
 
@@ -362,32 +680,63 @@ def main():
         print(f"[i] Metadata: {metadata_path}")
         print(f"[i] Raw fastq stats: {fastq_stats_path}")
         print(f"[i] Filtered stats: {filtered_stats_path}")
-        print(f"[i] ASV raw: {asv_raw_path}")
+        print(f"[i] ASV error-corr: {asv_erc_path}")
         print(f"[i] ASV decon: {asv_decon_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
+        print(f"[i] ASV mito: {asv_mito_path}")
 
     # Read metadata and filter by types
     meta = read_metadata(metadata_path, args.samp_col, args.type_col, keep_types)
 
     # Raw reads (pairs): sum num_seqs across files, then /2
-    raw_df = read_fastq_stats(fastq_stats_path, args.samp_col,
-                              args.fastq_id_suffix_underscores,
-                              args.fastq_id_regex or None)
+    raw_df = read_fastq_stats(
+        fastq_stats_path, args.samp_col,
+        args.fastq_id_suffix_underscores,
+        args.fastq_id_regex or None
+    )
+    raw_df = raw_df.loc[raw_df['sample'].isin(meta['sample'])]
     raw_reads_total = int(raw_df['num_seqs'].sum() // 2)
-
+ 
     # Filtered reads (already single-end counts in your script)
-    filt_df = read_fastq_stats(filtered_stats_path, args.samp_col,
-                               args.filtered_id_suffix_underscores,
-                               args.filtered_id_regex or None)
+    filt_df = read_fastq_stats(
+        filtered_stats_path, args.samp_col,
+        args.filtered_id_suffix_underscores,
+        args.filtered_id_regex or None
+    )
+    filt_df['sample'] = [x.split('.', 1)[0] for x in filt_df['sample']]
+    filt_df = filt_df.loc[filt_df['sample'].isin(meta['sample'])]
     filt_reads_total = int(filt_df['num_seqs'].sum())
 
     # ASV matrices -> long -> merge -> sum
-    asv_raw_long = read_asv_matrix(asv_raw_path, args.samp_col,
+    asv_erc_long = read_asv_matrix(asv_erc_path, args.samp_col,
                                    args.asv_id_suffix_underscores, args.asv_id_regex or None)
     asv_decon_long = read_asv_matrix(asv_decon_path, args.samp_col,
                                      args.asv_id_suffix_underscores, args.asv_id_regex or None)
     asv_micro_long = read_asv_matrix(asv_micro_path, args.samp_col,
                                      args.asv_id_suffix_underscores, args.asv_id_regex or None)
+    asv_mito_long = read_asv_matrix(asv_mito_path, args.samp_col,
+                                     args.asv_id_suffix_underscores, args.asv_id_regex or None)
+    
+    # NEW: build per-sample stage table for bottom block
+    sample_stage_df = build_sample_stage_df(
+        meta=meta,
+        raw_df=raw_df,
+        filt_df=filt_df,
+        asv_erc_long=asv_erc_long,
+        asv_decon_long=asv_decon_long,
+        asv_micro_long=asv_micro_long,
+        asv_mito_long=asv_mito_long,
+        samp_col=args.samp_col,
+        type_col=args.type_col,
+    )
+    
+    # also save sample-stage table to disk
+    out_pref = (args.data_dir / args.sub_dir / "M6_downstream_analysis/metadata_summaries/tables" /args.output_prefix) if args.data_dir else Path(args.output_prefix)
+    table_out = out_pref.with_suffix(".sample_stage_counts.tsv")
+    table_out.parent.mkdir(parents=True, exist_ok=True)
+    sample_stage_df.to_csv(table_out, sep="\t", index=False)
+    print(f"✔ Sample-stage table saved: {table_out}")
+
 
     # Sum by type (group)
     raw_by_type = raw_df.merge(meta[[args.samp_col, args.type_col]], on=args.samp_col, how='inner') \
@@ -398,7 +747,7 @@ def main():
                           .groupby(args.type_col, as_index=False)['num_seqs'].sum()
     filt_by_type['num_reads'] = filt_by_type['num_seqs'].astype(int)
 
-    asv_raw_by_type = group_counts_by_type(asv_raw_long, meta, args.samp_col, args.type_col)
+    asv_raw_by_type = group_counts_by_type(asv_erc_long, meta, args.samp_col, args.type_col)
     asv_decon_by_type = group_counts_by_type(asv_decon_long, meta, args.samp_col, args.type_col)
     asv_micro_by_type = group_counts_by_type(asv_micro_long, meta, args.samp_col, args.type_col)
 
@@ -430,16 +779,28 @@ def main():
         print("[i] Outputs by type:", lmp_out)
 
     # Outputs
-    out_pref = (args.data_dir / args.sub_dir / args.output_prefix) if args.data_dir else Path(args.output_prefix)
+    out_pref = (args.data_dir / args.sub_dir / "M6_downstream_analysis/metadata_summaries/plots" / args.output_prefix) if args.data_dir else Path(args.output_prefix)
     # default: generate both if none chosen
     if not args.make_labeled and not args.make_unlabeled:
         args.make_labeled = True
         args.make_unlabeled = True
 
     if args.make_labeled:
-        build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".label.html"), True)
+        build_sankey(
+            steps, counts, lmp_in, lmp_out, palette, args.title,
+            out_pref.with_suffix(".label.html"), True,
+            sample_stage_df=sample_stage_df,  # NEW
+            samp_col=args.samp_col,
+            type_col=args.type_col,
+        )
     if args.make_unlabeled:
-        build_sankey(steps, counts, lmp_in, lmp_out, palette, args.title, out_pref.with_suffix(".html"), False)
+        build_sankey(
+            steps, counts, lmp_in, lmp_out, palette, args.title,
+            out_pref.with_suffix(".html"), False,
+            sample_stage_df=sample_stage_df,  # NEW
+            samp_col=args.samp_col,
+            type_col=args.type_col,
+        )
 
 
 if __name__ == "__main__":

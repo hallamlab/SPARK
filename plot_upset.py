@@ -152,18 +152,18 @@ class Inputs:
         self.subdir = subdir
         self.domain = domain
         if domain == "micro":
-            self.asv_raw = self.data_dir / subdir / "ASVs" / "ASV_target.micro.tsv"
-            self.asv_final = self.data_dir / subdir / "ASVs" / "ASV_final.micro.tsv"
-            self.meta = self.data_dir / subdir / "metadata" / "metadata_updated_micro.tsv"
+            self.asv_raw = self.data_dir / subdir / "M5_cleaned_counts/ASVs" / "ASV_target.micro.tsv"
+            self.asv_final = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/tables" / "ASV_final.micro.tsv"
+            self.meta = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/tables" / "metadata_updated.tsv"
             # taxonomy shared across domains by default
-            self.tax = taxonomy_path or (self.data_dir / subdir / "metadata" / "taxonomy_updated.tsv")
-            self.out_base = self.data_dir / subdir / "metadata"
+            self.tax = taxonomy_path or (self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/tables" / "taxonomy_updated.tsv")
+            self.out_base = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries"
         elif domain == "mito":
-            self.asv_raw = self.data_dir / subdir / "mito" / "ASVs" / "ASV_target.mito.tsv"
-            self.asv_final = self.data_dir / subdir / "mito" / "ASVs" / "ASV_final.mito.tsv"
-            self.meta = self.data_dir / subdir / "mito" / "metadata" / "metadata_updated_mito.tsv"
+            self.asv_raw = self.data_dir / subdir / "M5_cleaned_counts/ASVs" / "ASV_target.mito.tsv"
+            self.asv_final = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/mitochondrial/metadata_summaries/tables" / "ASV_final.mito.tsv"
+            self.meta = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/mitochondrial/metadata_summaries/tables" / "metadata_updated_mito.tsv"
             self.tax = taxonomy_path or (self.data_dir / subdir / "metadata" / "taxonomy_updated.tsv")
-            self.out_base = self.data_dir / subdir / "mito" / "metadata"
+            self.out_base = self.data_dir / subdir / "M6_downstream_analysis/metadata_summaries/mitochondrial/metadata_summaries"
         else:
             raise ValueError("domain must be 'micro' or 'mito'")
 
@@ -442,6 +442,7 @@ def run_domain(
     # Read
     raw_df = read_asv_table(inp.asv_raw)
     final_df = read_asv_table(inp.asv_final)
+
     md = read_metadata(inp.meta)
     tx = read_taxonomy(inp.tax)
 
@@ -456,7 +457,9 @@ def run_domain(
 
     # Merge with metadata
     raw_long = raw_long.merge(md, how="left", on="sample")
-    final_long = final_long.merge(md, how="left", on="sample")
+    final_long = pd.merge(final_long, md, how="left",
+                          left_on="sample",
+                          right_on="orig_sample")
 
     # Filter positives
     raw_pos = raw_long[raw_long['count'] > 0].copy()
@@ -476,19 +479,20 @@ def run_domain(
     five_present = [g for g in five_groups if g in set(raw_tx['type_group'].unique())]
     five_sets = {g: set(raw_tx.loc[raw_tx['type_group'] == g, 'ASV_ID']) for g in five_present}
     if len(five_sets) >= 2:
-        base = inp.out_base / f"All_types_{inp.domain}"
+        table_base = inp.out_base / f"tables/All_types_{inp.domain}"
+        plot_base = inp.out_base / f"plots/All_types_{inp.domain}"
         # UpSet unique
         plot_upset_unique(five_sets, {g: palette_5[g] for g in five_present},
-                          "ASV Membership by Type", base, formats)
+                          "ASV Membership by Type", plot_base, formats)
         # UpSet weighted (raw-type totals)
         plot_upset_weighted(five_sets, raw_type_asv_total, five_present,
                             {g: palette_5[g] for g in five_present},
-                            "ASV Abundance by Type", base, formats)
+                            "ASV Abundance by Type", plot_base, formats)
         # Venn (cardinalities)
         plot_venn(five_sets, {g: palette_5[g] for g in five_present},
-                  "Venn: ASV Membership (Top-level Types)", base, formats)
+                  "Venn: ASV Membership (Top-level Types)", plot_base, formats)
         # Tables
-        write_presence_and_sums(five_sets, raw_asv_total, base, "All_types")
+        write_presence_and_sums(five_sets, raw_asv_total, table_base, "All_types")
     else:
         print(f"[{inp.domain}] Skipping 5-group suite (need ≥2 present groups).")
 
@@ -496,19 +500,20 @@ def run_domain(
     three_present = [g for g in three_groups if g in set(fin_tx['type_group'].unique())]
     three_sets = {g: set(fin_tx.loc[fin_tx['type_group'] == g, 'ASV_ID']) for g in three_present}
     if len(three_sets) >= 2:
-        base = inp.out_base / f"Three_types_{inp.domain}"
+        table_base = inp.out_base / f"tables/Three_types_{inp.domain}"
+        plot_base = inp.out_base / f"plots/Three_types_{inp.domain}"
         # UpSet unique
         plot_upset_unique(three_sets, {g: palette_3[g] for g in three_present},
-                          "ASV Membership by Type", base, formats)
+                          "ASV Membership by Type", plot_base, formats)
         # UpSet weighted (final-type totals)
         plot_upset_weighted(three_sets, fin_type_asv_total, three_present,
                             {g: palette_3[g] for g in three_present},
-                            "ASV Abundance by Type", base, formats)
+                            "ASV Abundance by Type", plot_base, formats)
         # Venn (cardinalities)
         plot_venn(three_sets, {g: palette_3[g] for g in three_present},
-                  "Venn: ASV Membership (Three Types)", base, formats)
+                  "Venn: ASV Membership (Three Types)", plot_base, formats)
         # Tables
-        write_presence_and_sums(three_sets, fin_asv_total, base, "Three_types")
+        write_presence_and_sums(three_sets, fin_asv_total, table_base, "Three_types")
     else:
         print(f"[{inp.domain}] Skipping 3-group suite (need ≥2 present groups).")
 
@@ -526,17 +531,18 @@ def run_domain(
         comp_present = [g for g in comp_groups if g in set(comp_tx['type_group'].unique())]
         comp_sets = {g: set(comp_tx.loc[comp_tx['type_group'] == g, 'ASV_ID']) for g in comp_present}
         if len(comp_sets) >= 2:
-            base = inp.out_base / f"Three_vs_controls_{inp.domain}"
+            table_base = inp.out_base / f"tables/Three_vs_controls_{inp.domain}"
+            plot_base = inp.out_base / f"plots/Three_vs_controls_{inp.domain}"
             plot_upset_unique(comp_sets, {g: comp_palette[g] for g in comp_present},
-                              "ASV Membership by Type", base, formats)
+                              "ASV Membership by Type", plot_base, formats)
             # weighted with raw per-type sums *after* replace
             comp_totals = comp_tx.groupby(["type_group", "ASV_ID"])["count"].sum().to_dict()
             plot_upset_weighted(comp_sets, comp_totals, comp_present,
                                 {g: comp_palette[g] for g in comp_present},
-                                "ASV Abundance by Type", base, formats)
+                                "ASV Abundance by Type", plot_base, formats)
             plot_venn(comp_sets, {g: comp_palette[g] for g in comp_present},
-                      "Venn: Skin vs Scope vs Oral/Lung", base, formats)
-            write_presence_and_sums(comp_sets, raw_asv_total, base, "Three_vs_controls")
+                      "Venn: Skin vs Scope vs Oral/Lung", plot_base, formats)
+            write_presence_and_sums(comp_sets, raw_asv_total, table_base, "Three_vs_controls")
         else:
             print(f"[{inp.domain}] Skipping composite suite (need ≥2 present groups).")
 
