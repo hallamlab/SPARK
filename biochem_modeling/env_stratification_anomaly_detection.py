@@ -482,7 +482,7 @@ def plot_stratification_monthly_profile(
     plot_df["coverage"] = plot_df["coverage"].fillna(0.0)
     plot_df["month"] = plot_df["month"].astype(int)
     plot_df["year"] = plot_df["year"].astype(int)
-
+    
     pivot = (
         plot_df.groupby(["month", "year"])["normalized_score"]
         .mean()
@@ -539,7 +539,7 @@ def plot_stratification_monthly_profile(
             month_val,
             row["normalized_score"],
             marker="^",
-            color="royalblue",
+            color="black",
             s=200,
             edgecolor="black",
             linewidth=2.0,
@@ -554,7 +554,7 @@ def plot_stratification_monthly_profile(
             month_val,
             row["normalized_score"],
             marker="v",
-            color="darkorange",
+            color="black",
             s=200,
             edgecolor="black",
             linewidth=2.0,
@@ -600,7 +600,7 @@ def plot_stratification_monthly_profile(
             continue
         if row["coverage"] < COVERAGE_THRESHOLD:
             continue
-        color = "royalblue" if row["normalized_score"] >= 0 else "darkorange"
+        color = "black" #"royalblue" if row["normalized_score"] >= 0 else "darkorange"
         ax.scatter(
             row["month"],
             row["normalized_score"],

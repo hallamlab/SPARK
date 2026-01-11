@@ -392,32 +392,21 @@ def bray_curtis(u: np.ndarray, v: np.ndarray) -> float:
     return float(num / den) if den > 0 else np.nan
 
 
-def bray_to_signed_similarity(bc: np.ndarray) -> np.ndarray:
+def bray_to_signed_dissimilarity_scaled(bc: np.ndarray) -> np.ndarray:
     """
-    Convert Bray–Curtis dissimilarity in [0,1] to signed similarity in [-1,+1]:
-      bc=0   -> +1 (most similar)
-      bc=0.5 ->  0
-      bc=1   -> -1 (most different)
-    """
-    x = np.asarray(bc, dtype=float)
-    out = 1.0 - 2.0 * x
-    # numeric safety; preserve NaNs
-    out = np.where(np.isfinite(out), np.clip(out, -1.0, 1.0), np.nan)
-    return out
+    Dataset-scaled signed dissimilarity in [-1, +1] from Bray–Curtis dissimilarity.
 
+    Preserves dissimilarity ordering (higher = more different).
 
-def bray_to_signed_similarity_scaled(bc: np.ndarray) -> np.ndarray:
-    """
-    Dataset-scaled signed similarity in [-1,+1] from Bray–Curtis dissimilarity.
+      bc = min -> -1   (most similar in dataset)
+      bc = mid ->  0
+      bc = max -> +1   (most different in dataset)
 
-    Maps the observed min/max in this series to +1/-1:
-      bc = min -> +1 (most similar in this dataset)
-      bc = max -> -1 (most different in this dataset)
-
-    This is for visualization alignment only (not a metric with fixed absolute meaning).
+    Use for visualization when you want centered axes but still "distance-like" meaning.
     """
     x = np.asarray(bc, dtype=float)
     out = np.full_like(x, np.nan, dtype=float)
+
     m = np.isfinite(x)
     if m.sum() < 2:
         return out
@@ -428,8 +417,8 @@ def bray_to_signed_similarity_scaled(bc: np.ndarray) -> np.ndarray:
         out[m] = 0.0
         return out
 
-    x01 = (x - xmin) / (xmax - xmin)      # -> [0,1] over observed range
-    out[m] = 1.0 - 2.0 * x01[m]           # -> [+1,-1]
+    x01 = (x - xmin) / (xmax - xmin)   # [0,1], low=similar, high=different
+    out[m] = 2.0 * x01[m] - 1.0        # [-1,+1], still low=similar, high=different
     out[m] = np.clip(out[m], -1.0, 1.0)
     return out
 
@@ -550,7 +539,7 @@ def _add_panel_dangling_trend_hints(
     For each break i -> i+1:
       - Panel i: draw from (last_x, last_y) to (last_x + delta_x, y toward next_first)
       - Panel i+1: draw from (-delta_x, y toward prev_last) to (0, first_y)
-    Colors are taken from the plotted lines.
+    Colors/linestyles are taken from the plotted lines when available.
     """
     import numpy as np
 
@@ -571,22 +560,26 @@ def _add_panel_dangling_trend_hints(
 
         last_x = nA - 1
 
-        for key in ["o2", "gmm", "hyb"]:
+        # Add "extra" as a 4th series. It will work only if you stored:
+        #   extra_line, extra_first, extra_last in panel_info.
+        for key in ["o2", "gmm", "hyb", "extra"]:
             y_last = a.get(f"{key}_last", np.nan)
             y_first = b.get(f"{key}_first", np.nan)
             if not (np.isfinite(y_last) and np.isfinite(y_first)):
                 continue
 
-            # choose the line color from the plotted line in panel A
             line = a.get(f"{key}_line", None)
+
+            # Color/linestyle from the real plotted line if present
             col = line.get_color() if line is not None else None
+            ls  = line.get_linestyle() if line is not None else "--"
 
             # panel A "outgoing" hint (goes past the right edge)
             y_out = float(y_last + pull * (y_first - y_last))
             axA.plot(
                 [last_x, last_x + delta_x],
                 [y_last, y_out],
-                linestyle="--",
+                linestyle=ls,
                 linewidth=1.2,
                 alpha=0.55,
                 color=col,
@@ -599,13 +592,14 @@ def _add_panel_dangling_trend_hints(
             axB.plot(
                 [-delta_x, 0.0],
                 [y_in, y_first],
-                linestyle="--",
+                linestyle=ls,
                 linewidth=1.2,
                 alpha=0.55,
                 color=col,
                 clip_on=False,
                 zorder=10,
             )
+
 
 def plot_three_metric_compare(
     labels: List[str],
@@ -623,7 +617,7 @@ def plot_three_metric_compare(
     row_height: float = 3.2,
     col_width: float = 14.5,
     min_per_year_panel: int = 13,
-    max_years_per_panel: int = 3,
+    max_years_per_panel: int = 4,
     extra: Optional[np.ndarray] = None,
     extra_label: str = "Stratification",
     extra_linestyle: str = "--",
@@ -665,7 +659,10 @@ def plot_three_metric_compare(
     have_years = years.notna().any()
 
     # global y-lims
-    y_all = np.concatenate([np.asarray(o2, float), np.asarray(gmm, float), np.asarray(hyb, float)])
+    parts = [np.asarray(o2, float), np.asarray(gmm, float), np.asarray(hyb, float)]
+    if extra is not None:
+        parts.append(np.asarray(extra, float))
+    y_all = np.concatenate(parts)
     y_finite = y_all[np.isfinite(y_all)]
     if y_finite.size == 0:
         y_min, y_max = 0.0, 1.0
@@ -782,6 +779,9 @@ def plot_three_metric_compare(
                         "o2_last": float(sub["o2"].iloc[nseg - 1]),
                         "gmm_last": float(sub["gmm"].iloc[nseg - 1]),
                         "hyb_last": float(sub["hyb"].iloc[nseg - 1]),
+                        "extra_line": None,
+                        "extra_first": np.nan,
+                        "extra_last": np.nan,
                     })
                 else:
                     panel_info.append({
@@ -792,6 +792,9 @@ def plot_three_metric_compare(
                         "hyb_line": hyb_line,
                         "o2_first": np.nan, "gmm_first": np.nan, "hyb_first": np.nan,
                         "o2_last": np.nan,  "gmm_last": np.nan,  "hyb_last": np.nan,
+                        "extra_line": None,
+                        "extra_first": np.nan,
+                        "extra_last": np.nan,
                     })
 
                 # Strat overlay + anomaly markers (triangles)
@@ -809,15 +812,17 @@ def plot_three_metric_compare(
                     extra_color = "black"
 
                     # line (no marker)
-                    ax.plot(
+                    (extra_line,) = ax.plot(
                         x,
                         extra_seg,
                         linestyle=extra_linestyle,
                         linewidth=1.2,
                         color=extra_color,
                         label=extra_label,
+                        marker="o",
                     )
 
+                    """
                     # normal points (marker=extra_marker)
                     normal_mask = np.isfinite(extra_seg)
                     if anom_seg is not None:
@@ -840,7 +845,7 @@ def plot_three_metric_compare(
 
                         high = anom_mask & (np.char.lower(atype_seg.astype(str)) == "high_stratification")
                         mix = anom_mask & (np.char.lower(atype_seg.astype(str)) == "mixing_event")
-
+                        
                         if np.any(high):
                             ax.scatter(
                                 x[high],
@@ -861,7 +866,12 @@ def plot_three_metric_compare(
                                 zorder=7,
                                 label=None,
                             )
-    
+                    """
+                if extra is not None and nseg > 0:
+                    panel_info[-1]["extra_line"] = extra_line
+                    panel_info[-1]["extra_first"] = float(extra_seg[0])
+                    panel_info[-1]["extra_last"]  = float(extra_seg[nseg - 1])
+
                 ax.axhline(0.0, color="0.7", linewidth=1.0, linestyle="--", zorder=1)
 
             # dashed connectors across panel breaks
@@ -953,6 +963,9 @@ def plot_three_metric_compare(
                 "o2_last": float(o2_seg[-1]),
                 "gmm_last": float(gmm_seg[-1]),
                 "hyb_last": float(hyb_seg[-1]),
+                "extra_line": None,
+                "extra_first": np.nan,
+                "extra_last": np.nan,
             })
         else:
             panel_info.append({
@@ -963,6 +976,9 @@ def plot_three_metric_compare(
                 "hyb_line": hyb_line,
                 "o2_first": np.nan, "gmm_first": np.nan, "hyb_first": np.nan,
                 "o2_last": np.nan,  "gmm_last": np.nan,  "hyb_last": np.nan,
+                "extra_line": None,
+                "extra_first": np.nan,
+                "extra_last": np.nan,
             })
 
         # Strat overlay + anomaly markers (triangles)
@@ -979,15 +995,17 @@ def plot_three_metric_compare(
             extra_color = "black"
 
             # line (no marker)
-            ax.plot(
+            (extra_line,) = ax.plot(
                 x,
                 extra_seg,
                 linestyle=extra_linestyle,
                 linewidth=1.2,
                 color=extra_color,
                 label=extra_label,
+                marker="o",
             )
 
+            """
             # normal points
             normal_mask = np.isfinite(extra_seg)
             if anom_seg is not None:
@@ -1015,6 +1033,12 @@ def plot_three_metric_compare(
                     ax.scatter(x[high], extra_seg[high], marker="^", s=55, color=extra_color, zorder=7, label=None)
                 if np.any(mix):
                     ax.scatter(x[mix], extra_seg[mix], marker="v", s=55, color=extra_color, zorder=7, label=None)
+            """
+
+        if extra is not None and nseg > 0:
+            panel_info[-1]["extra_line"] = extra_line
+            panel_info[-1]["extra_first"] = float(extra_seg[0])
+            panel_info[-1]["extra_last"]  = float(extra_seg[-1])
 
         ax.axhline(0.0, color="0.7", linewidth=1.0, linestyle="--", zorder=1)
 
@@ -1343,7 +1367,7 @@ def transition_agreement_tables(
             np.asarray(hyb, float),
         ])
 
-        signed_all = bray_to_signed_similarity_scaled(all_bc)
+        signed_all = bray_to_signed_dissimilarity_scaled(all_bc)
 
         n = len(o2)
         o2_signed = signed_all[0:n]
@@ -1373,7 +1397,7 @@ def transition_agreement_tables(
             cp_gmm=cp_gmm[:n],
             cp_hyb=cp_hyb[:n],
             title="Signed similarity vs local cruises (O2 vs GMM vs Hybrid)",
-            ylabel="similarity (+1 similar, -1 different)",
+            ylabel="similarity (+1 different, -1 similar)",
             outpath=os.path.join(plots_dir, "braycurtis_compare_three_signed_similarity.png"),
             stats_text=stats_text_signed,
             extra=strat_overlay,
