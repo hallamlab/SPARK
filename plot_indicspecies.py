@@ -34,7 +34,7 @@ python isa_plots_cli.py \
 import argparse
 from pathlib import Path
 import warnings
-
+import os
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -190,9 +190,6 @@ def compute_sig_table(
     return df
 
 
-# FILE: <the .py file where this currently lives>
-# LOCATION: Ctrl+F -> "def plot_p_vs_stat_no_overlap(" and replace the whole function.
-
 def plot_p_vs_stat_no_overlap(
     df: pd.DataFrame,
     output_file: Path,
@@ -213,8 +210,8 @@ def plot_p_vs_stat_no_overlap(
     step_x=0.35,
     step_y=0.35,
     anchor=0.05,
-    iters=200,
-    add_random_eps=(0.0, 0.0),
+    iters=0,
+    add_random_eps=(0.0, 0.0),  # will be deterministic if kept as-is (uses rng=0)
     # Visuals
     invert_y=False,
     point_size=50,
@@ -230,7 +227,7 @@ def plot_p_vs_stat_no_overlap(
     legend_vgap_in=0.25,
     legend_fontsize=10,
 ):
-    """Scatter x_col vs y_col with axis-wise repulsive jitter and fixed data area."""
+    """Scatter x_col vs y_col with axis-wise repulsive jitter and fixed data area (deterministic)."""
     dd = df.copy()
 
     if x_col not in dd.columns or y_col not in dd.columns:
@@ -245,6 +242,14 @@ def plot_p_vs_stat_no_overlap(
     if dd.empty:
         warnings.warn(f"No data to plot for {output_file.name} after dropping NaN/inf.")
         return
+
+    # --- IMPORTANT: enforce stable ordering so tie-breaks are stable across runs ---
+    # Prefer ASV_ID if available; otherwise sort by the numeric coords (still deterministic).
+    if "ASV_ID" in dd.columns:
+        dd["ASV_ID"] = dd["ASV_ID"].astype(str)
+        dd = dd.sort_values(["ASV_ID", x_col, y_col], kind="mergesort").reset_index(drop=True)
+    else:
+        dd = dd.sort_values([x_col, y_col], kind="mergesort").reset_index(drop=True)
 
     x = dd[x_col].to_numpy()
     y = dd[y_col].to_numpy()
@@ -265,24 +270,37 @@ def plot_p_vs_stat_no_overlap(
 
     n = len(pos)
     eye_mask = ~np.eye(n, dtype=bool)
+
+    # Precompute deterministic tie-break sign matrices based purely on indices
+    # tie_sign[i,j] is +1 if i>j else -1 (and 0 on diagonal, but diagonal masked anyway)
+    idx = np.arange(n)
+    tie_sign = np.sign(idx[:, None] - idx[None, :]).astype(float)
+    # For i==j it's 0; but diagonal is excluded; still, make it nonzero just in case
+    tie_sign[tie_sign == 0] = 1.0
+
     for _ in range(iters):
         dx = pos[:, None, 0] - pos[None, :, 0]
         dy = pos[:, None, 1] - pos[None, :, 1]
         mask = eye_mask & (np.abs(dx) < min_dist_x) & (np.abs(dy) < min_dist_y)
         if not mask.any():
             break
+
+        # Deterministic sign: if dx==0 (or dy==0) use index-based tie-break instead of RNG
         sign_x = np.sign(dx)
         sign_y = np.sign(dy)
-        sign_x[sign_x == 0] = np.random.choice([-1.0, 1.0], size=(sign_x == 0).sum())
-        sign_y[sign_y == 0] = np.random.choice([-1.0, 1.0], size=(sign_y == 0).sum())
+        sign_x[sign_x == 0] = tie_sign[sign_x == 0]
+        sign_y[sign_y == 0] = tie_sign[sign_y == 0]
+
         force_x = np.zeros_like(dx)
         force_y = np.zeros_like(dy)
         force_x[mask] = (min_dist_x - np.abs(dx[mask])) * sign_x[mask]
         force_y[mask] = (min_dist_y - np.abs(dy[mask])) * sign_y[mask]
+
         pos[:, 0] += step_x * force_x.sum(axis=1) - anchor * (pos[:, 0] - orig[:, 0])
         pos[:, 1] += step_y * force_y.sum(axis=1) - anchor * (pos[:, 1] - orig[:, 1])
         np.clip(pos, 0.0, 1.0, out=pos)
 
+    # Optional epsilon jitter: already deterministic because RNG seed is fixed
     if add_random_eps != (0.0, 0.0):
         rng = np.random.default_rng(0)
         pos[:, 0] = np.clip(pos[:, 0] + rng.normal(0, add_random_eps[0], n), 0, 1)
@@ -394,7 +412,9 @@ def plot_p_vs_stat_no_overlap(
     if show_legend and legend_w_in > 0:
         leg_left = (figure_edge_pad_in + pane_w_in + legend_pad_in) / fig_w_in
         leg_w = legend_w_in / fig_w_in
-        leg_ax = fig.add_axes([leg_left, figure_edge_pad_in / fig_h_in, leg_w, 1.0 - 2 * figure_edge_pad_in / fig_h_in])
+        leg_ax = fig.add_axes(
+            [leg_left, figure_edge_pad_in / fig_h_in, leg_w, 1.0 - 2 * figure_edge_pad_in / fig_h_in]
+        )
         leg_ax.axis("off")
 
     # Plot points
@@ -422,7 +442,9 @@ def plot_p_vs_stat_no_overlap(
     ax.grid(True, linewidth=0.3, alpha=0.3)
     ax.tick_params(axis="both", which="both", length=4, width=1)
 
-    # NEW: labels with intelligent spacing
+    # Labels: adjustText may introduce nondeterminism across platforms/versions.
+    # If you need full determinism for labels too, set the env var ISA_DISABLE_ADJUSTTEXT=1
+    # and this will use the deterministic fallback.
     if label_col is not None:
         lab = dd[label_col].astype("object").fillna("").astype(str)
         mask = lab.str.len() > 0
@@ -434,7 +456,6 @@ def plot_p_vs_stat_no_overlap(
             lab = lab.iloc[:label_max_points]
 
         texts = []
-        # start with a tiny offset so labels don't sit exactly on the marker
         xspan = (xmax - xmin) if (xmax != xmin) else 1.0
         yspan = (ymax - ymin) if (ymax != ymin) else 1.0
         dx0 = 0.01 * xspan
@@ -443,25 +464,25 @@ def plot_p_vs_stat_no_overlap(
         for (xv, yv), s in zip(dd_lab[["_x_", "_y_"]].to_numpy(), lab.to_numpy()):
             texts.append(ax.text(xv + dx0, yv + dy0, s, fontsize=label_fontsize))
 
-        try:
-            # pip install adjustText  (or: conda install -c conda-forge adjusttext)
-            from adjustText import adjust_text
+        disable_adjust = (os.environ.get("ISA_DISABLE_ADJUSTTEXT", "0") == "1")
+        if not disable_adjust:
+            try:
+                from adjustText import adjust_text
 
-            adjust_text(
-                texts,
-                ax=ax,
-                x=dd_lab["_x_"].to_numpy(),
-                y=dd_lab["_y_"].to_numpy(),
-                expand_points=(1.2, 1.4),
-                expand_text=(1.2, 1.4),
-                force_points=(0.2, 0.4),
-                force_text=(0.2, 0.4),
-                lim=200,
-                arrowprops=dict(arrowstyle="-", lw=0.4, alpha=0.6),
-            )
-        except Exception:
-            # Fallback: keep initial offsets (still readable; just no label repulsion)
-            pass
+                adjust_text(
+                    texts,
+                    ax=ax,
+                    x=dd_lab["_x_"].to_numpy(),
+                    y=dd_lab["_y_"].to_numpy(),
+                    expand_points=(1.2, 1.4),
+                    expand_text=(1.2, 1.4),
+                    force_points=(0.2, 0.4),
+                    force_text=(0.2, 0.4),
+                    lim=200,
+                    arrowprops=dict(arrowstyle="-", lw=0.4, alpha=0.6),
+                )
+            except Exception:
+                pass
 
     # Legend pane
     if show_legend and leg_ax is not None:
@@ -736,20 +757,20 @@ def main():
     plot_p_vs_stat_no_overlap(
         combined,
         plots_outdir / "Combined_ISA_plot.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="type_label", style_col="status_label",
-        type_palette=type_palette, marker_dict=status_markers,
-        legend_color_title="Type", legend_marker_title="Status",
+        x_col="type_stat", y_col="type_log_p",
+        hue_col="status_label", # style_col="status_label",
+        type_palette=status_palette, # marker_dict=status_markers,
+        legend_color_title="Status", # legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
     )
 
     plot_p_vs_stat_no_overlap(
         combined,
         plots_outdir / "Combined_ISA_plot_labelled.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="type_label", style_col="status_label",
-        type_palette=type_palette, marker_dict=status_markers,
-        legend_color_title="Type", legend_marker_title="Status",
+        x_col="type_stat", y_col="type_log_p",
+        hue_col="status_label", # style_col="status_label",
+        type_palette=status_palette, # marker_dict=status_markers,
+        legend_color_title="Status", #legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
         label_col=args.label_col,
         label_fontsize=args.label_fontsize,
@@ -759,20 +780,20 @@ def main():
     plot_p_vs_stat_no_overlap(
         venn_combined,
         plots_outdir / "Combined_Venn_plot.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="type_label", style_col="status_label",
-        type_palette=type_palette, marker_dict=status_markers,
-        legend_color_title="Type", legend_marker_title="Status",
+        x_col="type_stat", y_col="type_log_p",
+        hue_col="status_label", # style_col="status_label",
+        type_palette=status_palette, # marker_dict=status_markers,
+        legend_color_title="Status", # legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
     )
 
     plot_p_vs_stat_no_overlap(
         venn_combined,
         plots_outdir / "Combined_Venn_plot_labelled.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="type_label", style_col="status_label",
-        type_palette=type_palette, marker_dict=status_markers,
-        legend_color_title="Type", legend_marker_title="Status",
+        x_col="type_stat", y_col="type_log_p",
+        hue_col="status_label", # style_col="status_label",
+        type_palette=status_palette, # marker_dict=status_markers,
+        legend_color_title="Status", # legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
         label_col=args.label_col,
         label_fontsize=args.label_fontsize,
@@ -801,20 +822,20 @@ def main():
         plot_p_vs_stat_no_overlap(
             comb_tax,
             plots_outdir / "Combined_ISA_plot_Phylum.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="Phylum", style_col="status_label",
-            type_palette=phyl_pal, marker_dict=status_markers,
-            legend_color_title="Phylum", legend_marker_title="Status",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="Phylum", # style_col="status_label",
+            type_palette=phyl_pal, # marker_dict=status_markers,
+            legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
         )
 
         plot_p_vs_stat_no_overlap(
             comb_tax,
             plots_outdir / "Combined_ISA_plot_Phylum_labelled.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="Phylum", style_col="status_label",
-            type_palette=phyl_pal, marker_dict=status_markers,
-            legend_color_title="Phylum", legend_marker_title="Status",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="Phylum", # style_col="status_label",
+            type_palette=phyl_pal, # marker_dict=status_markers,
+            legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
             label_col=args.label_col,
             label_fontsize=args.label_fontsize,
@@ -827,20 +848,20 @@ def main():
         plot_p_vs_stat_no_overlap(
             venn_comb_tax,
             plots_outdir / "Combined_Venn_plot_Phylum.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="Phylum", style_col="status_label",
-            type_palette=phyl_pal, marker_dict=status_markers,
-            legend_color_title="Phylum", legend_marker_title="Status",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="Phylum", # style_col="status_label",
+            type_palette=phyl_pal, # marker_dict=status_markers,
+            legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
         )
 
         plot_p_vs_stat_no_overlap(
             venn_comb_tax,
             plots_outdir / "Combined_Venn_plot_Phylum_labelled.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="Phylum", style_col="status_label",
-            type_palette=phyl_pal, marker_dict=status_markers,
-            legend_color_title="Phylum", legend_marker_title="Status",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="Phylum", # style_col="status_label",
+            type_palette=phyl_pal, # marker_dict=status_markers,
+            legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
             label_col=args.label_col,
             label_fontsize=args.label_fontsize,

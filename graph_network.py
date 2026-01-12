@@ -23,6 +23,7 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 import seaborn as sns
 import math
 from collections import Counter
@@ -325,15 +326,29 @@ def plot_degree(G: nx.Graph, pos: Dict, out_svg: str, degree_scale: float, edge_
     # edges weighted by |weight|
     e_w = [abs(G.edges[e].get('weight', 0)) * edge_width_scale for e in G.edges()]
     draw_edges_light(G, pos, alpha=0.6, edge_widths=e_w)
-
-    def size_fn(n): return (G.nodes[n].get('Degree', 0) + 1) * degree_scale
+    def size_fn(n):
+        deg = _safe_float(G.nodes[n].get('Degree', 0), 0.0)
+        if deg <= 0:
+            return max(2.0, degree_scale * 0.05)   # tiny but visible
+        return (deg + 1.0) * degree_scale
     def color_fn(_): return 'black'
     draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=lambda n: 0.5)
-
-    # legend
+ 
+    # legend: sizes must match size_fn exactly
     svals = [0, 1, 3, 5, 10]
-    handles = [plt.scatter([], [], s=(s + 1) * degree_scale, edgecolors='black',
-                           facecolors='gray', alpha=1, label=f'{s}') for s in svals]
+
+    def legend_size(deg):
+        if deg <= 0:
+            return max(2.0, degree_scale * 0.05)   # must match size_fn
+        return (deg + 1.0) * degree_scale
+
+    handles = [
+        plt.scatter([], [], s=legend_size(s),
+                    edgecolors='black', facecolors='gray', alpha=1,
+                    label=f'{s}')
+        for s in svals
+    ]
+
     plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1, 1),
                title="Node Degree", frameon=False, scatterpoints=1, labelspacing=1.5)
 
@@ -344,23 +359,189 @@ def plot_degree(G: nx.Graph, pos: Dict, out_svg: str, degree_scale: float, edge_
     plt.close()
 
 
-def plot_abundance(G: nx.Graph, pos: Dict, out_svg: str):
+# FILE: network_viz_cli.py
+# LOCATION: Ctrl+F -> "def plot_edgeweight_equalnodes(" and REPLACE THE WHOLE FUNCTION with this version
+#
+# What this does:
+# - TRUE LINEAR mapping from a fixed weight range [scale_w_min, scale_w_max]
+# - Legend uses exactly the weights you specify (e.g. 0.1, 0.2, 0.3)
+# - No quantile clipping, no gamma, no log. Linear means linear.
+
+from matplotlib.lines import Line2D
+
+def plot_edgeweight_equalnodes(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    *,
+    node_size: float = 80.0,
+    node_color: str = "black",
+    edge_alpha: float = 1.0,
+    edge_min_w: float = 0.25,
+    edge_max_w: float = 15.0,
+
+    # NEW: force a linear scale range (THIS is what fixes your problem)
+    scale_w_min: float = 0.15,
+    scale_w_max: float = 0.5,
+
+    # NEW: legend values you want to show (exact)
+    legend_weights: list[float] = None,
+):
+    """
+    Equal-size nodes, neutral node color, and edges scaled LINEARLY by |weight|.
+
+    Linear mapping:
+      width = edge_min_w + ((clip(|w|, scale_w_min, scale_w_max) - scale_w_min)
+                            / (scale_w_max - scale_w_min)) * (edge_max_w - edge_min_w)
+
+    If legend_weights is provided, legend uses those exact values.
+    """
+
+    if legend_weights is None:
+        legend_weights = [0.1, 0.25, 0.5]
+
+    plt.figure(figsize=(18, 18))
+
+    # Collect abs weights + edgelist in the same order
+    edgelist = []
+    abs_w = []
+    for u, v, d in G.edges(data=True):
+        w = d.get("weight", 0.0)
+        try:
+            w = abs(float(w))
+        except Exception:
+            w = 0.0
+        edgelist.append((u, v))
+        abs_w.append(w)
+
+    # Always draw nodes (even if no edges)
+    if len(edgelist) == 0:
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_size=node_size,
+            node_color=node_color,
+            edgecolors="none",
+            alpha=1.0,
+        )
+        plt.axis("equal")
+        plt.axis("off")
+        plt.title("SPIEC-EASI POS_SUB Network\nNodes: uniform | Edges: width = |weight| (linear)")
+        save_figure(out_svg)
+        plt.close()
+        return
+
+    # Linear mapper with a fixed range
+    lo = float(scale_w_min)
+    hi = float(scale_w_max)
+    if hi <= lo:
+        hi = lo + 1e-12
+    denom = (hi - lo)
+
+    def _map_w_to_width(w: float) -> float:
+        wc = min(max(float(w), lo), hi)  # clip to [lo, hi]
+        t = (wc - lo) / denom            # linear 0..1
+        return edge_min_w + t * (edge_max_w - edge_min_w)
+
+    # Map weights -> widths
+    w_arr = np.asarray(abs_w, dtype=float)
+    edge_widths = [_map_w_to_width(w) for w in w_arr]
+
+    # Draw edges and nodes
+    nx.draw_networkx_edges(
+        G, pos,
+        edgelist=edgelist,
+        width=edge_widths,
+        edge_color="darkgray",
+        alpha=edge_alpha,
+    )
+    nx.draw_networkx_nodes(
+        G, pos,
+        node_size=node_size,
+        node_color=node_color,
+        edgecolors="none",
+        alpha=1.0,
+    )
+
+    # Legend: EXACT values you want (linear mapping matches them)
+    leg_handles = [
+        Line2D(
+            [0], [0],
+            color="darkgray",
+            alpha=edge_alpha,
+            linewidth=_map_w_to_width(wt),
+            label=f"{wt:.1f}",
+        )
+        for wt in legend_weights
+    ]
+
+    plt.legend(
+        handles=leg_handles,
+        title=f"|weight| → edge width (linear)",
+        loc="upper left",
+        bbox_to_anchor=(1, 1),
+        frameon=False,
+        handlelength=3.2,
+        labelspacing=1.0,
+    )
+
+    plt.axis("equal")
+    plt.axis("off")
+    plt.title("SPIEC-EASI POS_SUB Network\nNodes: uniform | Edges: width = |weight| (linear)")
+    save_figure(out_svg)
+    plt.close()
+
+
+# FILE: network_viz_cli.py
+# LOCATION 1: Ctrl+F -> "def plot_abundance(" and REPLACE THE WHOLE FUNCTION with this version
+
+def plot_abundance(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    *,
+    size_attr: str = "mean_all",                 # <- choose mean_all / mean_nonzero / median_all / median_nonzero
+    size_label: str = "Abundance",
+    size_scale: float = 1.0,
+    size_floor: float = 1.0,                      # keep 0s barely visible
+    legend_vals: list = None,
+    node_color: str = "black",
+):
     plt.figure(figsize=(18, 18))
     draw_edges_light(G, pos, alpha=1.0)
 
-    def size_fn(n): return float(G.nodes[n].get('mean', 1))
-    def color_fn(_): return 'black'
+    # quick sanity check (prints)
+    preflight_node_attr_report(G, name=f"abundance_{size_attr}", color_attr="Taxon", size_attr=size_attr)
+
+    if legend_vals is None:
+        legend_vals = [1, 10, 100, 500, 1000]
+
+    def size_fn(n):
+        v = _safe_float(G.nodes[n].get(size_attr, 0.0), 0.0)
+        s = v * size_scale
+        return max(size_floor, s)
+
+    def color_fn(_):
+        return node_color
+
     draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=lambda n: 0.5)
 
-    handles = size_legend_handles([1, 10, 100, 500, 1000], "Abundance:", 1.0)
-    plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Attributes", frameon=False, scatterpoints=1, labelspacing=1.5)
+    handles = size_legend_handles(legend_vals, f"{size_label}:", size_scale)
+    plt.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(1, 1),
+        title="Node Attributes",
+        frameon=False,
+        scatterpoints=1,
+        labelspacing=1.5,
+    )
 
-    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
-    plt.title("SPIEC-EASI Network\nNode size: Mean ASV Abundance")
-    plt.axis('off')
+    plt.axis("equal"); plt.xlim(auto=False); plt.ylim(auto=False)
+    plt.title(f"SPIEC-EASI Network\nNode size: {size_label} ({size_attr})")
+    plt.axis("off")
     save_figure(out_svg)
     plt.close()
+
 
 def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
     """
@@ -560,37 +741,79 @@ def plot_status_isa(G: nx.Graph, pos: Dict, out_svg: str, status_palette: Dict[s
     plt.close()
 
 
-def plot_phylum(G: nx.Graph, pos: Dict, out_svg: str, phylum_palette: Dict[str, str],
-                size_attr: str, size_label: str, size_scale: float):
+def plot_phylum(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    phylum_palette: Dict[str, str],
+    size_attr: str,
+    size_label: str,
+    size_scale: float,
+):
     plt.figure(figsize=(18, 18))
     draw_edges_light(G, pos, alpha=1.0)
 
+    # DEBUG/preflight: confirm the attribute is actually on nodes
+    preflight_node_attr_report(
+        G, name=f"phylum_{size_attr}",
+        color_attr="Phylum",
+        size_attr=size_attr
+    )
+
     def color_fn(n):
-        p = G.nodes[n].get('Phylum')
-        return phylum_palette.get(p, 'lightgray')
+        p = G.nodes[n].get("Phylum")
+        return phylum_palette.get(p, "lightgray")
 
     def size_fn(n):
-        return float(G.nodes[n].get(size_attr, 0.0)) * size_scale
+        # robust against missing/None/str/nan
+        v = _safe_float(G.nodes[n].get(size_attr, 0.0), 0.0)
+        s = v * size_scale
+        # tiny floor so nodes remain barely visible even if 0
+        return max(1.0, s)
 
-    def alpha_fn(n): return 0.5 if color_fn(n) == 'lightgray' else 1.0
+    def alpha_fn(n):
+        return 0.5 if color_fn(n) == "lightgray" else 1.0
 
     draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=alpha_fn)
 
     # Legends
-    # Unique phyla/colors present in the graph
-    phyla_vals = {color_fn(n): G.nodes[n].get('Phylum') for n in G.nodes() if color_fn(n) != 'lightgray'}
-    color_patches = [mpatches.Patch(color=c, label=l) for c, l in sorted(phyla_vals.items(), key=lambda x: (x[1] or ""))]
-    size_vals = [1, 10, 100, 500, 1000] if size_attr == 'mean' else [0.1, 0.25, 0.5, 0.75, 1.0]
-    size_handles = size_legend_handles(size_vals, size_label + ":", size_scale)
-    plt.legend(handles=color_patches + size_handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Attributes", frameon=False, scatterpoints=1, labelspacing=1.5)
+    phyla_vals = {color_fn(n): G.nodes[n].get("Phylum") for n in G.nodes() if color_fn(n) != "lightgray"}
+    color_patches = [
+        mpatches.Patch(color=c, label=l)
+        for c, l in sorted(phyla_vals.items(), key=lambda x: (x[1] or ""))
+    ]
 
-    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
-    titletail = "Mean ASV Abundance" if size_attr == 'mean' else "Indicator Species Strength"
+    # Use abundance-like legend when size_attr is an abundance metric
+    is_abund = size_attr in ("mean_all", "mean_nonzero", "median_all", "median_nonzero")
+
+    if is_abund:
+        # Pick values that match your abundance scale; adjust if needed
+        size_vals = [1, 10, 100, 500, 1000]
+        titletail = f"{size_attr.replace('_', ' ').title()} ASV Abundance"
+    else:
+        size_vals = [0.1, 0.25, 0.5, 0.75, 1.0]
+        titletail = "Indicator Species Strength"
+
+    size_handles = size_legend_handles(size_vals, size_label + ":", size_scale)
+
+    plt.legend(
+        handles=color_patches + size_handles,
+        loc="upper left",
+        bbox_to_anchor=(1, 1),
+        title="Node Attributes",
+        frameon=False,
+        scatterpoints=1,
+        labelspacing=1.5,
+    )
+
+    plt.axis("equal")
+    plt.xlim(auto=False)
+    plt.ylim(auto=False)
     plt.title(f"SPIEC-EASI Network\nNode color: Phylum | Node size: {titletail}")
-    plt.axis('off')
+    plt.axis("off")
     save_figure(out_svg)
     plt.close()
+
 
 
 # ---------------------------- Main pipeline ----------------------------------
@@ -636,7 +859,8 @@ def main():
     p.add_argument("--modes", nargs="+", default=["all"],
                    choices=[
                        "degree_all", "degree_sub",
-                       "abundance_sub",
+                       "abundance_sub", "abundance_median_sub",
+                       "edgeweight_sub",
                        "type_isa", "type_isa_labeled",
                        "type_venn", "type_venn_labeled",
                        "status_isa", "status_isa_labeled",
@@ -667,9 +891,29 @@ def main():
     asv = load_table(asv_counts_path, sep='\t', index_col=0)
     asv_stack = asv.stack().reset_index()
     asv_stack.columns = ['ASV_ID', 'sample', 'count']
-    mean_abund = asv_stack.groupby('ASV_ID')['count'].mean().reset_index()
-    mean_abund['mean'] = np.ceil(mean_abund['count']).astype(float)
-    mean_abund = mean_abund[['ASV_ID', 'mean']]
+
+    # --- Abundance statistics per ASV ---
+    abund_stats = (
+        asv_stack
+        .groupby("ASV_ID")["count"]
+        .agg(
+            mean_all="mean",                          # includes zeros
+            mean_nonzero=lambda s: s[s > 0].mean(),   # only when present
+            median_all="median",                      # includes zeros
+            median_nonzero=lambda s: s[s > 0].median()
+        )
+        .reset_index()
+    )
+
+    # Keep plotting-friendly numeric types
+    abund_stats["mean_all"] = np.ceil(abund_stats["mean_all"]).astype(float)
+    abund_stats["mean_nonzero"] = abund_stats["mean_nonzero"].astype(float).fillna(0.0)
+    abund_stats["median_all"] = abund_stats["median_all"].astype(float)
+    abund_stats["median_nonzero"] = abund_stats["median_nonzero"].astype(float).fillna(0.0)
+
+    abund_stats = abund_stats[
+        ["ASV_ID", "mean_all", "mean_nonzero", "median_all", "median_nonzero"]
+    ]
 
     tax = load_table(taxonomy_path, sep='\t')
     if "Feature ID" in tax.columns:
@@ -743,7 +987,9 @@ def main():
     ).set_index('GraphML_ID')
 
     # abundance table with taxonomy
-    nfeat_abund = nf.reset_index().merge(mean_abund, left_on='Taxon', right_on='ASV_ID', how='left').set_index('GraphML_ID')
+    nfeat_abund = nf.reset_index().merge(
+        abund_stats, left_on="Taxon", right_on="ASV_ID", how="left"
+    ).set_index("GraphML_ID")
     nfeat_abund = nfeat_abund.reset_index().merge(
         tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
     ).set_index('GraphML_ID')
@@ -754,7 +1000,8 @@ def main():
 
     keep_cols = [
         'Taxon', 'Degree', 'Betweenness', 'Closeness', 'EigenCentral',
-        'A', 'B', 'AxB', 'type_color', 'status_color', 'venn_color', 'Phylum', 'mean'
+        'A', 'B', 'AxB', 'type_color', 'status_color', 'venn_color', 'Phylum',
+        'mean_all', 'mean_nonzero', 'median_all', 'median_nonzero',
     ]
 
     # -------------------- Load graphs + positions -----------------------------
@@ -790,7 +1037,8 @@ def main():
     if "all" in modes:
         modes = {
             "degree_all", "degree_sub",
-            "abundance_sub",
+            "abundance_sub", "abundance_median_sub",
+            "edgeweight_sub",
             "type_isa", "type_isa_labeled",
             "type_venn", "type_venn_labeled",
             "status_isa", "status_isa_labeled",
@@ -816,10 +1064,44 @@ def main():
         plot_degree(G_sub, pos_sub, out, degree_scale=args.degree_scale,
                     edge_width_scale=args.edge_width_scale)
 
-    # Abundance (thresholded subgraph)
+    # Edge-weight plot (thresholded subgraph): equal nodes, edge width = |weight|
+    if "edgeweight_sub" in modes:
+        out = os.path.join(args.outdir, "network_edgeweight_POS_SUB.svg")
+        plot_edgeweight_equalnodes(G_sub, pos_sub, out)
+
+    # Abundance (thresholded subgraph) — multiple variants
     if "abundance_sub" in modes:
-        out = os.path.join(args.outdir, "network_abundance.svg")
-        plot_abundance(G_sub, pos_sub, out)
+        out = os.path.join(args.outdir, "network_ABUND_mean_all_POS_SUB.svg")
+        plot_abundance(
+            G_sub, pos_sub, out,
+            size_attr="mean_all",
+            size_label="Mean abundance (all samples)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_mean_nonzero_POS_SUB.svg")
+        plot_abundance(
+            G_sub, pos_sub, out,
+            size_attr="mean_nonzero",
+            size_label="Mean abundance (nonzero only)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_median_all_POS_SUB.svg")
+        plot_abundance(
+            G_sub, pos_sub, out,
+            size_attr="median_all",
+            size_label="Median abundance (all samples)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_median_nonzero_POS_SUB.svg")
+        plot_abundance(
+            G_sub, pos_sub, out,
+            size_attr="median_nonzero",
+            size_label="Median abundance (nonzero only)",
+            size_scale=1.0,
+        )
 
     # Type ISA (color by type ISA, size by AxB)
     if "type_isa" in modes:
@@ -847,12 +1129,51 @@ def main():
 
     # Phylum × {abundance, ISA}
     if "phylum_abund" in modes:
-        out = os.path.join(args.outdir, "network_phylum_ABUND.svg")
-        plot_phylum(G_sub, pos_sub, out, phylum_palette, size_attr='mean', size_label='Abundance', size_scale=1.0)
+        out = os.path.join(args.outdir, "network_ABUND_mean_all_Phylum.svg")
+        plot_phylum(
+            G_sub, pos_sub, out,
+            phylum_palette,
+            size_attr="mean_all",
+            size_label="Mean abundance (all samples)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_median_all_Phylum.svg")
+        plot_phylum(
+            G_sub, pos_sub, out,
+            phylum_palette,
+            size_attr="median_all",
+            size_label="Median abundance (all samples)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_mean_nonzero_Phylum.svg")
+        plot_phylum(
+            G_sub, pos_sub, out,
+            phylum_palette,
+            size_attr="mean_nonzero",
+            size_label="Mean abundance (nonzero only)",
+            size_scale=1.0,
+        )
+
+        out = os.path.join(args.outdir, "network_ABUND_median_nonzero_Phylum.svg")
+        plot_phylum(
+            G_sub, pos_sub, out,
+            phylum_palette,
+            size_attr="median_nonzero",
+            size_label="Median abundance (nonzero only)",
+            size_scale=1.0,
+        )
 
     if "phylum_isa" in modes:
         out = os.path.join(args.outdir, "network_phylum_ISA.svg")
-        plot_phylum(G_sub, pos_sub, out, phylum_palette, size_attr='AxB', size_label='ISA', size_scale=args.isa_scale)
+        plot_phylum(
+            G_sub, pos_sub, out,
+            phylum_palette,
+            size_attr="AxB",
+            size_label="ISA",
+            size_scale=args.isa_scale,
+        )
 
     ok("All done.")
 
