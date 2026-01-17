@@ -53,6 +53,7 @@ taxonomy:
   ref_sequences_url: https://data.qiime2.org/2024.10/common/silva-138-99-seqs.qza
   ref_sequences_filename: silva-138_2-ssu-nr99-seqs-DNA.qza
   download_subdir: taxonomy_reference
+  output_dir: taxonomy
   output_tsv: ASV_SILVA_tax.full-length.vsearch.tsv
   stats_tsv: ASV_SILVA_stats.full-length.vsearch.tsv
   uppercase_fasta: ASVs.upper.fasta
@@ -137,9 +138,10 @@ metadata_plots:
     - Skin Brush
     - Scope Flush
   include_rank: []
-  mito_threshold_line: 1000
   run_micro: true
   run_mito: true
+
+
 
 batch_correction:
   enabled: true

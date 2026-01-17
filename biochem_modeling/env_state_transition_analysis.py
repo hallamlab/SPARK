@@ -120,6 +120,11 @@ class Config:
     coupling_cluster_threshold: float  # cut on distance = 1-corr
     coupling_edge_threshold: float     # export edges where corr >= this
 
+    eof_states_csv: Optional[str]
+    eof_state_col: str
+    eof_states_sep: Optional[str]
+
+
 
 def parse_args() -> Config:
     ap = argparse.ArgumentParser(
@@ -161,11 +166,19 @@ def parse_args() -> Config:
                     help="Dendrogram cut threshold on distance=1-corr (lower => fewer bigger families). Default 0.30.")
     ap.add_argument("--coupling-edge-threshold", type=float, default=0.60,
                     help="Export edges for corr >= this (default 0.60).")
-    ap.add_argument(
-        "--strat-timeseries",
-        default=None,
-        help="Optional TSV from stratification script (stratification_timeseries.tsv) to overlay stratification score on signed similarity compare plot.",
-    )
+    ap.add_argument("--strat-timeseries", default=None,
+        help="Optional TSV from stratification script (stratification_timeseries.tsv) "
+        "to overlay stratification score on signed similarity compare plot.",)
+    ap.add_argument("--eof-states", default=None,
+        help=(
+            "Optional: CSV/TSV with cruise-level EOF state assignments for "
+            "background shading on braycurtis_compare_three_signed_similarity.png."),)
+    ap.add_argument("--eof-state-col", default="state",
+        help="Column in --eof-states containing the discrete state label "
+             "(default: dominant_state).",)
+    ap.add_argument("--eof-states-sep", default=None,
+        help="Delimiter for --eof-states. If omitted, pandas will infer "
+        "(default: None).",)
 
     ns = ap.parse_args()
 
@@ -193,6 +206,9 @@ def parse_args() -> Config:
         coupling_cluster_threshold=float(ns.coupling_cluster_threshold),
         coupling_edge_threshold=float(ns.coupling_edge_threshold),
         strat_timeseries_tsv=ns.strat_timeseries,
+        eof_states_csv=ns.eof_states,
+        eof_state_col=str(ns.eof_state_col),
+        eof_states_sep=ns.eof_states_sep,
     )
 
 
@@ -208,6 +224,129 @@ def ensure_dirs(outdir: str) -> Tuple[str, str]:
 # Core helpers
 # -----------------------------
 
+
+def load_eof_state_overlay_for_labels(
+    cfg: Config,
+    labels: List[str],
+) -> Tuple[Optional[np.ndarray], Optional[Dict[object, tuple]]]:
+    """
+    Align EOF state assignments to the x-axis timeline used in the compare plots.
+
+    Alignment strategy:
+    - Extract Cruise ID from label (prefers left of '|' if present, else full label)
+    - Join on cfg.cruise_col in the --eof-states file (default Cruise)
+    - Returns:
+        states_aligned: array(len(labels)) of state labels (object dtype), NaN/None when missing
+        color_map: dict(state_value -> RGBA tuple) for consistent shading
+    """
+    if not cfg.eof_states_csv:
+        return None, None
+
+    # read with either specified sep or inference
+    try:
+        df = pd.read_csv(cfg.eof_states_csv, sep=cfg.eof_states_sep if cfg.eof_states_sep else None, engine="python")
+    except Exception:
+        # fallback: try comma
+        df = pd.read_csv(cfg.eof_states_csv)
+
+    if df.empty:
+        return None, None
+    if cfg.cruise_col not in df.columns:
+        raise ValueError(
+            f"--eof-states file is missing cruise id column '{cfg.cruise_col}'. "
+            f"Columns present: {list(df.columns)}"
+        )
+    if cfg.eof_state_col not in df.columns:
+        raise ValueError(
+            f"--eof-states file is missing state column '{cfg.eof_state_col}'. "
+            f"Columns present: {list(df.columns)}"
+        )
+
+    df = df.copy()
+    df[cfg.cruise_col] = df[cfg.cruise_col].astype(str)
+    # keep last occurrence if duplicates
+    df = df.dropna(subset=[cfg.cruise_col]).drop_duplicates(subset=[cfg.cruise_col], keep="last")
+
+    cruise_to_state: Dict[str, object] = dict(zip(df[cfg.cruise_col].tolist(), df[cfg.eof_state_col].tolist()))
+
+    def _extract_cruise_id(label: str) -> str:
+        # label format in this script: "Cruise | date"
+        s = "" if label is None else str(label)
+        if "|" in s:
+            return s.split("|")[0].strip()
+        return s.strip()
+
+    states = np.full(len(labels), None, dtype=object)
+    for i, lab in enumerate(labels):
+        cid = _extract_cruise_id(lab)
+        states[i] = cruise_to_state.get(cid, None)
+
+    # build a stable color map (discrete) for shading
+    uniq = [u for u in pd.unique(pd.Series(states)) if u is not None and str(u) != "nan"]
+    uniq_sorted = sorted(uniq, key=lambda z: str(z))
+    if len(uniq_sorted) == 0:
+        return states, None
+
+    # tab20 is a good discrete palette for states
+    #cm = plt.get_cmap("tab20", max(1, len(uniq_sorted)))
+    color_map = {
+        st: ((1.0, 1.0, 1.0, 1.0) if st == 'normal' else (0.83, 0.83, 0.83, 1.0))
+        for st in uniq_sorted
+    }
+    return states, color_map
+
+
+def _shade_state_runs(
+    ax: plt.Axes,
+    x: np.ndarray,
+    states: np.ndarray,
+    color_map: Dict[object, tuple],
+    alpha: float =50,
+    zorder: int = 0,
+) -> None:
+    """
+    Shade background by contiguous runs of the same state.
+    Spans TOUCH with no gaps: [i-0.5, j+0.5].
+    """
+    if states is None or color_map is None:
+        return
+    if len(states) == 0:
+        return
+
+    # x here is local panel x = 0..n-1
+    n = len(states)
+    s = np.asarray(states, dtype=object)
+
+    def _is_missing(v) -> bool:
+        return (v is None) or (str(v) == "nan")
+
+    i = 0
+    while i < n:
+        if _is_missing(s[i]):
+            i += 1
+            continue
+        st = s[i]
+        j = i
+        while (j + 1) < n and (not _is_missing(s[j + 1])) and (s[j + 1] == st):
+            j += 1
+
+        left = (i - 0.5)
+        right = (j + 0.5)
+
+        # Clamp to avoid weirdness if axis autoscale is odd
+        left = max(left, -0.5)
+        right = min(right, n - 0.5)
+
+        ax.axvspan(
+            left,
+            right,
+            facecolor=color_map.get(st, (0.9, 0.9, 0.9, 1.0)),
+            alpha=alpha,
+            linewidth=0.0,
+            zorder=zorder,
+        )
+        i = j + 1
+        
 
 def _normalize_centered_pm1(values: np.ndarray) -> np.ndarray:
     """
@@ -623,7 +762,10 @@ def plot_three_metric_compare(
     extra_linestyle: str = "--",
     extra_marker: str = "s",
     extra_is_anomaly: Optional[np.ndarray] = None,
-    extra_anomaly_type: Optional[np.ndarray] = None,   
+    extra_anomaly_type: Optional[np.ndarray] = None,  
+    bg_states: Optional[np.ndarray] = None,
+    bg_state_color_map: Optional[Dict[object, tuple]] = None,
+    bg_state_alpha: float = 0.50, 
 ) -> None:
     import re
     import numpy as np
@@ -739,17 +881,28 @@ def plot_three_metric_compare(
             for ax, yrs in zip(axes, panels):
                 sub = df[df["year"].isin(yrs)].copy().sort_values("date")
                 sub = sub.reset_index(drop=True)
-
                 x = np.arange(sub.shape[0])
+
+                if bg_states is not None and bg_state_color_map is not None and sub.shape[0] > 0:
+                    idx = sub["global_i"].to_numpy(dtype=int)
+                    state_seg = np.asarray(bg_states[idx], dtype=object)
+                    _shade_state_runs(
+                        ax=ax,
+                        x=x,
+                        states=state_seg,
+                        color_map=bg_state_color_map,
+                        alpha=float(bg_state_alpha),
+                        zorder=0,
+                    )
 
                 (o2_line,) = ax.plot(x, sub["o2"].to_numpy(dtype=float), marker="o", label="O2", color="red")
                 (gmm_line,) = ax.plot(x, sub["gmm"].to_numpy(dtype=float), marker="o", label="GMM", color="orange")
                 (hyb_line,) = ax.plot(x, sub["hyb"].to_numpy(dtype=float), marker="o", label="Hybrid", color="blue")
 
-                cp_seg = sub["cp"].to_numpy(dtype=bool)
-                for i, is_cp in enumerate(cp_seg):
-                    if is_cp:
-                        ax.axvline(i, color="0.7", alpha=1, linestyle="--", zorder=1)
+                #cp_seg = sub["cp"].to_numpy(dtype=bool)
+                #for i, is_cp in enumerate(cp_seg):
+                #    if is_cp:
+                #        ax.axvline(i, color="0.7", alpha=1, linestyle="--", zorder=1)
 
                 ax.set_ylim(y_min, y_max)
                 ax.set_ylabel(ylabel)
@@ -927,6 +1080,17 @@ def plot_three_metric_compare(
         ax = axes[p]
         start = p * wrap_n
         end = min(n, (p + 1) * wrap_n)
+
+        if bg_states is not None and bg_state_color_map is not None:
+            state_seg = np.asarray(bg_states[start:end], dtype=object)
+            _shade_state_runs(
+                ax=ax,
+                x=np.arange(end - start),
+                states=state_seg,
+                color_map=bg_state_color_map,
+                alpha=float(bg_state_alpha),
+                zorder=0,
+            )
 
         seg_labels = labels[start:end]
         o2_seg = np.asarray(o2[start:end], float)
@@ -1280,6 +1444,8 @@ def transition_agreement_tables(
     cp_hyb: np.ndarray,
     tables_dir: str,
     plots_dir: str,
+    eof_states_aligned: Optional[np.ndarray] = None,
+    eof_state_color_map: Optional[Dict[object, tuple]] = None,
 ) -> None:
     n = len(labels)
     o2 = o2_metric[:n]
@@ -1406,6 +1572,9 @@ def transition_agreement_tables(
             extra_marker="o",                 # circles for normal points
             extra_is_anomaly=strat_is_anom,   # enables triangles
             extra_anomaly_type=strat_anom_type,
+            bg_states=eof_states_aligned,
+            bg_state_color_map=eof_state_color_map,
+            bg_state_alpha=0.50,
         )
 
     # Pairwise plot (absolute diffs) for “hybrid matches both best”
@@ -1683,6 +1852,8 @@ def main() -> None:
     n = min(len(labels_o2), len(labels_gmm), len(labels_hyb))
     labels = labels_hyb[:n]  # fine as long as all were sorted the same way (by date/cruise)
 
+    eof_states_aligned, eof_state_color_map = load_eof_state_overlay_for_labels(cfg, labels)
+
     cp = collect_change_points(
         cfg=cfg,
         labels=labels,
@@ -1704,6 +1875,8 @@ def main() -> None:
         cp_hyb=hyb_cp[:n],
         tables_dir=tables_dir,
         plots_dir=plots_dir,
+        eof_states_aligned=eof_states_aligned,
+        eof_state_color_map=eof_state_color_map,
     )
 
     print(f"[OK] Wrote outputs to: {cfg.outdir}")

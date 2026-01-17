@@ -3,11 +3,9 @@ channels:
   - qiime2/label/r2024.10
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
-  - python=3.9
+  - python=3.10
   - qiime2=2024.10
-  - q2cli=2024.10
   - q2-feature-classifier=2024.10
   - pandas
   - numpy

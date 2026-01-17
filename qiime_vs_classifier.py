@@ -18,6 +18,12 @@ def parse_args():
     parser.add_argument('--output-tsv', '-o', default='classifications.tsv')
     parser.add_argument('--stats-output', '-s', default='classification_stats.tsv')
     parser.add_argument('--chunk-size', type=int, default=500)
+    parser.add_argument(
+        '--threads',
+        type=int,
+        default=int(os.environ.get('NXF_TASK_CPUS', '1')),
+        help="Threads for QIIME2 classify-consensus-vsearch (default: $NXF_TASK_CPUS or 1)."
+    )
     return parser.parse_args()
 
 def split_fasta(fasta_path, chunk_size, outdir):
@@ -36,14 +42,15 @@ def load_sequences_to_artifact(fasta_path, artifact_path):
     artifact.save(artifact_path)
     return artifact
 
-def classify_with_vsearch(query_seqs, ref_seqs, ref_taxonomy, result_path):
+def classify_with_vsearch(query_seqs, ref_seqs, ref_taxonomy, result_path, threads: int):
     if os.path.exists(result_path):
         return qiime2.Artifact.load(result_path).view(pd.DataFrame)
+
     result = classify_consensus_vsearch(
         query=query_seqs,
         reference_reads=ref_seqs,
         reference_taxonomy=ref_taxonomy,
-        threads=32
+        threads=int(threads)
     )
     result.classification.save(result_path)
     return result.classification.view(pd.DataFrame)
@@ -88,7 +95,7 @@ def main():
 
         print(f"⚙️  Processing {base}...")
         query = load_sequences_to_artifact(chunk_path, qza_path)
-        df = classify_with_vsearch(query, ref_seqs, ref_tax, result_path)
+        df = classify_with_vsearch(query, ref_seqs, ref_tax, result_path, threads=args.threads)
         save_classifications(df, tsv_path)
         all_chunks.append(tsv_path)
 

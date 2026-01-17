@@ -19,7 +19,7 @@ try {
 
 def inlineKeys = [
     'paths','resources','fastp','merge','filter','unoise',
-    'swarm','table_filter','filename_patterns','environments','config_root'
+    'table_filter','filename_patterns','environments','config_root'
 ]
 def hasInlineConfig = inlineKeys.any { paramsMap.containsKey(it) }
 
@@ -117,7 +117,6 @@ def dirMap = [
     sina     : "${outputDir}/sina",
     denoise  : "${outputDir}/denoise",
     nochi    : "${outputDir}/nochimeras",
-    swarm    : "${outputDir}/swarm",
     asv      : "${outputDir}/ASVs",
     mito     : "${outputDir}/mito",
     taxonomy : "${outputDir}/taxonomy",
@@ -239,36 +238,6 @@ if( !batchCorrectionEnvFile.exists() ) {
 }
 log.info "Using batch correction Conda/Mamba env definition: ${batchCorrectionCondaEnvPath}"
 
-def assignCompartmentsEnvConfigPath = config.environments?.assign_compartments
-def resolvedAssignCompartmentsEnvPath = assignCompartmentsEnvConfigPath ? resolveOptionalPath(assignCompartmentsEnvConfigPath, configRoot) : null
-def defaultAssignCompartmentsEnvPath = new File("${projectDir}/envs/assign_compartments.yml").canonicalPath
-def assignCompartmentsCondaEnvPath = resolvedAssignCompartmentsEnvPath ?: defaultAssignCompartmentsEnvPath
-def assignCompartmentsEnvFile = file(assignCompartmentsCondaEnvPath)
-if( !assignCompartmentsEnvFile.exists() ) {
-    exit 1, "Assign compartments conda environment YAML not found: ${assignCompartmentsCondaEnvPath}"
-}
-log.info "Using assign compartments Conda/Mamba env definition: ${assignCompartmentsCondaEnvPath}"
-
-def trajectoryEnvConfigPath = config.environments?.trajectory_analysis
-def resolvedTrajectoryEnvPath = trajectoryEnvConfigPath ? resolveOptionalPath(trajectoryEnvConfigPath, configRoot) : null
-def defaultTrajectoryEnvPath = new File("${projectDir}/envs/trajectory_analysis.yml").canonicalPath
-def trajectoryCondaEnvPath = resolvedTrajectoryEnvPath ?: defaultTrajectoryEnvPath
-def trajectoryEnvFile = file(trajectoryCondaEnvPath)
-if( !trajectoryEnvFile.exists() ) {
-    exit 1, "Trajectory analysis conda environment YAML not found: ${trajectoryCondaEnvPath}"
-}
-log.info "Using trajectory analysis Conda/Mamba env definition: ${trajectoryCondaEnvPath}"
-
-def stratificationEnvConfigPath = config.environments?.stratification
-def resolvedStratificationEnvPath = stratificationEnvConfigPath ? resolveOptionalPath(stratificationEnvConfigPath, configRoot) : null
-def defaultStratificationEnvPath = new File("${projectDir}/envs/stratification.yml").canonicalPath
-def stratificationCondaEnvPath = resolvedStratificationEnvPath ?: defaultStratificationEnvPath
-def stratificationEnvFile = file(stratificationCondaEnvPath)
-if( !stratificationEnvFile.exists() ) {
-    exit 1, "Stratification analysis conda environment YAML not found: ${stratificationCondaEnvPath}"
-}
-log.info "Using stratification Conda/Mamba env definition: ${stratificationCondaEnvPath}"
-
 def outlierEnvConfigPath = config.environments?.outlier_checker
 def resolvedOutlierEnvPath = outlierEnvConfigPath ? resolveOptionalPath(outlierEnvConfigPath, configRoot) : null
 def defaultOutlierEnvPath = new File("${projectDir}/envs/outlier_checker.yml").canonicalPath
@@ -352,21 +321,6 @@ if( !batchCorrectionScriptFile.exists() ) {
     exit 1, "asv_batch_correction.py not found in project directory"
 }
 def batchCorrectionScriptPath = batchCorrectionScriptFile.canonicalPath
-def assignCompartmentsScriptFile = new File("${projectDir}/assign_compartments.py")
-if( !assignCompartmentsScriptFile.exists() ) {
-    exit 1, "assign_compartments.py not found in project directory"
-}
-def assignCompartmentsScriptPath = assignCompartmentsScriptFile.canonicalPath
-def trajectoryScriptFile = new File("${projectDir}/trajectory_analysis.py")
-if( !trajectoryScriptFile.exists() ) {
-    exit 1, "trajectory_analysis.py not found in project directory"
-}
-def trajectoryScriptPath = trajectoryScriptFile.canonicalPath
-def stratificationScriptFile = new File("${projectDir}/stratification_anomaly_detection.py")
-if( !stratificationScriptFile.exists() ) {
-    exit 1, "stratification_anomaly_detection.py not found in project directory"
-}
-def stratificationScriptPath = stratificationScriptFile.canonicalPath
 def outlierCheckerScriptFile = new File("${projectDir}/outlier_checker.py")
 if( !outlierCheckerScriptFile.exists() ) {
     exit 1, "outlier_checker.py not found in project directory"
@@ -641,65 +595,6 @@ def batchTargetClusters = batchCorrectionConfig.target_clusters ?: '3-8'
 def batchNFeaturesPlot = batchCorrectionConfig.n_features_plot ? (batchCorrectionConfig.n_features_plot as int) : 5
 def batchRandomState = batchCorrectionConfig.random_state ? (batchCorrectionConfig.random_state as int) : 42
 
-def assignConfig = config.assign_compartments ?: [:]
-boolean assignCompartmentsEnabled = batchCorrectionEnabled && (assignConfig.containsKey('enabled') ? (assignConfig.enabled as boolean) : true)
-def assignOutputDir = assignConfig.output_dir ?: 'compartments'
-def assignOutputDirAbs = new File(outputDir, assignOutputDir).canonicalPath
-def assignDepthCol = assignConfig.depth_col ?: 'Depth'
-def assignMonthCol = assignConfig.month_col ?: 'Month'
-def assignBiochemRaw = assignConfig.biochem_cols
-List<String> assignBiochemCols = []
-if( assignBiochemRaw instanceof List ) {
-    assignBiochemCols = assignBiochemRaw.collect { it.toString().trim() }.findAll { it }
-} else if( assignBiochemRaw ) {
-    assignBiochemCols = assignBiochemRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-if( assignCompartmentsEnabled && assignBiochemCols.isEmpty() ) {
-    exit 1, "assign_compartments.biochem_cols must include at least one entry when assign_compartments.enabled is true"
-}
-def assignUseIntegrated = (assignConfig.use_integrated ?: false) as boolean
-def assignVerbose = (assignConfig.verbose ?: false) as boolean
-def assignBiochemColsArg = assignBiochemCols.join(',')
-
-def trajectoryConfig = config.trajectory_analysis ?: [:]
-boolean trajectoryEnabled = batchCorrectionEnabled && (trajectoryConfig.containsKey('enabled') ? (trajectoryConfig.enabled as boolean) : true)
-def trajectoryOutputDir = trajectoryConfig.output_dir ?: 'trajectory_analysis'
-def trajectoryOutputDirAbs = new File(outputDir, trajectoryOutputDir).canonicalPath
-def trajectoryMonthCol = trajectoryConfig.month_col ?: 'Month'
-def trajectoryGroupColsRaw = trajectoryConfig.group_cols
-List<String> trajectoryGroupCols = []
-if( trajectoryGroupColsRaw instanceof List ) {
-    trajectoryGroupCols = trajectoryGroupColsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( trajectoryGroupColsRaw ) {
-    trajectoryGroupCols = trajectoryGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-if( trajectoryGroupCols.isEmpty() ) {
-    trajectoryGroupCols = ['Depth','cluster_after']
-}
-def trajectoryGroupColsArg = trajectoryGroupCols.join(',')
-def trajectoryColorCol = trajectoryConfig.color_col ?: 'Color'
-def trajectoryTopTaxa = trajectoryConfig.top_taxa ? (trajectoryConfig.top_taxa as int) : 10
-
-def stratificationConfig = config.stratification ?: [:]
-boolean stratificationEnabled = assignCompartmentsEnabled && (stratificationConfig.containsKey('enabled') ? (stratificationConfig.enabled as boolean) : true)
-def stratificationOutputDir = stratificationConfig.output_dir ?: 'stratification_timeseries_analysis'
-def stratificationOutputDirAbs = new File(outputDir, stratificationOutputDir).canonicalPath
-def stratificationDateCol = stratificationConfig.date_col ?: 'Date'
-def stratificationMonthCol = stratificationConfig.month_col ?: 'Month'
-def stratificationYearCol = stratificationConfig.year_col ?: 'Year'
-def stratificationDepthCol = stratificationConfig.depth_col ?: 'Depth'
-def stratificationConsensusThreshold = stratificationConfig.consensus_threshold ? (stratificationConfig.consensus_threshold as int) : 2
-def stratificationSampleIdCol = stratificationConfig.sample_id_col ?: 'sampleid'
-def stratificationTrajectoryGroupColConfigured = stratificationConfig.trajectory_group_col ?: null
-def stratificationTrajectorySummaryOverride = stratificationConfig.trajectory_summary ? resolveOptionalPath(stratificationConfig.trajectory_summary, configRoot) : null
-if( stratificationTrajectorySummaryOverride ) {
-    def stratSummaryFile = file(stratificationTrajectorySummaryOverride)
-    if( !stratSummaryFile.exists() ) {
-        exit 1, "stratification.trajectory_summary not found: ${stratificationTrajectorySummaryOverride}"
-    }
-}
-def stratificationTrajectoryGroupCol = stratificationTrajectoryGroupColConfigured ?: (trajectoryGroupCols ? trajectoryGroupCols[0] : null)
-
 def outlierConfig = config.outlier_detection ?: [:]
 boolean outlierEnabled = batchCorrectionEnabled && (outlierConfig.containsKey('enabled') ? (outlierConfig.enabled as boolean) : true)
 def outlierOutputDir = outlierConfig.output_dir ?: 'outliers_corrected'
@@ -764,8 +659,6 @@ workflow {
     def denoise_input = DENOISE(sina_stage.trimmed_fasta)
     def nochi_input = CHIMERA_CHECK(denoise_input)
 
-    SWARM_CLUSTER(nochi_input)
-
     def count_matrix_stage = CREATE_COUNT_MATRIX(concat_for_counts, nochi_input)
     def count_matrix_channel = count_matrix_stage.count_matrix
     def asv_counts_for_sankey = count_matrix_channel.map { tuple -> tuple[0] }
@@ -791,14 +684,10 @@ workflow {
 
 def metadata_stage = null
 def metaMicroForBatch = null
-def metaMicroForAssign = null
-def metaMicroForTrajectory = null
-def metaMicroForStrat = null
 def metaMicroForOutlier = null
 def metaMicroForCollectors = null
 def asvMetaForBatch = null
 def asvFinalForBatch = null
-def asvFinalForAssign = null
 def asvFinalForCollectors = null
     if( metadataPlotsEnabled ) {
         metadata_stage = PLOT_METADATA(
@@ -808,67 +697,25 @@ def asvFinalForCollectors = null
             taxonomy_stage.taxonomy_table
         )
         metaMicroForBatch = metadata_stage.metadata_micro
-        metaMicroForAssign = metadata_stage.metadata_micro
-        metaMicroForTrajectory = metadata_stage.metadata_micro
-        metaMicroForStrat = metadata_stage.metadata_micro
         metaMicroForOutlier = metadata_stage.metadata_micro
         metaMicroForCollectors = metadata_stage.metadata_micro
         asvMetaForBatch = metadata_stage.asv_meta_micro
         asvFinalForBatch = metadata_stage.asv_final_micro
-        asvFinalForAssign = metadata_stage.asv_final_micro
         asvFinalForCollectors = metadata_stage.asv_final_micro
     }
 
     def batch_stage = null
-    def asvClrForAssign = null
-    def asvClrForTrajectory = null
     def asvClrForOutlier = null
-    def umapResultsForTrajectory = null
-    def trajectory_stage = null
-    def trajectorySummaryChannel = Channel.value(stratificationTrajectorySummaryOverride ?: '')
     if( batchCorrectionEnabled ) {
         batch_stage = ASV_BATCH_CORRECTION(
             metaMicroForBatch,
             asvMetaForBatch,
             asvFinalForBatch
         )
-        asvClrForAssign = batch_stage.asv_clr_after
-        asvClrForTrajectory = batch_stage.asv_clr_after
         asvClrForOutlier = batch_stage.asv_clr_after
         umapResultsForTrajectory = batch_stage.umap_results
     }
 
-    def assign_stage = null
-    def integratedDataForStrat = null
-    if( assignCompartmentsEnabled ) {
-        assign_stage = ASSIGN_COMPARTMENTS(
-            asvClrForAssign,
-            metaMicroForAssign,
-            asvFinalForAssign,
-            filtered_channel
-        )
-        integratedDataForStrat = assign_stage.integrated_data
-    }
-
-    if( trajectoryEnabled ) {
-        trajectory_stage = TRAJECTORY_ANALYSIS(
-            umapResultsForTrajectory,
-            asvClrForTrajectory,
-            metaMicroForTrajectory
-        )
-        if( !stratificationTrajectorySummaryOverride ) {
-            trajectorySummaryChannel = trajectory_stage.trajectory_summary
-                .map { it?.toString() ?: '' }
-                .ifEmpty { Channel.value('') }
-        }
-    }
-    if( stratificationEnabled ) {
-        STRATIFICATION_ANALYSIS(
-            integratedDataForStrat,
-            metaMicroForStrat,
-            trajectorySummaryChannel
-        )
-    }
     if( outlierEnabled ) {
         OUTLIER_CHECKER(
             asvClrForOutlier,
@@ -1121,34 +968,6 @@ vsearch --uchime3_denovo "${centroids}" \\
 """
 }
 
-process SWARM_CLUSTER {
-    cpus pipelineThreads
-    conda "${condaEnvPath}"
-    publishDir dirMap.swarm, mode: 'copy', pattern: '*'
-
-    input:
-    path(nochimeras)
-
-    output:
-    path("swarm_reps.fasta")
-    path("swarm_reps.struct")
-    path("swarm_reps.network")
-    path("swarm_reps.stats.txt")
-    path("swarm_reps.swarms")
-
-    script:
-    def swarmCfg = config.swarm ?: [:]
-    """
-swarm -d ${swarmCfg.distance ?: 1} -f -t ${task.cpus} -z \\
-      -i swarm_reps.struct \\
-      -j swarm_reps.network \\
-      -s swarm_reps.stats.txt \\
-      -w swarm_reps.fasta \\
-      -o swarm_reps.swarms \\
-      "${nochimeras}"
-"""
-}
-
 process CREATE_COUNT_MATRIX {
     cpus pipelineThreads
     conda "${condaEnvPath}"
@@ -1230,7 +1049,8 @@ python "${taxonomyScriptPath}" \\
   --ref-taxonomy "${taxonomyRefTaxonomy}" \\
   --ref-seqs "${taxonomyRefSequences}" \\
   --output-tsv "${taxonomyOutputName}" \\
-  --stats-output "${taxonomyStatsName}"
+  --stats-output "${taxonomyStatsName}" \\
+  --threads ${task.cpus}
 """
 }
 
@@ -1381,7 +1201,7 @@ process SANKEY {
     def labeledFlag = sankeyMakeLabeled ? "  --make-labeled \\\n" : ''
     def unlabeledFlag = sankeyMakeUnlabeled ? "  --make-unlabeled \\\n" : ''
     """
-python "${sankeyScriptPath}" \\
+python3 "${sankeyScriptPath}" \\
   --data-dir "${outputDir}" \\
   --sub-dir "${sankeySubDir}" \\
   --metadata "${sankeyMetadataPath}" \\
@@ -1459,7 +1279,6 @@ process PLOT_METADATA {
     path("ASV_final.mito.tsv"), optional: true, emit: asv_final_mito
 
     script:
-    def keepTypesArg = metadataKeepTypes && !metadataKeepTypes.isEmpty() ? "  --keep-types \"${metadataKeepTypes.join(',')}\" \\\n" : ''
     def includeRankArgs = metadataIncludeRank && !metadataIncludeRank.isEmpty() ?
         metadataIncludeRank.collect { "  --include-rank \"${it}\" \\\n" }.join('') : ''
     def microFlag = metadataForceMicroOnly ? "  --make-micro \\\n" : ''
@@ -1470,6 +1289,7 @@ process PLOT_METADATA {
     def asvMetaMitoFile = "${outputDir}/mito/metadata/ASV_meta_mito.tsv"
     def asvFinalMicroFile = "${outputDir}/ASVs/ASV_final.micro.tsv"
     def asvFinalMitoFile = "${outputDir}/mito/ASVs/ASV_final.mito.tsv"
+    def asvTaxTable = "${outputDir}/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv"
     """
 set -euo pipefail
 
@@ -1477,14 +1297,16 @@ python "${plotMetadataScriptPath}" \\
   --data-dir "${outputDir}" \\
   --sub-dir "${metadataPlotsSubDir}" \\
   --metadata "${metadataPlotsMetadataPath}" \\
-  --taxonomy "${taxonomy_table}" \\
-  --fastq-stats "${fastq_stats}" \\
-  --asv-micro "${asv_micro}" \\
-  --asv-mito "${asv_mito}" \\
-  --type-col "${metadataPlotsTypeCol}" \\
+  --taxonomy "${asvTaxTable}" \\
+  --asv-micro "${asvFinalMicroFile}" \\
+  --asv-mito "${asvFinalMitoFile}" \\
+  --group1-col "${metadataPlotsTypeCol}" \\
   --color-col "${metadataPlotsColorCol}" \\
-${keepTypesArg}${includeRankArgs}  --mito-threshold-line ${metadataPlotsMitoThreshold} \\
-${microFlag}${mitoFlag}  --verbose
+  --sample-manifest ${manifestPath} \\
+  ${includeRankArgs} \\
+  ${microFlag} \\
+  ${mitoFlag} \\
+  --verbose
 
 link_if_exists() {
   local src="\$1"
@@ -1555,110 +1377,6 @@ ln -sf "${asvClrAfterFile}" asv_clr_after_correction.tsv
 if [[ -f "${umapResultsFile}" ]]; then
   ln -sf "${umapResultsFile}" umap_hdbscan_results.tsv
 fi
-"""
-}
-
-process ASSIGN_COMPARTMENTS {
-    cpus pipelineThreads
-    conda "${assignCompartmentsCondaEnvPath}"
-
-    when:
-    assignCompartmentsEnabled
-
-    input:
-    path(asv_clr)
-    path(metadata_table)
-    path(asv_counts)
-    tuple path(filtered_table), path(filtered_fasta)
-
-    output:
-    path("data_integrated.tsv"), emit: integrated_data
-
-    script:
-    def useIntegratedFlag = assignUseIntegrated ? "  --use-integrated \\\n" : ''
-    def verboseFlag = assignVerbose ? "  --verbose \\\n" : ''
-    """
-set -euo pipefail
-
-python "${assignCompartmentsScriptPath}" \\
-  --asv-clr "${asv_clr}" \\
-  --asv-counts "${asv_counts}" \\
-  --asv-fasta "${filtered_fasta}" \\
-  --metadata "${metadata_table}" \\
-  --depth-col "${assignDepthCol}" \\
-  --month-col "${assignMonthCol}" \\
-  --biochem-cols "${assignBiochemColsArg}" \\
-  --output-dir "${assignOutputDirAbs}" \\
-${useIntegratedFlag}${verboseFlag}
-
-ln -sf "${assignOutputDirAbs}/data_integrated.tsv" data_integrated.tsv
-"""
-}
-
-process TRAJECTORY_ANALYSIS {
-    cpus pipelineThreads
-    conda "${trajectoryCondaEnvPath}"
-
-    when:
-    trajectoryEnabled
-
-    input:
-    path(umap_results)
-    path(asv_clr)
-    path(metadata_table)
-
-    output:
-    path("trajectory_summary.tsv"), optional true, emit: trajectory_summary
-
-    script:
-    """
-set -euo pipefail
-
-python "${trajectoryScriptPath}" \\
-  --umap-results "${umap_results}" \\
-  --asv-data "${asv_clr}" \\
-  --metadata "${metadata_table}" \\
-  --month-col "${trajectoryMonthCol}" \\
-  --group-cols "${trajectoryGroupColsArg}" \\
-  --color-col "${trajectoryColorCol}" \\
-  --top-taxa ${trajectoryTopTaxa} \\
-  --output-dir "${trajectoryOutputDirAbs}" \\
-  --verbose
-
-if [[ -f "${trajectoryOutputDirAbs}/trajectory_summary.tsv" ]]; then
-  ln -sf "${trajectoryOutputDirAbs}/trajectory_summary.tsv" trajectory_summary.tsv
-fi
-"""
-}
-
-process STRATIFICATION_ANALYSIS {
-    cpus pipelineThreads
-    conda "${stratificationCondaEnvPath}"
-
-    when:
-    stratificationEnabled
-
-    input:
-    path(integrated_data)
-    path(metadata_table)
-    val trajectory_summary_path
-
-    script:
-    def sampleIdArg = stratificationSampleIdCol ? "  --sample-id-col \"${stratificationSampleIdCol}\" \\\n" : ''
-    def trajectorySummaryArg = (trajectory_summary_path && trajectory_summary_path.toString().trim()) ? "  --trajectory-summary \"${trajectory_summary_path}\" \\\n" : ''
-    def trajectoryGroupArg = (trajectorySummaryArg && stratificationTrajectoryGroupCol) ? "  --trajectory-group-col \"${stratificationTrajectoryGroupCol}\" \\\n" : ''
-    """
-set -euo pipefail
-
-python "${stratificationScriptPath}" \\
-  --integrated-data "${integrated_data}" \\
-  --metadata "${metadata_table}" \\
-  --date-col "${stratificationDateCol}" \\
-  --month-col "${stratificationMonthCol}" \\
-  --year-col "${stratificationYearCol}" \\
-  --depth-col "${stratificationDepthCol}" \\
-${sampleIdArg}${trajectorySummaryArg}${trajectoryGroupArg}  --consensus-threshold ${stratificationConsensusThreshold} \\
-  --output-dir "${stratificationOutputDirAbs}"
 """
 }
 

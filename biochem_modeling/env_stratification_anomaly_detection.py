@@ -135,6 +135,7 @@ def select_feature_columns(
 def calculate_stratification_score_timeseries(
     integrated_data: pd.DataFrame,
     metadata: pd.DataFrame,
+    cruise_col: str,
     date_col: str,
     depth_col: str,
     feature_cols: List[str],
@@ -152,6 +153,8 @@ def calculate_stratification_score_timeseries(
         date_mask = metadata[date_col] == date
         date_meta = metadata.loc[date_mask]
         date_data = integrated_data.loc[date_mask, feature_cols]
+
+        cruise = date_meta[cruise_col].unique()
 
         if date_data.empty or date_meta.empty:
             continue
@@ -185,6 +188,7 @@ def calculate_stratification_score_timeseries(
 
         results.append(
             {
+                'Cruise': cruise[0] if len(cruise) == 1 else "multiple",
                 "date": date,
                 "stratification_score": mean_dist,
                 "n_depths": len(depths),
@@ -630,6 +634,7 @@ def parse_args():
     ap.add_argument("--input", type=Path, required=True, help="Single input TSV containing metadata + biochem features.")
     ap.add_argument("--sep", default=",", help="Delimiter (default: comma). Use '\t' for TSV.")
     ap.add_argument("--sample-id-col", default="cruise_year_month_depth", help="Unique sample ID column.")
+    ap.add_argument("--cruise-col", default="Cruise", help="Cruise column name.")
     ap.add_argument("--date-col", default="date", help="Date column name.")
     ap.add_argument("--month-col", default="Month", help="Month column name.")
     ap.add_argument("--year-col", default="Year", help="Year column name.")
@@ -646,7 +651,7 @@ def parse_args():
         help="If --features is not provided, use all columns after this column as features.",
     )
 
-    ap.add_argument("--consensus-threshold", type=int, default=1, help="Minimum methods for anomaly consensus [1].")
+    ap.add_argument("--consensus-threshold", type=int, default=2, help="Minimum methods for anomaly consensus [2`].")
     ap.add_argument("--output-dir", type=Path, required=True, help="Output directory.")
     return ap.parse_args()
 
@@ -702,6 +707,7 @@ def main():
     timeseries_df = calculate_stratification_score_timeseries(
         integrated_data=integrated_data,
         metadata=metadata,
+        cruise_col=args.cruise_col,
         date_col=args.date_col,
         depth_col=args.depth_col,
         feature_cols=feature_cols,
