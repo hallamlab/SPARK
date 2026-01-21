@@ -60,6 +60,12 @@ class RunConfig:
     topn: int
     cmap: str
 
+    # UMAP options
+    make_umap: bool
+    umap_n_neighbors: int
+    umap_min_dist: float
+    umap_seed: int
+
 
 def parse_args() -> RunConfig:
     ap = argparse.ArgumentParser(
@@ -85,6 +91,14 @@ def parse_args() -> RunConfig:
                     help="For readability: also write a Top-N hybrid stacked bar (default 12).")
     ap.add_argument("--cmap", default="rainbow",
                     help="Colormap for stacked bars (default 'rainbow' ~ red->violet). Good alternatives: 'turbo', 'plasma'.")
+    ap.add_argument("--make-umap", action="store_true",
+                    help="Compute Bray–Curtis distance matrices for O2/GMM/Hybrid cruise compositions and embed via UMAP; write scatter plots + coord tables.")
+    ap.add_argument("--umap-n-neighbors", type=int, default=15,
+                    help="UMAP n_neighbors (default 15).")
+    ap.add_argument("--umap-min-dist", type=float, default=0.10,
+                    help="UMAP min_dist (default 0.10).")
+    ap.add_argument("--umap-seed", type=int, default=42,
+                    help="UMAP random seed (default 42).")
 
     ns = ap.parse_args()
 
@@ -102,6 +116,10 @@ def parse_args() -> RunConfig:
         make_plot=bool(ns.make_plot),
         topn=int(ns.topn),
         cmap=str(ns.cmap),
+        make_umap=bool(ns.make_umap),
+        umap_n_neighbors=int(ns.umap_n_neighbors),
+        umap_min_dist=float(ns.umap_min_dist),
+        umap_seed=int(ns.umap_seed),
     )
 
 
@@ -116,6 +134,108 @@ def ensure_dirs(outdir: str) -> Tuple[str, str]:
 # -----------------------------
 # Helpers
 # -----------------------------
+
+def _bray_curtis_dist_matrix(X: np.ndarray) -> np.ndarray:
+    """
+    Pairwise Bray–Curtis distance matrix for rows of X (n x k).
+    Assumes X is nonnegative and row-normalized (but not strictly required).
+    """
+    X = np.asarray(X, dtype=float)
+    n = X.shape[0]
+    D = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        D[i, i] = 0.0
+        for j in range(i + 1, n):
+            d = _bray_curtis(X[i, :], X[j, :])
+            D[i, j] = d
+            D[j, i] = d
+    return D
+
+
+def _dominant_labels(X: np.ndarray, cols: List[str]) -> Tuple[np.ndarray, List[str]]:
+    dom_idx = np.argmax(X, axis=1).astype(int)
+    dom_names = [cols[i] for i in dom_idx]
+    return dom_idx, dom_names
+
+
+def run_umap_from_braycurtis(
+    cfg: RunConfig,
+    cruise_df: pd.DataFrame,
+    comp_cols: List[str],
+    name: str,
+    tables_dir: str,
+    plots_dir: str,
+) -> None:
+    """
+    Build Bray–Curtis distance matrix over cruises, embed with UMAP (metric=precomputed),
+    write coords table + scatter plot (colored by dominant state).
+    """
+    try:
+        import umap  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "UMAP requested but 'umap-learn' is not installed. Install with: pip install umap-learn"
+        ) from e
+
+    if cruise_df.shape[0] < 3:
+        # UMAP with very few points is not useful; skip quietly
+        return
+
+    # Ensure stable ordering (by date if available, else cruise)
+    d = cruise_df.copy()
+    if cfg.time_col in d.columns:
+        d = d.sort_values(cfg.time_col)
+    elif cfg.cruise_col in d.columns:
+        d = d.sort_values(cfg.cruise_col)
+
+    X = _safe_row_normalize(d[comp_cols].to_numpy(dtype=float))
+
+    # Bray–Curtis distance matrix
+    D = _bray_curtis_dist_matrix(X)
+
+    # UMAP embedding on precomputed distances
+    reducer = umap.UMAP(
+        n_neighbors=cfg.umap_n_neighbors,
+        min_dist=cfg.umap_min_dist,
+        n_components=2,
+        metric="precomputed",
+        random_state=cfg.umap_seed,
+    )
+    Y = reducer.fit_transform(D)  # (n, 2)
+
+    dom_idx, dom_names = _dominant_labels(X, comp_cols)
+
+    # Table
+    out_tbl = d[_cruise_group_cols(cfg, d)].copy()
+    out_tbl["umap1"] = Y[:, 0]
+    out_tbl["umap2"] = Y[:, 1]
+    out_tbl["dominant_state_idx"] = dom_idx
+    out_tbl["dominant_state_name"] = dom_names
+    out_tbl.to_csv(os.path.join(tables_dir, f"umap_{name}.csv"), index=False)
+
+    # Plot
+    labels = _labels_for_plot(cfg, d)
+    plt.figure(figsize=(6.2, 5.4))
+    sc = plt.scatter(
+        Y[:, 0], Y[:, 1],
+        c=dom_idx.astype(float),
+        s=35,
+        alpha=0.85,
+        linewidths=0,
+    )
+    plt.xlabel("UMAP1 (Bray–Curtis)")
+    plt.ylabel("UMAP2 (Bray–Curtis)")
+    plt.title(f"{name.upper()} cruise UMAP (Bray–Curtis)")
+
+    # optional: annotate lightly (can get busy; keep minimal)
+    # for i, lab in enumerate(labels):
+    #     plt.text(Y[i, 0], Y[i, 1], str(lab), fontsize=6, alpha=0.6)
+
+    cbar = plt.colorbar(sc)
+    cbar.set_label("Dominant state index")
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, f"umap_{name}.png"), dpi=200)
+    plt.close()
 
 def _find_resp_cols(df: pd.DataFrame, prefix: str) -> List[str]:
     cols = [c for c in df.columns if c.startswith(prefix)]
@@ -552,6 +672,38 @@ def main() -> None:
     cruise_o2 = cruise_composition_sample_weighted(cfg, joined, o2_resp_cols, o2_out)
     cruise_gmm = cruise_composition_sample_weighted(cfg, joined, gmm_resp_cols, gmm_out)
     cruise_hyb = cruise_composition_sample_weighted(cfg, joined, hyb_cols, hyb_out)
+
+    # UMAP (Bray–Curtis over full cruise×state compositions)
+    if cfg.make_umap:
+        # O2
+        run_umap_from_braycurtis(
+            cfg=cfg,
+            cruise_df=cruise_o2,
+            comp_cols=o2_resp_cols,
+            name="o2",
+            tables_dir=tables_dir,
+            plots_dir=plots_dir,
+        )
+
+        # GMM
+        run_umap_from_braycurtis(
+            cfg=cfg,
+            cruise_df=cruise_gmm,
+            comp_cols=gmm_resp_cols,
+            name="gmm",
+            tables_dir=tables_dir,
+            plots_dir=plots_dir,
+        )
+
+        # Hybrid
+        run_umap_from_braycurtis(
+            cfg=cfg,
+            cruise_df=cruise_hyb,
+            comp_cols=hyb_cols,
+            name="hybrid",
+            tables_dir=tables_dir,
+            plots_dir=plots_dir,
+        )
 
     # long format hybrid
     id_cols = _cruise_group_cols(cfg, joined)

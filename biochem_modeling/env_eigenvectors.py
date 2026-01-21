@@ -4,7 +4,7 @@ env_eigenvectors.py
 
 Purpose
 - Prepare an environmental / biogeochemical feature matrix for PCA (“eigenvectors”):
-  cleaning → missingness filtering → imputation → clamp/log → scaling → PCA
+  cleaning → missingness classification → profile-wise interpolation → log → scaling → PCA
 - Write a reproducible set of tables/plots plus a compact QC summary.
 
 Pipeline (always, in this order)
@@ -32,32 +32,31 @@ Pipeline (always, in this order)
    - IMPORTANT: samples already at an anchor depth (by rounded depth) are never evaluated for snapping;
      they are kept as-is (“is_anchor”).
    - Similarity distances are computed in z-scored space where z-score parameters are computed from observed data
-     (no imputation); negatives in the feature matrix used for similarity are clamped to 0 (counted separately).
+     (no imputation); negative feature values are treated as missing (NaN).
 
-3) Missingness summaries + filtering (features only)
+3) Missingness summaries + core/sparse classification (features only)
    - Writes missingness stats before/after filtering.
-   - Drops feature columns with missing fraction > --dropna-col-thresh
-   - Drops rows with missing fraction > --dropna-row-thresh (computed over kept features)
+   - Marks feature columns as sparse if missing fraction > --dropna-col-thresh
 
-4) Imputation
-   Strategies (--impute): median | mean | knn | iterative
-   Scope (--impute-scope):
-   - global: learn/fill across all rows
-   - by_depth: impute within each anchored depth group (requires anchored depth column in metadata)
-       * For knn/iterative: if group size < --impute-min-group-size, fallback to a global fitted model
-       * For median/mean: if group too small, fallback to global median/mean
-   Notes:
-   - X_preimpute (post-drop, pre-impute) is retained for coverage metrics used by PC selection.
+4) Row filtering (pre-impute only)
+   - Drop rows with missing fraction > --dropna-row-thresh-pre (computed over core features)
+   - Controlled by --row-filter-stage: pre | none
 
-5) Post-impute cleaning + transform
-   - Clamp negatives to 0 (ALWAYS; counted)
-   - Optional log1p (--log1p), applied after clamp
+5) Profile-wise depth interpolation (within-cruise only)
+   - Interpolate within each profile (e.g., cruise) along depth for interior gaps only
+   - Gaps with depth distance > --interp-max-gap are left missing
+   - Requires enough bracketing depths on both sides (see --interp-neighbors)
+   - Uses local polynomial interpolation (degree = --interp-degree) with linear fallback
+   - No cross-profile fallback (season+depth fallback disabled by default)
 
-6) Scaling + PCA
+6) Post-impute transform
+   - Optional log1p (--log1p)
+
+7) Scaling + PCA
    - Standardize with StandardScaler (mean=0, std=1)
    - Fit PCA with n_components = min(--n-components, #features, #rows)
 
-7) Optional: PC selection + feature clustering  [enabled by --pc-selection]
+8) Optional: PC selection + feature clustering  [enabled by --pc-selection]
    Computed on the fitted PCA results.
    Outputs include parallel analysis, per-PC support checks, feature clustering by loading similarity,
    and block-bootstrap stability.
@@ -115,9 +114,9 @@ Tables (always)
 - missingness_pre_drop.csv
 - missingness_post_drop.csv
 - dropped_rows.csv
-- matrix_cleaned.csv              (metadata + post-impute/post-clamp/(optional)post-log features)
+- matrix_cleaned.csv              (metadata + post-impute/(optional)post-log features)
 - matrix_scaled.csv               (metadata + scaled features)
-- impute_values.csv               (median/mean fill values, or per-feature means after imputation model)
+- impute_values.csv               (per-feature means after interpolation)
 - pca_explained_variance.csv
 - pca_loadings.csv
 - eigenvectors_scores.csv
@@ -150,9 +149,8 @@ PC selection outputs (if enabled)
 - loadings_heatmap_by_feature_cluster.png
 
 Notes / invariants
-- Negative values are clamped to 0 twice:
-  (1) during depth-anchoring similarity calculations (if anchoring enabled; counted separately)
-  (2) after imputation (always; counted)
+- Negative values are treated as missing (NaN) and are never clamped to 0.
+- Interpolation never crosses profiles (cruises) and never crosses depths for fallback.
 - Depth anchoring never uses imputed values; it uses observed feature overlap only.
 """
 
@@ -171,12 +169,6 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import AgglomerativeClustering
-
-# Improved imputers
-from sklearn.impute import KNNImputer
-from sklearn.experimental import enable_iterative_imputer  # noqa: F401
-from sklearn.impute import IterativeImputer
-from sklearn.linear_model import BayesianRidge
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -236,7 +228,7 @@ BIOCHEM_COLOR_MAP = {
     "Salinity": "darkviolet",
     "Phosphate": "brown",
     "Silicate": "peru",
-    "PAR": "tan",
+    "Density": "tan",
 }
 
 # -----------------------------
@@ -258,19 +250,17 @@ class RunConfig:
     include_depth_as_feature: bool
     n_components: int
     log1p: bool
-    negatives: str
 
-    # Imputation
-    impute: str
-    impute_scope: str
-    depth_interp_block_col: str
-    impute_min_group_size: int
-    knn_k: int
-    iterative_max_iter: int
-
-    dropna_row_thresh: float
     dropna_col_thresh: float
+    row_filter_stage: str
+    dropna_row_thresh_pre: Optional[float]
     random_state: int
+
+    # Profile-wise interpolation (within-cruise)
+    profile_col: str
+    interp_max_gap: float
+    interp_neighbors: int
+    interp_degree: int
 
     # Depth anchoring (pre-flight)
     depth_col: str
@@ -311,30 +301,22 @@ def parse_args() -> RunConfig:
     ap.add_argument("--input", required=True, help="Path to input table (CSV/TSV).")
     ap.add_argument("--outdir", required=True, help="Output directory.")
     ap.add_argument("--sep", default="\t", help="Delimiter (default: tab). Use ',' for CSV.")
-    ap.add_argument("--n-components", type=int, default=10, help="Number of PCA components (defaul 10).")
-    ap.add_argument("--log1p", action="store_true", help="Apply log1p to features after cleaning (negatives clamped to 0).")
-    ap.add_argument("--negatives", choices=["clamp", "impute"], default="clamp",
-        help=("How to handle negative feature values. "
-            "'clamp' sets negatives to 0 (current behavior). "
-            "'impute' treats negatives as missing (NaN) and fills them via the selected imputer."),)
-    ap.add_argument("--impute", choices=["median", "mean", "knn", "iterative", "depth_interp"],
-                    default="median",
-                    help=("Imputation strategy. "
-                          "'depth_interp' does per-feature linear interpolation along Depth (optionally within a block), "
-                          "then falls back to global median if a feature is entirely missing in a group."),)
-    ap.add_argument("--impute-scope", choices=["global", "by_depth"], default="by_depth",
-                    help="Imputation scope. 'by_depth' learns imputation within anchored depth groups (recommended for profiles).",)
-    ap.add_argument("--depth-interp-block-col", default="ALL",
-                    help=("Metadata column to block depth interpolation by when --impute depth_interp is used. "
-                          "Examples: Cruise, Cast, Station. Use 'ALL' to interpolate across all rows (not recommended)."),)
-    ap.add_argument("--impute-min-group-size", type=int, default=30,
-                    help="Min rows for within-depth imputation; else fallback to global model (default 30).",)
-    ap.add_argument("--knn-k", type=int, default=10, help="K for KNN imputation (default 10).")
-    ap.add_argument("--iterative-max-iter", type=int, default=20, help="Max iterations for IterativeImputer (default 20).")
-    ap.add_argument("--dropna-row-thresh", type=float, default=0.4,
-                    help="Drop rows if missing fraction among features is > this value (default 0.4).",)
-    ap.add_argument("--dropna-col-thresh", type=float, default=0.4,
-                    help="Drop feature columns if missing fraction is > this value (default 0.4).",)
+    ap.add_argument("--n-components", type=int, default=10, help="Number of PCA components (default 10).")
+    ap.add_argument("--log1p", action="store_true", help="Apply log1p to features after cleaning.")
+    ap.add_argument("--profile-col", default="Cruise",
+                    help="Profile/cruise identifier column used for within-profile depth interpolation.",)
+    ap.add_argument("--interp-max-gap", type=float, default=10.0,
+                    help="Max depth distance (m) to interpolate within a profile (default 10).",)
+    ap.add_argument("--interp-neighbors", type=int, default=2,
+                    help="Min observed depths on each side of a gap (default 2).",)
+    ap.add_argument("--interp-degree", type=int, default=2,
+                    help="Polynomial degree for local interpolation; falls back to linear if needed (default 2).",)
+    ap.add_argument("--dropna-row-thresh-pre", type=float, default=0.4,
+                    help="Row missingness threshold for row filtering (default 0.4).",)
+    ap.add_argument("--dropna-col-thresh", type=float, default=0.2,
+                    help="Drop feature columns if missing fraction is > this value (default 0.2).",)
+    ap.add_argument("--row-filter-stage", choices=["pre", "none"], default="pre",
+                    help="When to drop rows based on missingness: pre or none (default pre).",)
     ap.add_argument("--random-state", type=int, default=42, help="Random state for reproducibility.")
     ap.add_argument("--include-depth-as-feature", action="store_true",
                     help="Include Depth as a PCA feature (default: Depth is metadata only).",)
@@ -354,13 +336,13 @@ def parse_args() -> RunConfig:
     ap.add_argument("--anchored-depth-col", default="Depth_anchored", help="Name of anchored depth column (default Depth_anchored).")
     # Data-driven anchoring params (no mode switch)
     ap.add_argument("--anchor-by-col", default="ALL", help="Block column for within-block prototypes (default ALL).")
-    ap.add_argument("--anchor-min-features", type=int, default=5, help="Min shared observed features to decide a snap (default 8).")
+    ap.add_argument("--anchor-min-features", type=int, default=5, help="Min shared observed features to decide a snap (default 5).")
     ap.add_argument("--anchor-margin", type=float, default=0.99, help="Snap only if winner distance ratio <= margin (default 0.99).")
     ap.add_argument("--anchor-proto-min-n", type=int, default=3, help="Min samples at (block, anchor) to build a prototype (default 3).")
     # ---- PC selection flags ----
     ap.add_argument("--pc-selection", action="store_true", help="Run keep-able PC selection + feature clustering.")
     ap.add_argument("--pcsel-parallel-B", type=int, default=500, help="Parallel analysis replicates (default 500).")
-    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.90, help="Null quantile (default 0.90rqq).")
+    ap.add_argument("--pcsel-parallel-quantile", type=float, default=0.90, help="Null quantile (default 0.90).")
     ap.add_argument("--pcsel-support-min-cov", type=float, default=0.50, help="Min per-feature coverage threshold (default 0.50).")
     ap.add_argument("--pcsel-support-median-cov", type=float, default=0.60, help="Median coverage threshold on top features (default 0.60).")
     ap.add_argument("--pcsel-support-min-n", type=int, default=3, help="Min number of well-covered top features (default 3).")
@@ -407,18 +389,16 @@ def parse_args() -> RunConfig:
         include_depth_as_feature=ns.include_depth_as_feature,
         n_components=ns.n_components,
         log1p=ns.log1p,
-        negatives=ns.negatives,
 
-        impute=ns.impute,
-        impute_scope=ns.impute_scope,
-        depth_interp_block_col=ns.depth_interp_block_col,
-        impute_min_group_size=ns.impute_min_group_size,
-        knn_k=ns.knn_k,
-        iterative_max_iter=ns.iterative_max_iter,
-
-        dropna_row_thresh=ns.dropna_row_thresh,
         dropna_col_thresh=ns.dropna_col_thresh,
+        row_filter_stage=ns.row_filter_stage,
+        dropna_row_thresh_pre=ns.dropna_row_thresh_pre,
         random_state=ns.random_state,
+
+        profile_col=ns.profile_col,
+        interp_max_gap=ns.interp_max_gap,
+        interp_neighbors=ns.interp_neighbors,
+        interp_degree=ns.interp_degree,
 
         depth_col=ns.depth_col,
         anchor_depths=ns.anchor_depths,
@@ -493,14 +473,6 @@ def coerce_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
 # -----------------------------
 # Cleaning transforms
 # -----------------------------
-
-def clamp_negatives_to_zero(X: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    X2 = X.copy()
-    neg_mask = X2 < 0
-    n_clamped = int(neg_mask.sum().sum())
-    if n_clamped > 0:
-        X2[neg_mask] = 0.0
-    return X2, n_clamped
 
 def negatives_to_nan(X: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     X2 = X.copy()
@@ -603,11 +575,11 @@ def anchor_depth_column_data_driven(
     # Depth numeric
     d = pd.to_numeric(out[depth_col], errors="coerce")
 
-    # Features numeric matrix for similarity (pre-impute). Clamp negatives here to avoid artifacts.
+    # Features numeric matrix for similarity (pre-impute). Treat negatives as missing.
     feats_present = [c for c in feature_cols if c in out.columns]
     X = out[feats_present].apply(pd.to_numeric, errors="coerce")
 
-    X, n_clamped = clamp_negatives_to_zero(X)
+    X, n_neg_as_nan = negatives_to_nan(X)
 
     # Z-score params from observed values (no imputation)
     mu, sd = _zscore_params_from_observed(X)
@@ -616,7 +588,7 @@ def anchor_depth_column_data_driven(
     anchor_vals, anchors_df, d_round = _choose_global_anchors(d, round_m=round_m, top_k=top_k, min_count=min_count)
     if anchor_vals.size == 0:
         out[anchored_col] = d
-        return out, anchors_df, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), n_clamped
+        return out, anchors_df, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), n_neg_as_nan
 
     # Mapping summary (rounded->anchor decision frequency later)
     mapping_df = pd.DataFrame({"depth_rounded": d_round.values})
@@ -837,7 +809,7 @@ def anchor_depth_column_data_driven(
         proto_counts_rows.append({"block": b, "anchor_depth_m": float(a), "n_rows_at_anchor": int(n), "prototype_built": (n >= proto_min_n)})
     proto_counts_df = pd.DataFrame(proto_counts_rows).sort_values(["block", "anchor_depth_m"])
 
-    return out, anchors_df, mapping_summary_df, decisions_df, proto_counts_df, n_clamped
+    return out, anchors_df, mapping_summary_df, decisions_df, proto_counts_df, n_neg_as_nan
 
 
 # -----------------------------
@@ -853,16 +825,13 @@ def basic_missingness_stats(df_num: pd.DataFrame, feats: List[str]) -> pd.DataFr
     return miss
 
 
-def drop_sparse(
+def filter_rows_by_missingness(
     df_num: pd.DataFrame,
     feats: List[str],
-    row_thresh: float,
-    col_thresh: float
-) -> Tuple[pd.DataFrame, List[str], pd.DataFrame]:
-    col_missing = df_num[feats].isna().mean()
-    kept_feats = [c for c in feats if col_missing[c] <= col_thresh]
-
-    row_missing = df_num[kept_feats].isna().mean(axis=1)
+    *,
+    row_thresh: float
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    row_missing = df_num[feats].isna().mean(axis=1)
     keep_rows = row_missing <= row_thresh
 
     dropped = pd.DataFrame({
@@ -870,7 +839,7 @@ def drop_sparse(
         "row_missing_fraction": row_missing[~keep_rows].values,
     })
 
-    return df_num.loc[keep_rows].copy(), kept_feats, dropped
+    return df_num.loc[keep_rows].copy(), dropped
 
 
 # --- Season binning (for seasonal-aware fallback imputation) ---
@@ -923,380 +892,224 @@ def make_season_column(df: pd.DataFrame, *, time_col: str) -> pd.DataFrame:
     return out
 
 # -----------------------------
-# Imputation
+# Imputation (profile-wise depth interpolation)
 # -----------------------------
 
-def impute_matrix_depth_interp(
+def _interpolate_series_with_gaps(
+    depth_vals: np.ndarray,
+    values: np.ndarray,
+    max_gap: float,
+    min_neighbors: int,
+    degree: int,
+) -> Tuple[np.ndarray, int]:
+    vals = values.astype(float).copy()
+    if max_gap <= 0:
+        return vals, 0
+
+    min_neighbors = max(1, int(min_neighbors))
+    degree = max(1, int(degree))
+
+    obs_idx = np.where(np.isfinite(vals))[0]
+    if len(obs_idx) < 2:
+        return vals, 0
+
+    filled = 0
+    for j in range(len(obs_idx) - 1):
+        left = obs_idx[j]
+        right = obs_idx[j + 1]
+        gap = int(right - left - 1)
+        gap_dist = float(abs(depth_vals[right] - depth_vals[left]))
+        if gap <= 0 or gap_dist > max_gap:
+            continue
+
+        left_start = j - (min_neighbors - 1)
+        right_end = j + 1 + (min_neighbors - 1)
+        if left_start < 0 or right_end >= len(obs_idx):
+            continue
+
+        neighbor_idx = obs_idx[left_start:right_end + 1]
+        x = depth_vals[neighbor_idx]
+        y = vals[neighbor_idx]
+        deg = min(degree, len(neighbor_idx) - 1)
+        if deg < 1:
+            continue
+
+        try:
+            coeffs = np.polyfit(x, y, deg=deg)
+            y_new = np.polyval(coeffs, depth_vals[left + 1:right])
+        except Exception:
+            x0, x1 = depth_vals[left], depth_vals[right]
+            y0, y1 = vals[left], vals[right]
+            if not np.isfinite(x0) or not np.isfinite(x1) or x1 == x0:
+                continue
+            y_new = y0 + (y1 - y0) * (depth_vals[left + 1:right] - x0) / (x1 - x0)
+
+        vals[left + 1:right] = y_new
+        filled += gap
+
+    return vals, int(filled)
+
+
+def impute_within_profile_depth(
     X: pd.DataFrame,
     depth: pd.Series,
-    block: Optional[pd.Series],
+    profile: pd.Series,
     *,
+    max_gap: int,
+    min_neighbors: int,
+    degree: int,
     season: Optional[pd.Series] = None,
-    depth_anchored: Optional[pd.Series] = None,
-    fallback: str = "median",
-    write_cell_provenance: bool = True,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.DataFrame, pd.DataFrame]:
+    season_depth: Optional[pd.Series] = None,
+    enable_season_depth_fallback: bool = False,
+    write_cell_provenance: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.DataFrame]:
     """
-    Depth-interpolation imputation (physically sensible for profiles), with hierarchy:
+    Within-profile depth interpolation with optional season+depth fallback.
 
-    (1) Within-block depth interpolation along Depth.
-    (2) If a feature is entirely missing within a block -> fill from (Season, Depth_anchored).
-    (3) If still missing -> fill from (Depth_anchored) across all seasons.
-    (4) Final backstop: global fill (median/mean).
-
-    VERBOSE logging:
-      - block_audit_df: per-block missingness + how many cells filled by each stage
-      - fallback_audit_df: per (feature) counts for seasonal-depth vs depth-only vs global
-      - cell_provenance_df: one row per imputed cell (row_index, block, feature, method, donor keys)
-
-    Returns:
-      (X_imputed, block_audit_df, summary_series, fallback_audit_df, cell_provenance_df)
+    - Interpolates only interior gaps with enough bracketing depths.
+    - Gaps with depth distance > max_gap are left missing.
+    - Optional fallback fills remaining NaNs using median within (Season, Depth) only.
     """
-    if fallback not in ("median", "mean"):
-        raise ValueError("fallback must be 'median' or 'mean'")
-
     X_out = X.copy()
-
-    # Normalize block
-    if block is None:
-        block = pd.Series(["ALL"] * len(X_out), index=X_out.index)
-    else:
-        block = block.astype(str).fillna("NA")
-
-    # Numeric depth for interpolation
+    profile = profile.astype(str)
     depth_num = pd.to_numeric(depth, errors="coerce")
 
-    # Season and depth_anchored required for the hierarchical fallback
     if season is None:
         season = pd.Series(["NA"] * len(X_out), index=X_out.index)
     else:
         season = season.astype(str).fillna("NA")
 
-    if depth_anchored is None:
-        depth_anchored = pd.Series(["NA"] * len(X_out), index=X_out.index)
+    if season_depth is None:
+        season_depth = depth_num
+
+    if enable_season_depth_fallback:
+        depth_key = pd.to_numeric(season_depth, errors="coerce").round(6)
+        donor_keys = pd.DataFrame({
+            "_season": season,
+            "_depth": depth_key,
+        }, index=X_out.index)
+        fallback_table = X.join(donor_keys).groupby(["_season", "_depth"]).median(numeric_only=True)
     else:
-        # keep as string key to avoid float formatting mismatches
-        depth_anchored = depth_anchored.astype(str).fillna("NA")
+        depth_key = pd.Series([np.nan] * len(X_out), index=X_out.index)
+        fallback_table = pd.DataFrame()
 
-    # Global fallback per feature (final backstop)
-    global_fill = X.median(axis=0, skipna=True) if fallback == "median" else X.mean(axis=0, skipna=True)
-
-    # Precompute fallback medians/means from observed data ONLY (do not use imputed values as donors)
-    # (Season, Depth_anchored) -> per-feature fill
-    donor_key_sd = pd.DataFrame({
-        "_season": season,
-        "_danch": depth_anchored,
-    }, index=X.index)
-
-    # compute per-group fill vectors
-    if fallback == "median":
-        sd_fill = X.join(donor_key_sd).groupby(["_season", "_danch"]).median(numeric_only=True)
-        d_fill = X.join(donor_key_sd).groupby(["_danch"]).median(numeric_only=True)
-    else:
-        sd_fill = X.join(donor_key_sd).groupby(["_season", "_danch"]).mean(numeric_only=True)
-        d_fill = X.join(donor_key_sd).groupby(["_danch"]).mean(numeric_only=True)
-
-    # Verbose logging containers
-    block_audit_rows = []
-    fallback_audit_rows = []
+    audit_rows = []
     cell_rows = []
 
-    # Helper for cell provenance (optional but requested)
-    def _log_cell(row_i, feat, method, b, di, da, seas, donor_seas=None, donor_da=None):
-        if not write_cell_provenance:
-            return
-        cell_rows.append({
-            "row_index": int(row_i),
-            "block": str(b),
-            "depth": (float(di) if pd.notna(di) else np.nan),
-            "Depth_anchored": str(da),
-            "Season": str(seas),
-            "feature": str(feat),
-            "method": str(method),
-            "donor_season": (str(donor_seas) if donor_seas is not None else ""),
-            "donor_depth_anchored": (str(donor_da) if donor_da is not None else ""),
-        })
-
-    # Do per-block interpolation, then hierarchical fallback
-    for b, idx in block.groupby(block).groups.items():
+    for p, idx in profile.groupby(profile).groups.items():
         rows = list(idx)
-        Xb = X_out.loc[rows].copy()
-        db = depth_num.loc[rows]
-        sb = season.loc[rows]
-        dab = depth_anchored.loc[rows]
+        Xp = X_out.loc[rows].copy()
+        dp = depth_num.loc[rows]
+        sp = season.loc[rows]
+        dk = depth_key.loc[rows]
 
         n_rows = int(len(rows))
-        n_missing_before = int(Xb.isna().sum().sum())
+        n_missing_before = int(Xp.isna().sum().sum())
 
-        # Track per-block fill counts by stage
-        filled_interp = 0
-        filled_sd = 0
-        filled_d = 0
-        filled_global = 0
+        before_mask = Xp.isna()
 
-        # If no usable depth, skip interpolation stage (we still do seasonal/depth fallback below)
-        did_interp = False
-        if db.notna().sum() >= 2:
-            did_interp = True
-            order = db.sort_values(kind="mergesort").index
-            Xs = Xb.loc[order]
-            ds = db.loc[order]
+        for feat in X.columns:
+            df = pd.DataFrame({"depth": dp, "val": Xp[feat]})
+            df = df.dropna(subset=["depth"])
+            if df.empty:
+                continue
 
-            Xi = pd.DataFrame(index=order, columns=X.columns, dtype=float)
+            depth_vals = np.sort(df["depth"].unique())
+            depth_keys = np.round(depth_vals.astype(float), 6)
+            s = df.groupby("depth")["val"].median().reindex(depth_vals)
 
-            for col in X.columns:
-                s = pd.to_numeric(Xs[col], errors="coerce")
-                s2 = pd.Series(s.values, index=ds.values)
+            vals_interp, _ = _interpolate_series_with_gaps(
+                depth_vals=depth_vals,
+                values=s.to_numpy(dtype=float),
+                max_gap=max_gap,
+                min_neighbors=min_neighbors,
+                degree=degree,
+            )
+            depth_to_val = dict(zip(depth_keys, vals_interp))
 
-                if s2.notna().sum() == 0:
-                    # leave entirely NA here; will be handled by hierarchy below
-                    Xi[col] = np.nan
-                    continue
+            for rr in rows:
+                if pd.isna(Xp.at[rr, feat]):
+                    d = dp.loc[rr]
+                    if pd.notna(d):
+                        v = depth_to_val.get(round(float(d), 6), np.nan)
+                        if pd.notna(v):
+                            Xp.at[rr, feat] = float(v)
 
-                s2 = s2.sort_index()
-                s2i = s2.interpolate(method="index")
-                # fill interior gaps + ends with nearest observed
-                s2i = s2i.ffill().bfill()
+        after_interp_mask = Xp.isna()
+        filled_interp = int((before_mask & ~after_interp_mask).sum().sum())
 
-                # assign positionally back to the sorted rows
-                Xi[col] = pd.Series(s2i.values[: len(order)], index=order)
+        if write_cell_provenance and filled_interp > 0:
+            newly_filled = (before_mask & ~after_interp_mask)
+            for rr in newly_filled.index:
+                for feat in newly_filled.columns[newly_filled.loc[rr]].tolist():
+                    cell_rows.append({
+                        "row_index": int(rr),
+                        "profile": str(p),
+                        "depth": (float(dp.loc[rr]) if pd.notna(dp.loc[rr]) else np.nan),
+                        "Season": str(sp.loc[rr]),
+                        "feature": str(feat),
+                        "method": "depth_interp_within_profile",
+                    })
 
-            # Count what interpolation actually filled (NA->value)
-            before_mask = Xb.isna()
-            after_mask = Xi.loc[rows].isna()
-            filled_interp = int((before_mask & ~after_mask).sum().sum())
-
-            # Cell provenance for interpolation
-            if write_cell_provenance and filled_interp > 0:
-                newly_filled = (before_mask & ~after_mask)
-                for rr in newly_filled.index:
-                    for feat in newly_filled.columns[newly_filled.loc[rr]].tolist():
-                        _log_cell(
-                            row_i=rr, feat=feat, method="depth_interp_within_block",
-                            b=b, di=db.loc[rr], da=dab.loc[rr], seas=sb.loc[rr]
-                        )
-
-            Xb = Xi.loc[rows].copy()
-
-        # Now hierarchical fallback for remaining NAs in this block
-        # We fill per-row based on that row's (Season, Depth_anchored) then (Depth_anchored) then global
-        rem_mask = Xb.isna()
-        if rem_mask.any().any():
-            for rr in Xb.index:
+        filled_fallback = 0
+        if enable_season_depth_fallback and not fallback_table.empty:
+            rem_mask = after_interp_mask.copy()
+            for rr in Xp.index:
                 if not rem_mask.loc[rr].any():
                     continue
 
-                seas = sb.loc[rr]
-                da = dab.loc[rr]
-                di = db.loc[rr]
+                if pd.isna(dk.loc[rr]):
+                    continue
 
-                # Stage (2): (Season, Depth_anchored)
-                key_sd = (seas, da)
-                if key_sd in sd_fill.index:
-                    fill_vec = sd_fill.loc[key_sd]
-                    # fill only missing entries
+                key = (str(sp.loc[rr]), dk.loc[rr])
+                if key in fallback_table.index:
+                    fill_vec = fallback_table.loc[key]
                     miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
                     for feat in miss_feats:
                         val = fill_vec.get(feat, np.nan)
                         if pd.notna(val):
-                            Xb.at[rr, feat] = float(val)
-                            filled_sd += 1
+                            Xp.at[rr, feat] = float(val)
                             rem_mask.at[rr, feat] = False
-                            _log_cell(
-                                row_i=rr, feat=feat, method="fallback_season_depth_anchored",
-                                b=b, di=di, da=da, seas=seas,
-                                donor_seas=seas, donor_da=da,
-                            )
+                            if write_cell_provenance:
+                                cell_rows.append({
+                                    "row_index": int(rr),
+                                    "profile": str(p),
+                                    "depth": (float(dp.loc[rr]) if pd.notna(dp.loc[rr]) else np.nan),
+                                    "Season": str(sp.loc[rr]),
+                                    "feature": str(feat),
+                                    "method": "fallback_season_depth",
+                                })
 
-                # Stage (3): Depth_anchored across all seasons
-                if rem_mask.loc[rr].any():
-                    key_d = da
-                    if key_d in d_fill.index:
-                        fill_vec = d_fill.loc[key_d]
-                        miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
-                        for feat in miss_feats:
-                            val = fill_vec.get(feat, np.nan)
-                            if pd.notna(val):
-                                Xb.at[rr, feat] = float(val)
-                                filled_d += 1
-                                rem_mask.at[rr, feat] = False
-                                _log_cell(
-                                    row_i=rr, feat=feat, method="fallback_depth_anchored_all_seasons",
-                                    b=b, di=di, da=da, seas=seas,
-                                    donor_seas="ALL", donor_da=da,
-                                )
+            after_fallback_mask = Xp.isna()
+            filled_fallback = int((after_interp_mask & ~after_fallback_mask).sum().sum())
+        else:
+            after_fallback_mask = after_interp_mask
 
-                # Stage (4): Global backstop
-                if rem_mask.loc[rr].any():
-                    miss_feats = rem_mask.columns[rem_mask.loc[rr]].tolist()
-                    for feat in miss_feats:
-                        val = global_fill.get(feat, np.nan)
-                        if pd.notna(val):
-                            Xb.at[rr, feat] = float(val)
-                            filled_global += 1
-                            rem_mask.at[rr, feat] = False
-                            _log_cell(
-                                row_i=rr, feat=feat, method="fallback_global_fill",
-                                b=b, di=di, da=da, seas=seas,
-                                donor_seas="GLOBAL", donor_da="GLOBAL",
-                            )
+        n_missing_after = int(after_fallback_mask.sum().sum())
 
-        n_missing_after = int(pd.DataFrame(Xb).isna().sum().sum())
-
-        block_audit_rows.append({
-            "block": str(b),
+        audit_rows.append({
+            "profile": str(p),
             "n_rows": n_rows,
-            "did_depth_interp": bool(did_interp),
             "n_missing_before": n_missing_before,
             "n_missing_after": n_missing_after,
             "n_imputed_total": int(n_missing_before - n_missing_after),
             "n_filled_by_depth_interp": int(filled_interp),
-            "n_filled_by_season_depth_anchored": int(filled_sd),
-            "n_filled_by_depth_anchored_all_seasons": int(filled_d),
-            "n_filled_by_global_backstop": int(filled_global),
+            "n_filled_by_season_depth_fallback": int(filled_fallback),
         })
 
-        # per-feature fallback auditing (how many cells each method filled in this block)
-        # (this stays fairly verbose without exploding)
-        fallback_audit_rows.append({
-            "block": str(b),
-            "filled_by_season_depth_anchored": int(filled_sd),
-            "filled_by_depth_anchored_all_seasons": int(filled_d),
-            "filled_by_global_backstop": int(filled_global),
-        })
-
-        X_out.loc[rows] = Xb
+        X_out.loc[rows] = Xp
 
     X_out = pd.DataFrame(X_out, columns=X.columns, index=X.index)
-
-    block_audit_df = pd.DataFrame(block_audit_rows).sort_values(["n_rows", "block"], ascending=[False, True])
-    fallback_audit_df = pd.DataFrame(fallback_audit_rows).sort_values(["block"], ascending=[True])
+    audit_df = pd.DataFrame(audit_rows).sort_values(["n_rows", "profile"], ascending=[False, True])
 
     summary = X_out.mean(axis=0)
     summary.name = "imputed_feature_mean"
 
     cell_prov_df = pd.DataFrame(cell_rows)
     if not cell_prov_df.empty:
-        cell_prov_df = cell_prov_df.sort_values(["block", "row_index", "feature"], ascending=[True, True, True])
+        cell_prov_df = cell_prov_df.sort_values(["profile", "row_index", "feature"], ascending=[True, True, True])
 
-    return X_out, block_audit_df, summary, fallback_audit_df, cell_prov_df
-
-def impute_matrix_global(
-    X: pd.DataFrame,
-    strategy: str,
-    knn_k: int,
-    iterative_max_iter: int,
-    random_state: int
-) -> Tuple[pd.DataFrame, pd.Series]:
-    """
-    Global imputation across all rows.
-    Returns (X_imputed, summary_series).
-    """
-    if strategy in ("median", "mean"):
-        fill = X.median(axis=0, skipna=True) if strategy == "median" else X.mean(axis=0, skipna=True)
-        return X.fillna(fill), fill
-
-    if strategy == "knn":
-        imp = KNNImputer(n_neighbors=knn_k, weights="distance")
-        Xi = pd.DataFrame(imp.fit_transform(X), columns=X.columns, index=X.index)
-        summary = Xi.mean(axis=0)
-        summary.name = "imputed_feature_mean"
-        return Xi, summary
-
-    if strategy == "iterative":
-        imp = IterativeImputer(
-            estimator=BayesianRidge(),
-            max_iter=iterative_max_iter,
-            random_state=random_state,
-            sample_posterior=False,
-            initial_strategy="median",
-        )
-        Xi = pd.DataFrame(imp.fit_transform(X), columns=X.columns, index=X.index)
-        summary = Xi.mean(axis=0)
-        summary.name = "imputed_feature_mean"
-        return Xi, summary
-
-    raise ValueError(f"Unknown imputation strategy: {strategy}")
-
-
-def impute_matrix_by_depth(
-    X: pd.DataFrame,
-    depth_groups: pd.Series,
-    strategy: str,
-    knn_k: int,
-    iterative_max_iter: int,
-    min_group_size: int,
-    random_state: int
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
-    """
-    Depth-aware imputation:
-    - Impute within each anchored depth group.
-    - If group is too small, fallback to a global fitted model (for knn/iterative),
-      or fallback to global median/mean for median/mean.
-    """
-    X_out = X.copy()
-
-    global_model = None
-    if strategy == "knn":
-        global_model = KNNImputer(n_neighbors=knn_k, weights="distance")
-        global_model.fit(X)
-    elif strategy == "iterative":
-        global_model = IterativeImputer(
-            estimator=BayesianRidge(),
-            max_iter=iterative_max_iter,
-            random_state=random_state,
-            sample_posterior=False,
-            initial_strategy="median",
-        )
-        global_model.fit(X)
-
-    global_fill = X.median(axis=0, skipna=True) if strategy == "median" else X.mean(axis=0, skipna=True)
-
-    audit_rows = []
-    for g, idx in depth_groups.groupby(depth_groups).groups.items():
-        rows = list(idx)
-        Xg = X.loc[rows]
-        n = len(rows)
-
-        if strategy in ("median", "mean"):
-            fill = Xg.median(axis=0, skipna=True) if strategy == "median" else Xg.mean(axis=0, skipna=True)
-            X_out.loc[rows] = Xg.fillna(fill)
-            mode = "groupwise"
-        else:
-            if n >= min_group_size:
-                if strategy == "knn":
-                    kk = min(knn_k, max(2, n - 1))
-                    imp = KNNImputer(n_neighbors=kk, weights="distance")
-                else:
-                    imp = IterativeImputer(
-                        estimator=BayesianRidge(),
-                        max_iter=iterative_max_iter,
-                        random_state=random_state,
-                        sample_posterior=False,
-                        initial_strategy="median",
-                    )
-                X_out.loc[rows] = imp.fit_transform(Xg)
-                mode = "groupwise"
-            else:
-                if global_model is not None:
-                    X_out.loc[rows] = global_model.transform(Xg)
-                    mode = "fallback_global_model"
-                else:
-                    X_out.loc[rows] = Xg.fillna(global_fill)
-                    mode = "fallback_global_fill"
-
-        audit_rows.append({
-            "depth_group": str(g),
-            "n_rows": int(n),
-            "mode": mode,
-        })
-
-    X_out = pd.DataFrame(X_out, columns=X.columns, index=X.index)
-    audit_df = pd.DataFrame(audit_rows).sort_values("n_rows", ascending=False)
-
-    summary = X_out.mean(axis=0)
-    summary.name = "imputed_feature_mean"
-    return X_out, audit_df, summary
+    return X_out, audit_df, summary, cell_prov_df
 
 
 # -----------------------------
@@ -1408,7 +1221,35 @@ def plot_biplot_core_and_sparse(
         alpha=0.75,
     )
 
-    def _repel_texts(ax, text_artists, anchor_xy, *, max_iter=200, pad_px=2.0, step_px=1.0, leader_px=18.0):
+    def _place_label_at_tip(feat: str, tipx: float, tipy: float, col, *, scale: float = 1.06, pad_frac: float = 0.03):
+        """
+        Place label near arrow tip with alignment that keeps text away from origin:
+        - if tipx >= 0: left-align and push +x
+        - if tipx < 0 : right-align and push -x
+        pad_frac is relative to cloud_scale.
+        """
+        # push away from origin along x (dominant for your complaint)
+        sign = 1.0 if tipx >= 0 else -1.0
+        x_pad = sign * pad_frac * cloud_scale
+        sign_y = 1.0 if tipy >= 0 else -1.0
+        y_pad = sign_y * 0.5 * pad_frac * cloud_scale
+
+        ha = "left" if tipx >= 0 else "right"
+
+        t = plt.text(
+            tipx * scale + x_pad,
+            tipy * scale + y_pad,
+            feat,
+            fontsize=9,
+            color=col,
+            ha=ha,
+            va="center",
+            bbox=label_bbox,
+            zorder=5,
+        )
+        return t
+
+    def _repel_texts(ax, text_artists, anchor_xy, *, max_iter=250, pad_px=2.5, step_px=1.1, leader_px=8.0):
         """
         Lightweight label repulsion (no external deps).
         Operates in display/pixel space, then maps back to data coords.
@@ -1571,14 +1412,8 @@ def plot_biplot_core_and_sparse(
             zorder=4,
         )
 
-        t = plt.text(
-            cx * 1.06, cy * 1.06,
-            feat,
-            fontsize=9,
-            color=col,
-            bbox=label_bbox,
-            zorder=5,
-        )
+        t = _place_label_at_tip(feat, cx, cy, col, scale=1.06, pad_frac=0.03)
+
         label_texts.append(t)
         label_anchors.append((cx, cy))  # arrow tip in data coords
         core_handles.append(plt.Line2D([0], [0], color=col, linewidth=2, label=f"{feat} (core)"))
@@ -1609,21 +1444,15 @@ def plot_biplot_core_and_sparse(
 
         plt.scatter([sx], [sy], s=22, color=col, zorder=4)
 
-        t = plt.text(
-            sx * 1.06, sy * 1.06,
-            feat,
-            fontsize=9,
-            color=col,
-            bbox=label_bbox,
-            zorder=5,
-        )
+        t = _place_label_at_tip(feat, sx, sy, col, scale=1.06, pad_frac=0.03)
+
         label_texts.append(t)
         label_anchors.append((sx, sy))  # arrow tip in data coords
         sparse_handles.append(plt.Line2D([0], [0], color=col, linestyle="--", linewidth=2, label=f"{feat} (sparse)"))
 
     # Repel overlapping labels (lightweight, no deps)
     ax = plt.gca()
-    _repel_texts(ax, label_texts, label_anchors, max_iter=250, pad_px=2.0, step_px=1.0, leader_px=18.0)
+    _repel_texts(ax, label_texts, label_anchors)
 
     handles = core_handles + sparse_handles
     if handles:
@@ -2068,376 +1897,23 @@ def run_pc_selection(
 
 
 # -----------------------------
-# Main
+# EOF PCA (cruise-level)
 # -----------------------------
 
-def main() -> None:
-    cfg = parse_args()
-    tables_dir, plots_dir = ensure_dirs(cfg.outdir)
-
-    with open(os.path.join(cfg.outdir, "run_config.json"), "w") as f:
-        json.dump(cfg.__dict__, f, indent=2)
-
-    df_raw = load_table(cfg.input_path, cfg.sep)
-    df_raw = make_date_column(df_raw, cfg.time_col)
-    df_raw = make_season_column(df_raw, time_col=cfg.time_col)
-
-    missing_features = [c for c in cfg.feature_cols if c not in df_raw.columns]
-    missing_meta = [c for c in cfg.meta_cols if c not in df_raw.columns]
-    with open(os.path.join(cfg.outdir, "missing_expected_columns.json"), "w") as f:
-        json.dump(
-            {
-                "missing_features": missing_features,
-                "missing_meta": missing_meta,
-                "configured_feature_cols_final": cfg.feature_cols,
-            },
-            f,
-            indent=2,
-        )
-
-    # Coerce numeric for feature columns + depth columns (if present)
-    numeric_cols = [c for c in cfg.feature_cols if c in df_raw.columns]
-    if cfg.depth_col in df_raw.columns and cfg.depth_col not in numeric_cols:
-        numeric_cols.append(cfg.depth_col)
-
-    # Also coerce anchor-by-col if present (leave as string)
-    df_num = coerce_numeric(df_raw, numeric_cols)
-
-    # Metadata columns (plus derived time col)
-    meta_cols = [c for c in cfg.meta_cols if c in df_num.columns]
-    if cfg.time_col in df_num.columns and cfg.time_col not in meta_cols:
-        meta_cols.append(cfg.time_col)
-    if DERIVED_SEASON_COL in df_num.columns and DERIVED_SEASON_COL not in meta_cols:
-        meta_cols.append(DERIVED_SEASON_COL)
-
-    feats = [c for c in cfg.feature_cols if c in df_num.columns]
-    if not feats:
-        raise ValueError("None of the configured feature columns were found in your input table.")
-
-    # ---- DATA-DRIVEN depth anchoring (pre-flight) ----
-    anchoring_clamped_count = 0
-    if cfg.anchor_depths and (cfg.depth_col in df_num.columns):
-        df_num, anchors_df, mapping_df, decisions_df, proto_counts_df, anchoring_clamped_count = anchor_depth_column_data_driven(
-            df=df_num,
-            depth_col=cfg.depth_col,
-            anchored_col=cfg.anchored_depth_col,
-            by_col=cfg.anchor_by_col,
-            feature_cols=feats,
-            round_m=cfg.anchor_round_m,
-            tol_m=cfg.anchor_tol_m,
-            top_k=cfg.anchor_top_k,
-            min_count=cfg.anchor_min_count,
-            min_features=cfg.anchor_min_features,
-            margin=cfg.anchor_margin,
-            proto_min_n=cfg.anchor_proto_min_n,
-        )
-        if not anchors_df.empty:
-            anchors_df.to_csv(os.path.join(tables_dir, "depth_anchors.csv"), index=False)
-        if not mapping_df.empty:
-            mapping_df.to_csv(os.path.join(tables_dir, "depth_anchor_mapping_summary.csv"), index=False)
-        if not decisions_df.empty:
-            decisions_df.to_csv(os.path.join(tables_dir, "depth_anchor_decisions.csv"), index=False)
-            summary_by_block = (
-                decisions_df.groupby(["block", "reason"], as_index=False)
-                .size()
-                .rename(columns={"size": "n"})
-                .sort_values(["block", "n"], ascending=[True, False])
-            )
-            snap_rate = decisions_df.groupby("block", as_index=False)["snapped"].mean().rename(columns={"snapped": "snap_rate"})
-            summary_by_block = summary_by_block.merge(snap_rate, on="block", how="left")
-            summary_by_block.to_csv(os.path.join(tables_dir, "depth_anchor_decision_summary_by_block.csv"), index=False)
-        if not proto_counts_df.empty:
-            proto_counts_df.to_csv(os.path.join(tables_dir, "depth_anchor_prototype_audit.csv"), index=False)
-    else:
-        if cfg.depth_col in df_num.columns and cfg.anchored_depth_col not in df_num.columns:
-            df_num[cfg.anchored_depth_col] = pd.to_numeric(df_num[cfg.depth_col], errors="coerce")
-
-    # Always retain anchored depth as metadata (if exists)
-    if cfg.anchored_depth_col in df_num.columns and cfg.anchored_depth_col not in meta_cols:
-        meta_cols.append(cfg.anchored_depth_col)
-
-    # Missingness pre-drop (features only)
-    miss0 = basic_missingness_stats(df_num, feats)
-    miss0.to_csv(os.path.join(tables_dir, "missingness_pre_drop.csv"), index=False)
-    plot_missingness(miss0, os.path.join(plots_dir, "missingness_pre_drop.png"))
-
-    # Drop sparse (features only)
-    df_filt, feats_kept, dropped_rows = drop_sparse(
-        df_num, feats, row_thresh=cfg.dropna_row_thresh, col_thresh=cfg.dropna_col_thresh
-    )
-    dropped_rows.to_csv(os.path.join(tables_dir, "dropped_rows.csv"), index=False)
-
-    # -----------------------------
-    # Option 2A Stage 2 (additive): identify sparse features (excluded by col missingness threshold)
-    # -----------------------------
-    col_missing = df_num[feats].isna().mean()
-    sparse_feats = [c for c in feats if col_missing[c] > cfg.dropna_col_thresh]
-    core_feats = [c for c in feats if col_missing[c] <= cfg.dropna_col_thresh]  # should match feats_kept
-
-    core_sparse_tbl = pd.DataFrame({
-        "feature": feats,
-        "status": ["core" if c in core_feats else "sparse" for c in feats],
-        "frac_missing": [float(col_missing[c]) for c in feats],
-        "dropna_col_thresh": float(cfg.dropna_col_thresh),
-    }).sort_values(["status", "frac_missing", "feature"], ascending=[True, False, True])
-
-    core_sparse_tbl.to_csv(os.path.join(tables_dir, "core_vs_sparse_features.csv"), index=False)
-
-    miss1 = basic_missingness_stats(df_filt, feats_kept)
-    miss1.to_csv(os.path.join(tables_dir, "missingness_post_drop.csv"), index=False)
-    plot_missingness(miss1, os.path.join(plots_dir, "missingness_post_drop.png"))
-
-    meta = df_filt[meta_cols].copy() if meta_cols else pd.DataFrame(index=df_filt.index)
-
-    # X_preimpute is the coverage-truth for PC selection
-    X_preimpute = df_filt[feats_kept].copy()
-    X_sparse = df_filt[sparse_feats].copy()
-
-    # Negative handling (pre-impute)
-    n_neg_as_missing_pre = 0
-    n_neg_imputed_post = 0
-
-    if cfg.negatives == "impute":
-        X_preimpute, n_neg_as_missing_pre = negatives_to_nan(X_preimpute)
-
-    # Impute
-    if cfg.impute == "depth_interp":
-        # Block depth interpolation by chosen metadata column (e.g., Cruise)
-        if cfg.depth_interp_block_col != "ALL" and cfg.depth_interp_block_col in meta.columns:
-            block_series = meta[cfg.depth_interp_block_col]
-        else:
-            block_series = None
-
-        X_imp, block_audit_df, fill_values, fallback_audit_df, cell_prov_df = impute_matrix_depth_interp(
-            X=X_preimpute,
-            depth=meta[cfg.depth_col] if cfg.depth_col in meta.columns else meta.get(cfg.anchored_depth_col, pd.Series(index=meta.index)),
-            block=block_series,
-            season=meta[DERIVED_SEASON_COL] if DERIVED_SEASON_COL in meta.columns else None,
-            depth_anchored=meta[cfg.anchored_depth_col] if cfg.anchored_depth_col in meta.columns else None,
-            fallback="median",              # keep robust; matches your preference
-            write_cell_provenance=True,     # VERY verbose (one row per imputed cell)
-        )
-
-        block_audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_block_audit.csv"), index=False)
-        fallback_audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_fallback_audit.csv"), index=False)
-
-        # Extremely verbose: one row per imputed cell
-        cell_prov_df.to_csv(os.path.join(tables_dir, "imputation_depth_interp_cell_provenance.csv"), index=False)
-
-    else:
-        if cfg.impute_scope == "by_depth":
-            if cfg.anchored_depth_col not in meta.columns:
-                X_imp, fill_values = impute_matrix_global(
-                    X=X_preimpute,
-                    strategy=cfg.impute,
-                    knn_k=cfg.knn_k,
-                    iterative_max_iter=cfg.iterative_max_iter,
-                    random_state=cfg.random_state,
-                )
-            else:
-                depth_groups = meta[cfg.anchored_depth_col].astype(str).fillna("NA")
-                X_imp, audit_df, fill_values = impute_matrix_by_depth(
-                    X=X_preimpute,
-                    depth_groups=depth_groups,
-                    strategy=cfg.impute,
-                    knn_k=cfg.knn_k,
-                    iterative_max_iter=cfg.iterative_max_iter,
-                    min_group_size=cfg.impute_min_group_size,
-                    random_state=cfg.random_state,
-                )
-                audit_df.to_csv(os.path.join(tables_dir, "imputation_depth_group_audit.csv"), index=False)
-        else:
-            X_imp, fill_values = impute_matrix_global(
-                X=X_preimpute,
-                strategy=cfg.impute,
-                knn_k=cfg.knn_k,
-                iterative_max_iter=cfg.iterative_max_iter,
-                random_state=cfg.random_state,
-            )
-
-    fill_values.rename("impute_value" if cfg.impute in ("median", "mean") else "imputed_feature_mean") \
-        .to_csv(os.path.join(tables_dir, "impute_values.csv"), header=True)
-
-    # Negative handling (post-impute)
-    n_clamped = 0
-    if cfg.negatives == "clamp":
-        X_imp, n_clamped = clamp_negatives_to_zero(X_imp)
-    else:
-        # 'impute' mode: if any negatives survive the imputer, treat them as missing and fill per-feature median
-        X_imp, n_neg_imputed_post = negatives_to_nan(X_imp)
-        if n_neg_imputed_post > 0:
-            fill_med = X_imp.median(axis=0, skipna=True)
-            X_imp = X_imp.fillna(fill_med)
-
-    # Optional log1p
-    if cfg.log1p:
-        X_imp = maybe_log1p(X_imp)
-
-    # Save cleaned matrix (post-impute / post-clamp / post-log)
-    cleaned = pd.concat([meta.reset_index(drop=True), X_imp.reset_index(drop=True)], axis=1)
-    cleaned.to_csv(os.path.join(tables_dir, "matrix_cleaned.csv"), index=False)
-
-    # Save cleaned matrix (post-impute / post-clamp / post-log)
-    cleaned_sparse = pd.concat([cleaned.reset_index(drop=True), X_sparse.reset_index(drop=True)], axis=1)
-    cleaned_sparse.to_csv(os.path.join(tables_dir, "matrix_cleaned_with_sparse.csv"), index=False)
-
-    # Scale
-    scaler = StandardScaler(with_mean=True, with_std=True)
-    X_scaled = scaler.fit_transform(X_imp.values)
-
-    scaled_df = pd.DataFrame(X_scaled, columns=feats_kept)
-    scaled_out = pd.concat([meta.reset_index(drop=True), scaled_df], axis=1)
-    scaled_out.to_csv(os.path.join(tables_dir, "matrix_scaled.csv"), index=False)
-
-    # PCA
-    ncomp = min(cfg.n_components, X_scaled.shape[1], X_scaled.shape[0])
-    pca = PCA(n_components=ncomp, random_state=cfg.random_state)
-    pca.fit(X_scaled)
-
-    # Explained variance
-    evr = pca.explained_variance_ratio_
-    ev = pca.explained_variance_
-    ev_tbl = pd.DataFrame({
-        "PC": [f"PC{i}" for i in range(1, len(evr) + 1)],
-        "explained_variance": ev,
-        "explained_variance_ratio": evr,
-        "cumulative_ratio": np.cumsum(evr),
-    })
-    ev_tbl.to_csv(os.path.join(tables_dir, "pca_explained_variance.csv"), index=False)
-
-    # Loadings
-    loadings = pd.DataFrame(
-        pca.components_.T,
-        index=feats_kept,
-        columns=[f"PC{i}" for i in range(1, pca.n_components_ + 1)],
-    )
-    loadings.to_csv(os.path.join(tables_dir, "pca_loadings.csv"))
-
-    # eigenvectors (scores)
-    scores = pca.transform(X_scaled)
-    scores_df = pd.DataFrame(scores, columns=[f"PC{i}" for i in range(1, pca.n_components_ + 1)])
-    eigenvectors = pd.concat([meta.reset_index(drop=True), scores_df], axis=1)
-    eigenvectors.to_csv(os.path.join(tables_dir, "eigenvectors_scores.csv"), index=False)
-
-    # -----------------------------
-    # Option 2A Stage 2 (additive): Spearman correlations of sparse features vs retained PC scores
-    #   - NEVER refits PCA; uses existing scores_df
-    # -----------------------------
-    sparse_corr_rows = []
-    n_total = int(df_filt.shape[0])
-
-    # Align sparse-feature values rowwise to the same ordering used in scores_df/meta (reset_index(drop=True))
-    if sparse_feats:
-        X_sparse = df_filt[sparse_feats].reset_index(drop=True)
-    else:
-        X_sparse = pd.DataFrame(index=scores_df.index)
-
-    for feat in X_sparse.columns:
-        x = X_sparse[feat]
-        for pc in scores_df.columns:
-            y = scores_df[pc]
-            m = x.notna() & y.notna()
-            n_used = int(m.sum())
-            if n_used >= 3:
-                r = float(x[m].corr(y[m], method="spearman"))
-            else:
-                r = np.nan
-            cov = float(n_used / n_total) if n_total > 0 else np.nan
-
-            sparse_corr_rows.append({
-                "feature": str(feat),
-                "PC": str(pc),
-                "spearman_r": r,
-                "n_samples_used": n_used,
-                "coverage": cov,
-            })
-
-    sparse_corr_df = pd.DataFrame(sparse_corr_rows)
-
-    # write the full table (all sparse features x all PCs)
-    sparse_corr_df.to_csv(os.path.join(tables_dir, "sparse_feature_pc_spearman.csv"), index=False)
-
-
-    # QC summary
-    qc = {
-        "id_col": cfg.id_col,
-        "time_col": cfg.time_col,
-        "meta_cols_used": meta_cols,
-        "n_rows_input": int(df_raw.shape[0]),
-        "n_rows_kept": int(df_filt.shape[0]),
-        "configured_feature_cols_final": cfg.feature_cols,
-        "n_features_found": int(len(feats)),
-        "n_features_kept": int(len(feats_kept)),
-        "impute_strategy": cfg.impute,
-        "impute_scope": cfg.impute_scope,
-        "impute_min_group_size": int(cfg.impute_min_group_size),
-        "knn_k": int(cfg.knn_k),
-        "iterative_max_iter": int(cfg.iterative_max_iter),
-        "depth_anchoring_enabled": bool(cfg.anchor_depths),
-        "depth_col": cfg.depth_col,
-        "anchored_depth_col": cfg.anchored_depth_col,
-        "anchor_by_col": cfg.anchor_by_col,
-        "anchor_min_features": int(cfg.anchor_min_features),
-        "anchor_margin": float(cfg.anchor_margin),
-        "anchor_proto_min_n": int(cfg.anchor_proto_min_n),
-        "log1p": bool(cfg.log1p),
-        "negatives_policy": str(cfg.negatives),
-        "n_negative_values_clamped_to_zero": int(n_clamped),
-        "n_negative_values_treated_as_missing_pre_impute": int(n_neg_as_missing_pre),
-        "n_negative_values_re_imputed_post_impute": int(n_neg_imputed_post),
-        "n_negative_values_clamped_to_zero_during_anchoring_similarity": int(anchoring_clamped_count),
-        "n_components_fit": int(pca.n_components_),
-        "pc_selection_ran": bool(cfg.pc_selection),
-    }
-    with open(os.path.join(cfg.outdir, "qc_summary.json"), "w") as f:
-        json.dump(qc, f, indent=2)
-
-    # Plots
-    plot_scree(pca, os.path.join(plots_dir, "scree.png"))
-    plot_cumvar(pca, os.path.join(plots_dir, "cumulative_variance.png"))
-    plot_pc_scatter(eigenvectors, os.path.join(plots_dir, "pc1_vs_pc2.png"), cfg.time_col)
-
-    # Option 2A biplot: core loadings (solid) + sparse correlations (dashed)
-    # Enforce BIOCHEM_COLOR_MAP strictly for sparse features (and also for core arrows to avoid unmapped colors).
-    sparse_corr_mapped = sparse_corr_df[sparse_corr_df["feature"].isin(BIOCHEM_COLOR_MAP.keys())].copy()
-    plot_biplot_core_and_sparse(
-        scores_df=eigenvectors,          # eigenvectors includes meta + PCs; function uses PC1/PC2 columns
-        loadings_df=loadings,            # PCA loadings for core features
-        sparse_corr_df=sparse_corr_mapped,
-        outpath=os.path.join(plots_dir, "pc1_vs_pc2_biplot_core_sparse.png"),
-        top_core=12,
-        top_sparse=12,
-        min_core_norm=0.0,
-        min_sparse_norm=0.0,
-    )
-
-    for i in range(1, min(6, pca.n_components_ + 1)):
-        pc = f"PC{i}"
-        plot_top_loadings(loadings, os.path.join(plots_dir, f"top_loadings_{pc}.png"), pc=pc, top_n=25)
-
-    # Optional: PC selection & feature clustering
-    if cfg.pc_selection:
-        run_pc_selection(
-            cfg=cfg,
-            tables_dir=tables_dir,
-            plots_dir=plots_dir,
-            X_preimpute=X_preimpute,
-            X_scaled=X_scaled,
-            meta=meta.reset_index(drop=True),
-            pca=pca,
-            loadings_df=loadings,
-        )
-
-    print(f"[OK] Wrote outputs to: {cfg.outdir}")
-    print(f"      Tables: {tables_dir}")
-    print(f"      Plots : {plots_dir}")
-    if missing_features:
-        print(f"[WARN] Missing expected feature cols (see missing_expected_columns.json): {len(missing_features)}")
-    if missing_meta:
-        print(f"[WARN] Missing expected meta cols (see missing_expected_columns.json): {len(missing_meta)}")
+def run_eof_pipeline(
+    cfg: RunConfig,
+    meta: pd.DataFrame,
+    X_imp: pd.DataFrame,
+    feats_kept: List[str],
+    tables_dir: str,
+    plots_dir: str,
+    df_filt: pd.DataFrame,
+    sparse_feats: List[str],
+) -> None:
+    """EOF PCA pipeline extracted from main; logic unchanged."""
 
     # ==============================================================================
-    # DROP-IN EOF BLOCK (paste at the very end of main(), just before the final prints)
+    # DROP-IN EOF BLOCK (extracted into run_eof_pipeline for readability)
     # ------------------------------------------------------------------------------
     # What this adds (NO changes to the existing script required):
     #   - Builds a CRUISE-level EOF feature matrix:
@@ -2472,16 +1948,15 @@ def main() -> None:
         """
         Choose a cruise identifier column without requiring script edits.
         Preference order:
-        1) cfg.depth_interp_block_col (if not ALL and present)
+        1) cfg.profile_col (if present)
         2) cfg.anchor_by_col (if present)
         3) cfg.id_col (if present)
         4) common fallbacks: 'Cruise', 'cruise', 'cruise_id'
         5) cfg.time_col (as a last resort; not ideal if multiple cruises share same date label)
         """
         # 1) depth interpolation block col
-        if getattr(cfg, "depth_interp_block_col", None) and cfg.depth_interp_block_col != "ALL":
-            if cfg.depth_interp_block_col in meta_df.columns:
-                return cfg.depth_interp_block_col
+        if getattr(cfg, "profile_col", None) and cfg.profile_col in meta_df.columns:
+            return cfg.profile_col
 
         # 2) anchor_by_col
         if getattr(cfg, "anchor_by_col", None) and cfg.anchor_by_col in meta_df.columns:
@@ -2502,7 +1977,7 @@ def main() -> None:
 
         raise ValueError(
             "EOF block could not find a cruise identifier column. "
-            "Ensure meta contains one of: cfg.depth_interp_block_col (non-ALL), cfg.anchor_by_col, cfg.id_col, or 'Cruise'."
+            "Ensure meta contains one of: cfg.profile_col, cfg.anchor_by_col, cfg.id_col, or 'Cruise'."
         )
 
 
@@ -2692,6 +2167,22 @@ def main() -> None:
         # Keep eof_meta aligned (it is indexed by cruise id)
         eof_meta = eof_meta.loc[eof_meta.index.astype(str).isin(keep_cruises), :].copy()
 
+        # Drop feature@depth columns that are all-NA after cruise filtering
+        all_nan_cols = eof_X.columns[eof_X.isna().all(axis=0)].tolist()
+        n_all_nan = int(len(all_nan_cols))
+        if all_nan_cols:
+            pd.DataFrame({"feature": all_nan_cols}).to_csv(
+                os.path.join(tables_dir, "eof_dropped_features_all_nan.csv"),
+                index=False,
+            )
+            eof_X = eof_X.drop(columns=all_nan_cols)
+
+        if eof_X.shape[1] == 0:
+            raise ValueError(
+                "After EOF filtering, no feature@depth columns remain (all NaN). "
+                "Inspect tables/eof_dropped_features_all_nan.csv."
+            )
+
         # Safety: make sure we still have enough cruises
         if eof_X.shape[0] < 3:
             raise ValueError(
@@ -2719,6 +2210,12 @@ def main() -> None:
         # Impute at cruise-level (median per feature) — robust, minimal assumptions
         eof_fill = eof_X.median(axis=0, skipna=True)
         eof_X_imp = eof_X.fillna(eof_fill)
+
+        if eof_X_imp.isna().any().any():
+            raise ValueError(
+                "EOF matrix still has NaNs after median fill. "
+                "Inspect tables/eof_dropped_features_all_nan.csv and eof_missingness_feature.csv."
+            )
 
         eof_fill.rename("impute_value_median").to_csv(os.path.join(tables_dir, "eof_impute_values_median.tsv"), sep="\t", header=True)
 
@@ -3384,6 +2881,7 @@ def main() -> None:
             "eof_depth_col": eof_depth_col,
             "n_cruises": int(eof_X_imp.shape[0]),
             "n_features_total": int(eof_X_imp.shape[1]),
+            "n_features_dropped_all_nan": int(n_all_nan),
             "n_components_fit": int(eof_pca.n_components_),
             "impute_strategy_cruise_level": "median_per_feature@depth",
             "scaling": "zscore_per_feature@depth",
@@ -3434,11 +2932,31 @@ def main() -> None:
                 return pd.concat(out, axis=1)
 
             eof_feat_X = _collapse_eof_matrix_to_features(eof_X)  # pre-impute analog (still has NaNs)
+            collapsed_all_nan = eof_feat_X.columns[eof_feat_X.isna().all(axis=0)].tolist()
+            if collapsed_all_nan:
+                pd.DataFrame({"feature": collapsed_all_nan}).to_csv(
+                    os.path.join(tables_dir, "eof_dropped_features_collapsed_all_nan.csv"),
+                    index=False,
+                )
+                eof_feat_X = eof_feat_X.drop(columns=collapsed_all_nan)
+
+            if eof_feat_X.shape[1] == 0:
+                raise ValueError(
+                    "EOF collapsed feature matrix has no columns after dropping all-NaN features. "
+                    "Inspect tables/eof_dropped_features_collapsed_all_nan.csv."
+                )
+
             eof_feat_X.to_csv(os.path.join(tables_dir, "eof_cruise_feature_matrix_collapsed.tsv"), sep="\t", index=True)
 
             # Impute + scale
             eof_feat_fill = eof_feat_X.median(axis=0, skipna=True)
             eof_feat_X_imp = eof_feat_X.fillna(eof_feat_fill)
+
+            if eof_feat_X_imp.isna().any().any():
+                raise ValueError(
+                    "EOF collapsed feature matrix still has NaNs after median fill. "
+                    "Inspect tables/eof_dropped_features_collapsed_all_nan.csv."
+                )
 
             eof_feat_scaler = StandardScaler(with_mean=True, with_std=True)
             eof_feat_scaled = eof_feat_scaler.fit_transform(eof_feat_X_imp.values)
@@ -3483,6 +3001,394 @@ def main() -> None:
 
     # ---- run EOF block ----
     _run_eof_pca_and_write_outputs()
+
+# -----------------------------
+# Main
+# -----------------------------
+
+def main() -> None:
+    cfg = parse_args()
+    tables_dir, plots_dir = ensure_dirs(cfg.outdir)
+
+    with open(os.path.join(cfg.outdir, "run_config.json"), "w") as f:
+        json.dump(cfg.__dict__, f, indent=2)
+
+    df_raw = load_table(cfg.input_path, cfg.sep)
+    df_raw = make_date_column(df_raw, cfg.time_col)
+    df_raw = make_season_column(df_raw, time_col=cfg.time_col)
+
+    missing_features = [c for c in cfg.feature_cols if c not in df_raw.columns]
+    missing_meta = [c for c in cfg.meta_cols if c not in df_raw.columns]
+    if cfg.profile_col not in df_raw.columns and cfg.profile_col not in missing_meta:
+        missing_meta.append(cfg.profile_col)
+    with open(os.path.join(cfg.outdir, "missing_expected_columns.json"), "w") as f:
+        json.dump(
+            {
+                "missing_features": missing_features,
+                "missing_meta": missing_meta,
+                "configured_feature_cols_final": cfg.feature_cols,
+            },
+            f,
+            indent=2,
+        )
+
+    # Coerce numeric for feature columns + depth columns (if present)
+    numeric_cols = [c for c in cfg.feature_cols if c in df_raw.columns]
+    if cfg.depth_col in df_raw.columns and cfg.depth_col not in numeric_cols:
+        numeric_cols.append(cfg.depth_col)
+
+    # Also coerce anchor-by-col if present (leave as string)
+    df_num = coerce_numeric(df_raw, numeric_cols)
+
+    # Metadata columns (plus derived time col)
+    meta_cols = [c for c in cfg.meta_cols if c in df_num.columns]
+    if cfg.time_col in df_num.columns and cfg.time_col not in meta_cols:
+        meta_cols.append(cfg.time_col)
+    if DERIVED_SEASON_COL in df_num.columns and DERIVED_SEASON_COL not in meta_cols:
+        meta_cols.append(DERIVED_SEASON_COL)
+    if cfg.profile_col in df_num.columns and cfg.profile_col not in meta_cols:
+        meta_cols.append(cfg.profile_col)
+
+    feats = [c for c in cfg.feature_cols if c in df_num.columns]
+    if not feats:
+        raise ValueError("None of the configured feature columns were found in your input table.")
+
+    # ---- DATA-DRIVEN depth anchoring (pre-flight) ----
+    anchoring_neg_as_nan_count = 0
+    if cfg.anchor_depths and (cfg.depth_col in df_num.columns):
+        df_num, anchors_df, mapping_df, decisions_df, proto_counts_df, anchoring_neg_as_nan_count = anchor_depth_column_data_driven(
+            df=df_num,
+            depth_col=cfg.depth_col,
+            anchored_col=cfg.anchored_depth_col,
+            by_col=cfg.anchor_by_col,
+            feature_cols=feats,
+            round_m=cfg.anchor_round_m,
+            tol_m=cfg.anchor_tol_m,
+            top_k=cfg.anchor_top_k,
+            min_count=cfg.anchor_min_count,
+            min_features=cfg.anchor_min_features,
+            margin=cfg.anchor_margin,
+            proto_min_n=cfg.anchor_proto_min_n,
+        )
+        if not anchors_df.empty:
+            anchors_df.to_csv(os.path.join(tables_dir, "depth_anchors.csv"), index=False)
+        if not mapping_df.empty:
+            mapping_df.to_csv(os.path.join(tables_dir, "depth_anchor_mapping_summary.csv"), index=False)
+        if not decisions_df.empty:
+            decisions_df.to_csv(os.path.join(tables_dir, "depth_anchor_decisions.csv"), index=False)
+            summary_by_block = (
+                decisions_df.groupby(["block", "reason"], as_index=False)
+                .size()
+                .rename(columns={"size": "n"})
+                .sort_values(["block", "n"], ascending=[True, False])
+            )
+            snap_rate = decisions_df.groupby("block", as_index=False)["snapped"].mean().rename(columns={"snapped": "snap_rate"})
+            summary_by_block = summary_by_block.merge(snap_rate, on="block", how="left")
+            summary_by_block.to_csv(os.path.join(tables_dir, "depth_anchor_decision_summary_by_block.csv"), index=False)
+        if not proto_counts_df.empty:
+            proto_counts_df.to_csv(os.path.join(tables_dir, "depth_anchor_prototype_audit.csv"), index=False)
+    else:
+        if cfg.depth_col in df_num.columns and cfg.anchored_depth_col not in df_num.columns:
+            df_num[cfg.anchored_depth_col] = pd.to_numeric(df_num[cfg.depth_col], errors="coerce")
+
+    # Always retain anchored depth as metadata (if exists)
+    if cfg.anchored_depth_col in df_num.columns and cfg.anchored_depth_col not in meta_cols:
+        meta_cols.append(cfg.anchored_depth_col)
+
+    # Negative handling (pre-impute): treat negatives as missing
+    n_neg_as_missing_pre = 0
+    df_num[feats], n_neg_as_missing_pre = negatives_to_nan(df_num[feats])
+
+    # Missingness pre-drop (features only)
+    miss0 = basic_missingness_stats(df_num, feats)
+    miss0.to_csv(os.path.join(tables_dir, "missingness_pre_drop.csv"), index=False)
+    plot_missingness(miss0, os.path.join(plots_dir, "missingness_pre_drop.png"))
+
+    # -----------------------------
+    # Option 2A Stage 2 (additive): identify sparse features (excluded by col missingness threshold)
+    # -----------------------------
+    col_missing = df_num[feats].isna().mean()
+    sparse_feats = [c for c in feats if col_missing[c] > cfg.dropna_col_thresh]
+    core_feats = [c for c in feats if col_missing[c] <= cfg.dropna_col_thresh]
+    if not core_feats:
+        raise ValueError("All feature columns are sparse after missingness classification.")
+
+    core_sparse_tbl = pd.DataFrame({
+        "feature": feats,
+        "status": ["core" if c in core_feats else "sparse" for c in feats],
+        "frac_missing": [float(col_missing[c]) for c in feats],
+        "dropna_col_thresh": float(cfg.dropna_col_thresh),
+    }).sort_values(["status", "frac_missing", "feature"], ascending=[True, False, True])
+
+    core_sparse_tbl.to_csv(os.path.join(tables_dir, "core_vs_sparse_features.csv"), index=False)
+
+    df_work = df_num.copy()
+    dropped_rows_pre = pd.DataFrame(columns=["dropped_row_index", "row_missing_fraction", "stage"])
+    pre_thresh = cfg.dropna_row_thresh_pre
+
+    if cfg.row_filter_stage in ("pre", "both"):
+        df_work, dropped_pre = filter_rows_by_missingness(
+            df_work, core_feats, row_thresh=pre_thresh
+        )
+        if not dropped_pre.empty:
+            dropped_pre["stage"] = "pre"
+            dropped_rows_pre = dropped_pre
+
+    df_filt = df_work.copy()
+    feats_kept = core_feats
+
+    miss1 = basic_missingness_stats(df_work, feats_kept)
+    miss1.to_csv(os.path.join(tables_dir, "missingness_post_drop.csv"), index=False)
+    plot_missingness(miss1, os.path.join(plots_dir, "missingness_post_drop.png"))
+
+    meta = df_work[meta_cols].copy() if meta_cols else pd.DataFrame(index=df_work.index)
+
+    # X_preimpute is the coverage-truth for PC selection
+    X_preimpute = df_work[feats_kept].copy()
+    X_sparse = df_work[sparse_feats].copy()
+
+    # Impute within profiles by depth interpolation
+    if cfg.profile_col not in meta.columns:
+        raise ValueError(f"Profile column '{cfg.profile_col}' not found in metadata.")
+
+    profile_series = meta[cfg.profile_col]
+
+    if cfg.anchored_depth_col in meta.columns:
+        interp_depth = meta[cfg.anchored_depth_col]
+    elif cfg.depth_col in meta.columns:
+        interp_depth = meta[cfg.depth_col]
+    else:
+        raise ValueError("No depth column found for interpolation (anchored or raw).")
+
+    X_imp, interp_audit_df, _, cell_prov_df = impute_within_profile_depth(
+        X=X_preimpute,
+        depth=interp_depth,
+        profile=profile_series,
+        max_gap=cfg.interp_max_gap,
+        min_neighbors=cfg.interp_neighbors,
+        degree=cfg.interp_degree,
+        season=meta[DERIVED_SEASON_COL] if DERIVED_SEASON_COL in meta.columns else None,
+        season_depth=interp_depth,
+        enable_season_depth_fallback=False,
+        write_cell_provenance=False,
+    )
+
+    interp_audit_df.to_csv(os.path.join(tables_dir, "imputation_profile_depth_interp_audit.csv"), index=False)
+    if not cell_prov_df.empty:
+        cell_prov_df.to_csv(os.path.join(tables_dir, "imputation_profile_depth_interp_cell_provenance.csv"), index=False)
+
+    # Drop any remaining NaN rows post-impute (PCA cannot run with NaNs).
+    dropped_rows_post = pd.DataFrame(columns=["dropped_row_index", "row_missing_fraction", "stage"])
+    if X_imp.isna().any().any():
+        row_missing = X_imp.isna().mean(axis=1)
+        keep_rows = ~X_imp.isna().any(axis=1)
+        dropped_post = pd.DataFrame({
+            "dropped_row_index": X_imp.index[~keep_rows].astype(str),
+            "row_missing_fraction": row_missing[~keep_rows].values,
+        })
+        if not dropped_post.empty:
+            dropped_post["stage"] = "post_nan"
+            dropped_rows_post = dropped_post
+
+        X_imp = X_imp.loc[keep_rows].copy()
+        X_preimpute = X_preimpute.loc[keep_rows].copy()
+        meta = meta.loc[keep_rows].copy()
+        X_sparse = X_sparse.loc[keep_rows].copy()
+        df_filt = df_filt.loc[keep_rows].copy()
+
+    dropped_cols = ["dropped_row_index", "row_missing_fraction", "stage"]
+    dropped_frames = [df for df in (dropped_rows_pre, dropped_rows_post) if not df.empty]
+    if dropped_frames:
+        dropped_rows = pd.concat(dropped_frames, ignore_index=True)
+    else:
+        dropped_rows = pd.DataFrame(columns=dropped_cols)
+    dropped_rows.to_csv(os.path.join(tables_dir, "dropped_rows.csv"), index=False)
+
+    # If any NaNs remain, they were removed above.
+
+    fill_values = X_imp.mean(axis=0)
+    fill_values.name = "imputed_feature_mean"
+    fill_values.to_csv(os.path.join(tables_dir, "impute_values.csv"), header=True)
+
+    # Optional log1p
+    if cfg.log1p:
+        X_imp = maybe_log1p(X_imp)
+
+    # Save cleaned matrix (post-impute / post-log)
+    cleaned = pd.concat([meta.reset_index(drop=True), X_imp.reset_index(drop=True)], axis=1)
+    cleaned.to_csv(os.path.join(tables_dir, "matrix_cleaned.csv"), index=False)
+
+    # Save cleaned matrix (post-impute / post-log)
+    cleaned_sparse = pd.concat([cleaned.reset_index(drop=True), X_sparse.reset_index(drop=True)], axis=1)
+    cleaned_sparse.to_csv(os.path.join(tables_dir, "matrix_cleaned_with_sparse.csv"), index=False)
+
+    # Scale
+    scaler = StandardScaler(with_mean=True, with_std=True)
+    X_scaled = scaler.fit_transform(X_imp.values)
+
+    scaled_df = pd.DataFrame(X_scaled, columns=feats_kept)
+    scaled_out = pd.concat([meta.reset_index(drop=True), scaled_df], axis=1)
+    scaled_out.to_csv(os.path.join(tables_dir, "matrix_scaled.csv"), index=False)
+
+    # PCA
+    ncomp = min(cfg.n_components, X_scaled.shape[1], X_scaled.shape[0])
+    pca = PCA(n_components=ncomp, random_state=cfg.random_state)
+    pca.fit(X_scaled)
+
+    # Explained variance
+    evr = pca.explained_variance_ratio_
+    ev = pca.explained_variance_
+    ev_tbl = pd.DataFrame({
+        "PC": [f"PC{i}" for i in range(1, len(evr) + 1)],
+        "explained_variance": ev,
+        "explained_variance_ratio": evr,
+        "cumulative_ratio": np.cumsum(evr),
+    })
+    ev_tbl.to_csv(os.path.join(tables_dir, "pca_explained_variance.csv"), index=False)
+
+    # Loadings
+    loadings = pd.DataFrame(
+        pca.components_.T,
+        index=feats_kept,
+        columns=[f"PC{i}" for i in range(1, pca.n_components_ + 1)],
+    )
+    loadings.to_csv(os.path.join(tables_dir, "pca_loadings.csv"))
+
+    # eigenvectors (scores)
+    scores = pca.transform(X_scaled)
+    scores_df = pd.DataFrame(scores, columns=[f"PC{i}" for i in range(1, pca.n_components_ + 1)])
+    eigenvectors = pd.concat([meta.reset_index(drop=True), scores_df], axis=1)
+    eigenvectors.to_csv(os.path.join(tables_dir, "eigenvectors_scores.csv"), index=False)
+
+    # -----------------------------
+    # Option 2A Stage 2 (additive): Spearman correlations of sparse features vs retained PC scores
+    #   - NEVER refits PCA; uses existing scores_df
+    # -----------------------------
+    sparse_corr_rows = []
+    n_total = int(df_filt.shape[0])
+
+    # Align sparse-feature values rowwise to the same ordering used in scores_df/meta (reset_index(drop=True))
+    if sparse_feats:
+        X_sparse = df_filt[sparse_feats].reset_index(drop=True)
+    else:
+        X_sparse = pd.DataFrame(index=scores_df.index)
+
+    for feat in X_sparse.columns:
+        x = X_sparse[feat]
+        for pc in scores_df.columns:
+            y = scores_df[pc]
+            m = x.notna() & y.notna()
+            n_used = int(m.sum())
+            if n_used >= 3:
+                r = float(x[m].corr(y[m], method="spearman"))
+            else:
+                r = np.nan
+            cov = float(n_used / n_total) if n_total > 0 else np.nan
+
+            sparse_corr_rows.append({
+                "feature": str(feat),
+                "PC": str(pc),
+                "spearman_r": r,
+                "n_samples_used": n_used,
+                "coverage": cov,
+            })
+
+    sparse_corr_df = pd.DataFrame(sparse_corr_rows)
+
+    # write the full table (all sparse features x all PCs)
+    sparse_corr_df.to_csv(os.path.join(tables_dir, "sparse_feature_pc_spearman.csv"), index=False)
+
+
+    # QC summary
+    qc = {
+        "id_col": cfg.id_col,
+        "time_col": cfg.time_col,
+        "meta_cols_used": meta_cols,
+        "n_rows_input": int(df_raw.shape[0]),
+        "n_rows_kept": int(X_imp.shape[0]),
+        "n_rows_dropped_pre": int(dropped_rows_pre.shape[0]),
+        "n_rows_dropped_post": int(dropped_rows_post.shape[0]),
+        "configured_feature_cols_final": cfg.feature_cols,
+        "n_features_found": int(len(feats)),
+        "n_features_kept": int(len(feats_kept)),
+        "n_features_sparse": int(len(sparse_feats)),
+        "depth_anchoring_enabled": bool(cfg.anchor_depths),
+        "depth_col": cfg.depth_col,
+        "anchored_depth_col": cfg.anchored_depth_col,
+        "anchor_by_col": cfg.anchor_by_col,
+        "anchor_min_features": int(cfg.anchor_min_features),
+        "anchor_margin": float(cfg.anchor_margin),
+        "anchor_proto_min_n": int(cfg.anchor_proto_min_n),
+        "log1p": bool(cfg.log1p),
+        "row_filter_stage": str(cfg.row_filter_stage),
+        "dropna_row_thresh_pre": float(pre_thresh),
+        "dropna_col_thresh": float(cfg.dropna_col_thresh),
+        "profile_col": str(cfg.profile_col),
+        "interp_max_gap": int(cfg.interp_max_gap),
+        "interp_neighbors": int(cfg.interp_neighbors),
+        "interp_degree": int(cfg.interp_degree),
+        "n_negative_values_set_to_nan_pre_impute": int(n_neg_as_missing_pre),
+        "n_negative_values_set_to_nan_during_anchoring_similarity": int(anchoring_neg_as_nan_count),
+        "n_components_fit": int(pca.n_components_),
+        "pc_selection_ran": bool(cfg.pc_selection),
+    }
+    with open(os.path.join(cfg.outdir, "qc_summary.json"), "w") as f:
+        json.dump(qc, f, indent=2)
+
+    # Plots
+    plot_scree(pca, os.path.join(plots_dir, "scree.png"))
+    plot_cumvar(pca, os.path.join(plots_dir, "cumulative_variance.png"))
+    plot_pc_scatter(eigenvectors, os.path.join(plots_dir, "pc1_vs_pc2.png"), cfg.time_col)
+
+    # Option 2A biplot: core loadings (solid) + sparse correlations (dashed)
+    # Enforce BIOCHEM_COLOR_MAP strictly for sparse features (and also for core arrows to avoid unmapped colors).
+    sparse_corr_mapped = sparse_corr_df[sparse_corr_df["feature"].isin(BIOCHEM_COLOR_MAP.keys())].copy()
+    plot_biplot_core_and_sparse(
+        scores_df=eigenvectors,          # eigenvectors includes meta + PCs; function uses PC1/PC2 columns
+        loadings_df=loadings,            # PCA loadings for core features
+        sparse_corr_df=sparse_corr_mapped,
+        outpath=os.path.join(plots_dir, "pc1_vs_pc2_biplot_core_sparse.png"),
+        top_core=12,
+        top_sparse=12,
+        min_core_norm=0.0,
+        min_sparse_norm=0.0,
+    )
+
+    for i in range(1, min(6, pca.n_components_ + 1)):
+        pc = f"PC{i}"
+        plot_top_loadings(loadings, os.path.join(plots_dir, f"top_loadings_{pc}.png"), pc=pc, top_n=25)
+
+    # Optional: PC selection & feature clustering
+    if cfg.pc_selection:
+        run_pc_selection(
+            cfg=cfg,
+            tables_dir=tables_dir,
+            plots_dir=plots_dir,
+            X_preimpute=X_preimpute,
+            X_scaled=X_scaled,
+            meta=meta.reset_index(drop=True),
+            pca=pca,
+            loadings_df=loadings,
+        )
+
+    print(f"[OK] Wrote outputs to: {cfg.outdir}")
+    print(f"      Tables: {tables_dir}")
+    print(f"      Plots : {plots_dir}")
+    if missing_features:
+        print(f"[WARN] Missing expected feature cols (see missing_expected_columns.json): {len(missing_features)}")
+    if missing_meta:
+        print(f"[WARN] Missing expected meta cols (see missing_expected_columns.json): {len(missing_meta)}")
+
+    run_eof_pipeline(
+        cfg=cfg,
+        meta=meta,
+        X_imp=X_imp,
+        feats_kept=feats_kept,
+        tables_dir=tables_dir,
+        plots_dir=plots_dir,
+        df_filt=df_filt,
+        sparse_feats=sparse_feats,
+    )
 
 
 if __name__ == "__main__":

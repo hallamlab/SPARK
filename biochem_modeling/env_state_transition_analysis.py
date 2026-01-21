@@ -290,7 +290,7 @@ def load_eof_state_overlay_for_labels(
     # tab20 is a good discrete palette for states
     #cm = plt.get_cmap("tab20", max(1, len(uniq_sorted)))
     color_map = {
-        st: ((1.0, 1.0, 1.0, 1.0) if st == 'normal' else (0.83, 0.83, 0.83, 1.0))
+        st: ((1.0, 1.0, 1.0, 1.0) if st == 'transition' else (0.83, 0.83, 0.83, 1.0))
         for st in uniq_sorted
     }
     return states, color_map
@@ -401,14 +401,14 @@ def load_strat_overlay_for_labels(
         return None, None, None
 
     # Required columns per your new spec
-    required = {"normalized_score", "is_anomaly", "anomaly_type"}
+    required = {"normalized_depth_centroid_distance", "is_anomaly", "anomaly_type"}
     if not required.issubset(set(df.columns)):
         return None, None, None
 
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-    score = pd.to_numeric(df["normalized_score"], errors="coerce").to_numpy(dtype=float)
+    score = pd.to_numeric(df["normalized_depth_centroid_distance"], errors="coerce").to_numpy(dtype=float)
 
     # robust bool parse (handles True/False strings, 0/1, etc.)
     is_anom = (
@@ -1567,7 +1567,7 @@ def transition_agreement_tables(
             outpath=os.path.join(plots_dir, "braycurtis_compare_three_signed_similarity.png"),
             stats_text=stats_text_signed,
             extra=strat_overlay,
-            extra_label="Stratification",
+            extra_label="DCD Index",
             extra_linestyle="--",
             extra_marker="o",                 # circles for normal points
             extra_is_anomaly=strat_is_anom,   # enables triangles

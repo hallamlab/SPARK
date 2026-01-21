@@ -233,7 +233,7 @@ def detect_anomalies_consensus(
     timeseries_df: pd.DataFrame,
     consensus_threshold: int = 2,
     date_col: str = "date",
-    window_months: int = 8,
+    window_months: int = 12,
     min_points_in_window: int = 5,
 ) -> pd.DataFrame:
     """
@@ -453,6 +453,125 @@ def identify_annual_extremes(
 
 
 # ============================================================================
+# PEA comparison plot
+# ============================================================================
+
+def _load_pea_timeseries(pea_path: Path, date_col: str) -> pd.DataFrame:
+    pea_df = pd.read_csv(pea_path, sep="\t")
+    if date_col not in pea_df.columns:
+        raise ValueError(f"PEA metrics file missing date column '{date_col}'")
+    pea_df = pea_df.copy()
+    pea_df["date"] = pd.to_datetime(pea_df[date_col], errors="coerce")
+    pea_df = pea_df.dropna(subset=["date"])
+
+    for col in ["pea_J_m3", "pea_upper_J_m3", "pea_lower_J_m3"]:
+        if col in pea_df.columns:
+            pea_df[col] = pd.to_numeric(pea_df[col], errors="coerce")
+
+    keep_cols = [c for c in ["pea_J_m3", "pea_upper_J_m3", "pea_lower_J_m3"] if c in pea_df.columns]
+    if not keep_cols:
+        raise ValueError("PEA metrics file missing PEA columns (pea_J_m3/pea_upper_J_m3/pea_lower_J_m3)")
+
+    pea_ts = pea_df.groupby("date", sort=True)[keep_cols].mean().reset_index()
+    return pea_ts
+
+
+def plot_stratification_vs_pea_timeseries(
+    timeseries_df: pd.DataFrame,
+    pea_df: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    print("  [i] Creating stratification vs PEA time-series plot...")
+    if timeseries_df.empty or pea_df.empty:
+        print("  [i] Skipping PEA comparison plot (no data).")
+        return
+
+    strat_df = timeseries_df.copy()
+    strat_df["date"] = pd.to_datetime(strat_df["date"], errors="coerce")
+    strat_df = strat_df.dropna(subset=["date"]).sort_values("date")
+    pea_df = pea_df.sort_values("date")
+
+    def _plot_with_gaps(ax, x, y, color):
+        sub = pd.DataFrame({"x": x, "y": y}).dropna().sort_values("x")
+        if sub.empty:
+            return
+        xs = sub["x"].to_numpy()
+        ys = sub["y"].to_numpy()
+        if len(xs) == 1:
+            ax.plot(xs, ys, color=color, label="_nolegend_")
+            return
+
+        deltas = np.diff(xs)
+        median_delta = np.median(deltas)
+        if not np.isfinite(median_delta) or median_delta == 0:
+            ax.plot(xs, ys, color=color, label="_nolegend_")
+            return
+
+        gap_thresh = median_delta * 2
+        seg_start = 0
+        for i in range(1, len(xs)):
+            if (xs[i] - xs[i - 1]) > gap_thresh:
+                ax.plot(xs[seg_start:i], ys[seg_start:i], color=color, label="_nolegend_")
+                ax.plot(
+                    xs[i - 1:i + 1],
+                    ys[i - 1:i + 1],
+                    color=color,
+                    linestyle=":",
+                    label="_nolegend_",
+                )
+                seg_start = i
+        ax.plot(xs[seg_start:], ys[seg_start:], color=color, label="_nolegend_")
+
+    fig, ax_left = plt.subplots(1, 1, figsize=(22, 6))
+    ax_right = ax_left.twinx()
+
+    ax_left.scatter(
+        strat_df["date"],
+        strat_df["stratification_score"],
+        color="black",
+        s=30,
+        label="depth_centroid_distance",
+    )
+    _plot_with_gaps(
+        ax_left,
+        strat_df["date"],
+        strat_df["stratification_score"],
+        color="black",
+    )
+    ax_left.set_ylabel("Depth centroid distance (stability index)")
+    ax_left.grid(axis="y", linestyle="--", alpha=0.35)
+
+    if "pea_J_m3" in pea_df.columns:
+        ax_right.scatter(pea_df["date"], pea_df["pea_J_m3"], color="tab:green", s=30, label="PEA total")
+        _plot_with_gaps(ax_right, pea_df["date"], pea_df["pea_J_m3"], color="tab:green")
+    if "pea_upper_J_m3" in pea_df.columns:
+        ax_right.scatter(pea_df["date"], pea_df["pea_upper_J_m3"], color="tab:blue", s=30, label="PEA upper")
+        _plot_with_gaps(ax_right, pea_df["date"], pea_df["pea_upper_J_m3"], color="tab:blue")
+    if "pea_lower_J_m3" in pea_df.columns:
+        ax_right.scatter(pea_df["date"], pea_df["pea_lower_J_m3"], color="tab:orange", s=30, label="PEA lower")
+        _plot_with_gaps(ax_right, pea_df["date"], pea_df["pea_lower_J_m3"], color="tab:orange")
+    ax_right.set_ylabel("PEA (J/m3)")
+
+    ax_left.set_title("Stability index vs PEA")
+    ax_left.set_xlabel("Date")
+
+    handles_left, labels_left = ax_left.get_legend_handles_labels()
+    handles_right, labels_right = ax_right.get_legend_handles_labels()
+    ax_left.legend(
+        handles_left + handles_right,
+        labels_left + labels_right,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+        borderaxespad=0,
+    )
+
+    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print("  [✓] Saved stratification vs PEA time-series plot")
+
+
+# ============================================================================
 # Plot (monthly profile)
 # ============================================================================
 
@@ -639,6 +758,19 @@ def parse_args():
     ap.add_argument("--month-col", default="Month", help="Month column name.")
     ap.add_argument("--year-col", default="Year", help="Year column name.")
     ap.add_argument("--depth-col", default="Depth_anchored", help="Depth column name.")
+    ap.add_argument("--depth-min", type=float, default=None, help="Minimum depth to include.")
+    ap.add_argument("--depth-max", type=float, default=None, help="Maximum depth to include.")
+    ap.add_argument(
+        "--pea-metrics",
+        type=Path,
+        default=None,
+        help="Path to stratification_summary.tsv from env_stratification_metrics.py (for PEA comparison plot).",
+    )
+    ap.add_argument(
+        "--pea-date-col",
+        default="profile_date",
+        help="Date column in PEA metrics file (default profile_date).",
+    )
 
     ap.add_argument(
         "--features",
@@ -651,7 +783,7 @@ def parse_args():
         help="If --features is not provided, use all columns after this column as features.",
     )
 
-    ap.add_argument("--consensus-threshold", type=int, default=2, help="Minimum methods for anomaly consensus [2`].")
+    ap.add_argument("--consensus-threshold", type=int, default=1, help="Minimum methods for anomaly consensus [1].")
     ap.add_argument("--output-dir", type=Path, required=True, help="Output directory.")
     return ap.parse_args()
 
@@ -699,6 +831,18 @@ def main():
     integrated_data = integrated_data.loc[common]
     metadata = metadata.loc[common]
 
+    # Optional depth filtering
+    if args.depth_min is not None or args.depth_max is not None:
+        depth_vals = pd.to_numeric(metadata[args.depth_col], errors="coerce")
+        depth_mask = np.isfinite(depth_vals)
+        if args.depth_min is not None:
+            depth_mask &= depth_vals >= args.depth_min
+        if args.depth_max is not None:
+            depth_mask &= depth_vals <= args.depth_max
+        integrated_data = integrated_data.loc[depth_mask]
+        metadata = metadata.loc[depth_mask]
+        print(f"  [i] Depth filter kept {len(metadata)} samples")
+
     print(f"  Samples: {len(common)}")
     print(f"  Features used: {len(feature_cols)}")
     print(f"  Time points: {len(metadata[args.date_col].unique())}")
@@ -717,12 +861,37 @@ def main():
     timeseries_df = normalize_to_centered_scale(timeseries_df)
     timeseries_df = detect_anomalies_consensus(timeseries_df, consensus_threshold=args.consensus_threshold)
 
+    # Global thresholds based on anomaly values (apply to all rows)
+    mix_scores = timeseries_df.loc[timeseries_df["anomaly_type"] == "mixing_event", "normalized_score"]
+    strat_scores = timeseries_df.loc[timeseries_df["anomaly_type"] == "high_stratification", "normalized_score"]
+
+    mix_thresh = float(mix_scores.max()) if not mix_scores.empty else np.nan
+    strat_thresh = float(strat_scores.min()) if not strat_scores.empty else np.nan
+
+    def _global_event_type(score: float) -> str:
+        if np.isfinite(strat_thresh) and score >= strat_thresh:
+            return "high_stratification"
+        if np.isfinite(mix_thresh) and score <= mix_thresh:
+            return "mixing_event"
+        return "normal"
+
+    timeseries_df = timeseries_df.copy()
+    timeseries_df["global_event_type"] = timeseries_df["normalized_score"].apply(_global_event_type)
+    timeseries_df["global_mixing_threshold"] = mix_thresh
+    timeseries_df["global_strat_threshold"] = strat_thresh
+
     print("\n[5/5] Annual extremes + monthly profile...")
     extremes_df = identify_annual_extremes(timeseries_df, metadata, args.year_col)
 
-    # Write the 2 TSVs
-    timeseries_df.to_csv(out_dir / "stratification_timeseries.tsv", sep="\t", index=False)
-    extremes_df.to_csv(out_dir / "annual_extremes.tsv", sep="\t", index=False)
+    # Write the 2 TSVs (rename columns for output)
+    rename_map = {
+        "stratification_score": "depth_centroid_distance",
+        "normalized_score": "normalized_depth_centroid_distance",
+    }
+    timeseries_out = timeseries_df.rename(columns=rename_map)
+    extremes_out = extremes_df.rename(columns=rename_map)
+    timeseries_out.to_csv(out_dir / "stratification_timeseries.tsv", sep="\t", index=False)
+    extremes_out.to_csv(out_dir / "annual_extremes.tsv", sep="\t", index=False)
 
     # Write the PDF
     plot_stratification_monthly_profile(
@@ -734,6 +903,15 @@ def main():
         year_col=args.year_col,
         output_path=out_dir / "stratification_monthly_profile.pdf",
     )
+
+    # Optional PEA comparison plot
+    if args.pea_metrics is not None:
+        pea_ts = _load_pea_timeseries(args.pea_metrics, args.pea_date_col)
+        plot_stratification_vs_pea_timeseries(
+            timeseries_df=timeseries_df,
+            pea_df=pea_ts,
+            output_path=out_dir / "stratification_vs_pea_timeseries.pdf",
+        )
 
     print("\n" + "=" * 70)
     print("DONE")
