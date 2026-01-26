@@ -286,6 +286,10 @@ if( !tableScriptFile.exists() ) {
     exit 1, "Table filter script not found: ${tabFilterScript}"
 }
 
+def concatConfig = config.concat ?: [:]
+def concatRelabelEnabled = concatConfig.containsKey('relabel') ? (concatConfig.relabel as boolean) : true
+def concatLabelSep = concatConfig.label_sep ?: ':'
+
 def parseSinaScriptFile = new File("${projectDir}/parse_sina_log.py")
 if( !parseSinaScriptFile.exists() ) {
     exit 1, "parse_sina_log.py not found in project directory"
@@ -647,7 +651,12 @@ workflow {
     def reads_after_qc = fastp_result.reads
     def reads_after_merge = MERGE_READS(reads_after_qc)
     def reads_after_filter = FILTER_READS(reads_after_merge)
-    def relabeled_fasta_files = reads_after_filter.map { parts -> parts[1] }
+    def reads_for_concat = reads_after_filter
+    if( concatRelabelEnabled ) {
+        def relabeled_stage = RELABEL_FILTERED(reads_after_filter)
+        reads_for_concat = relabeled_stage.relabeled
+    }
+    def relabeled_fasta_files = reads_for_concat.map { parts -> parts[1] }
 
     def concat_for_derep = relabeled_fasta_files
         .collectFile(name: 'concat.fasta', storeDir: dirMap.concat, newLine: true)
@@ -858,6 +867,33 @@ vsearch --fastx_filter "${merged_fastq}" \\
         --fastq_minlen ${filterCfg.min_len ?: 245} \\
         --fastq_maxlen ${filterCfg.max_len ?: 1500} \\
         --fastaout filtered.fasta
+"""
+}
+
+process RELABEL_FILTERED {
+    tag { meta.sample_id }
+    cpus 1
+    conda "${condaEnvPath}"
+    publishDir dirMap.concat, mode: 'copy', pattern: '*.fasta', saveAs: { filename ->
+        filename == 'filtered_relabel.fasta' ? "${meta.sample_id}.filtered.relabel.fasta" : filename
+    }
+
+    input:
+    tuple val(meta), path(filtered_fasta)
+
+    output:
+    tuple val(meta), path("filtered_relabel.fasta"), emit: relabeled
+
+    script:
+    def labelSep = concatLabelSep
+    """
+awk -v pref="${meta.sample_id}" -v sep="${labelSep}" '{
+  if (\$0 ~ /^>/) {
+    sub(/^>[^:]*:/, ">" pref sep, \$0)
+    if (\$0 !~ "^>" pref sep) \$0 = ">" pref sep substr(\$0, 2)
+  }
+  print
+}' "${filtered_fasta}" > filtered_relabel.fasta
 """
 }
 
@@ -1287,8 +1323,8 @@ process PLOT_METADATA {
     def metadataMitoFile = "${outputDir}/mito/metadata/metadata_updated_mito.tsv"
     def asvMetaMicroFile = "${outputDir}/metadata/ASV_meta_micro.tsv"
     def asvMetaMitoFile = "${outputDir}/mito/metadata/ASV_meta_mito.tsv"
-    def asvFinalMicroFile = "${outputDir}/ASVs/ASV_final.micro.tsv"
-    def asvFinalMitoFile = "${outputDir}/mito/ASVs/ASV_final.mito.tsv"
+    def asvFinalMicroFile = "${outputDir}/ASVs/ASV_target.micro.tsv"
+    def asvFinalMitoFile = "${outputDir}/mito/ASVs/ASV_target.mito.tsv"
     def asvTaxTable = "${outputDir}/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv"
     """
 set -euo pipefail
@@ -1304,8 +1340,8 @@ python "${plotMetadataScriptPath}" \\
   --color-col "${metadataPlotsColorCol}" \\
   --sample-manifest ${manifestPath} \\
   ${includeRankArgs} \\
-  ${microFlag} \\
-  ${mitoFlag} \\
+  --make-micro \\
+  --make-mito \\
   --verbose
 
 link_if_exists() {

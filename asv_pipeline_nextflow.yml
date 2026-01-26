@@ -27,6 +27,10 @@ filter:
   min_len: 245
   max_len: 1500
 
+concat:
+  relabel: true
+  label_sep: ":"
+
 unoise:
   min_size: 3
 
@@ -108,7 +112,7 @@ general_stats:
   enabled: true
 
 sankey:
-  enabled: true
+  enabled: false
   metadata: ../ref_db/asv_cruise_metadata.tsv
   sub_dir: .
   sample_col: lmp_id
@@ -126,7 +130,7 @@ sankey:
   make_unlabeled: true
 
 metadata_plots:
-  enabled: true
+  enabled: false
   metadata: ../ref_db/asv_cruise_metadata.tsv
   sub_dir: .
   type_col: Depth
@@ -140,8 +144,6 @@ metadata_plots:
   include_rank: []
   run_micro: true
   run_mito: true
-
-
 
 batch_correction:
   enabled: true
