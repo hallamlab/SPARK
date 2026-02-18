@@ -1,13 +1,13 @@
 paths:
-  input_dir: /cephfs/rjm_work/si_asv/V4_ncbi_input
-  output_dir: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output
-  manifest: /cephfs/rjm_work/si_asv/ref_db/sample_manifest.tsv
-  work_dir: /cephfs/rjm_work/si_asv/nf_work
-  conda_cache_dir: /cephfs/rjm_work/si_asv/conda_cache
+  input_dir: /home/ryan/Experiments/Community_Composition/25-07-30/Raw_Data
+  output_dir: /home/ryan/Experiments/Community_Composition/25-07-30/nf_output
+  manifest: /home/ryan/Community_Composition_Manifest_ampliseq_fixed.tsv
+  work_dir: /home/ryan/nf_work
+  conda_cache_dir: /home/ryan/nf_work/conda_cache
     # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
-  threads: 1          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
+  threads: 12          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
   single_end: false
 
 fastp:
@@ -87,17 +87,17 @@ mito:
   dpi: 300
   no_plots: false
   blast_threads: 16
-  mito_db: ../ref_db/mito_ncbi
-  biof_db: ../ref_db/ssu_pipeline_contaminants
+  mito_db: /home/ryan/ref_db/mito_ncbi
+  biof_db: /home/ryan/ref_db/ssu_pipeline_contaminants
 
 filter_counts:
   enabled: true
-  metadata: ../ref_db/asv_cruise_metadata.tsv
+  metadata: /home/ryan/Community_Composition_Metadata_ampliseq.tsv
   output: ASV_target.tsv
-  group_col: Depth
+  group_col: Lighting
   min_group_size: 3
   abundance_threshold: 0.005
-  sample_id_col: longID
+  sample_id_col: sampleID
   min_consensus: 0.0
   taxon_col: Taxon
   consensus_col: Consensus
@@ -112,18 +112,15 @@ general_stats:
   enabled: true
 
 sankey:
-  enabled: false
-  metadata: ../ref_db/asv_cruise_metadata.tsv
+  enabled: true
+  metadata: /home/ryan/Community_Composition_Metadata_ampliseq.tsv
   sub_dir: .
-  sample_col: lmp_id
-  group1_col: group1
+  sample_col: sampleID
+  group1_col: Lighting
   color_col: Color
   keep_types:
-    - Oral Rinse
-    - Lung Brush
-    - BAL
-    - Skin Brush
-    - Scope Flush
+    - Light
+    - Dark
   output_prefix: metadata/data_loss_sankey
   title: Data Loss Flow
   make_labeled: true

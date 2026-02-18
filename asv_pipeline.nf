@@ -1244,11 +1244,11 @@ python3 "${sankeyScriptPath}" \\
   --samp-col "${sankeySampCol}" \\
   --group1-col "${sankeyGroupCol}" \\
   --color-col "${sankeyColorCol}" \\
-${keepTypesArg}  --fastq-stats "${fastq_stats}" \\
-  --filtered-stats "${filtered_stats}" \\
-  --asv-raw "${asv_counts}" \\
-  --asv-decon "${asv_decon_counts}" \\
-  --asv-micro "${asv_micro_counts}" \\
+${keepTypesArg}  --fastq-stats stats/"${fastq_stats}" \\
+  --filtered-stats stats/"${filtered_stats}" \\
+  --asv-raw ASVs/"${asv_counts}" \\
+  --asv-decon ASVs/"${asv_decon_counts}" \\
+  --asv-micro ASVs/"${asv_micro_counts}" \\
   --title "${sankeyTitle}" \\
   --output-prefix "${sankeyOutputPrefix}" \\
 ${labeledFlag}${unlabeledFlag}  --verbose

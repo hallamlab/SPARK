@@ -105,8 +105,15 @@ def extract_sample_id_from_path(path_str: str) -> str:
                 '.gz', '.tsv', '.csv', '.txt'):
         if stem.endswith(ext):
             stem = stem[: -len(ext)]
-    stem = re.sub(r'(\.filtered|\.merged|\.trimmed)$', '', stem)
-    stem = re.sub(r'(_R[12]|_[12])?(_001)?$', '', stem)
+    if (('.filtered' in path_str) or
+        ('.merged' in path_str) or
+        ('.trimmed' in path_str)
+        ):
+        stem = re.sub(r'(\.filtered|\.merged|\.trimmed)$', '', stem)
+    else:
+        stem = re.sub(r'(_R[12]|_[12])?(_001)?$', '', stem)
+    stem = re.sub(r'(-)$', '_', stem)
+
     return stem
 
 
@@ -193,6 +200,7 @@ def read_fastq_stats(path: Path, samp_col: str,
                 if cand in manifest_map:
                     return manifest_map[cand]
             print(candidates)
+            print(manifest_map)
             raise ValueError(f"File '{file_path}' not found in manifest")
         return extract_sample_id_from_path(file_path)
 
@@ -452,8 +460,8 @@ def main():
     meta = meta[meta[args.samp_col].isin(sample_list)].copy()
 
     manifest_map = load_sample_manifest(manifest_path)
-    filter_map = {extract_sample_id_from_path(k): v for k, v in manifest_map.items() if v in sample_list}
-    
+    filter_map = {v: v for k, v in manifest_map.items()}
+
     # Raw reads (pairs): sum num_seqs across files, then /2, with replicates collapsed
     raw_df = read_fastq_stats(
         fastq_stats_path,
