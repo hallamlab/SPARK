@@ -312,20 +312,50 @@ def run_one_pass(name: str,
 
         # Faceted by status (boxed with alpha’d palette)
         if "status" in df.columns:
-            g = sns.FacetGrid(df, col="type_group", col_wrap=3, sharey=True,
-                            col_order=order, height=4, aspect=1.2)
-            g.map_dataframe(
-                sns.boxplot, x="status", y="Shannon",
-                order=["Non-Cancer", "Cancer"], palette=PALETTE_STATUS, linewidth=1
+            TYPE_ORDER = ["Oral Rinse", "BAL", "Lung Brush"]
+
+            g = sns.FacetGrid(
+                df,
+                col="type_group",
+                col_order=TYPE_ORDER,
+                sharey=True,
+                height=5,
+                aspect=0.2,
+                col_wrap=3,
             )
+
+            # draw each facet with a single color taken from that facet's type_group
+            def facet_boxplot(data, **kwargs):
+                tg = str(data["type_group"].iloc[0])
+                facet_color = PALETTE_TYPES.get(tg, None)
+
+                sns.boxplot(
+                    data=data,
+                    x="status",
+                    y="Shannon",
+                    order=["Cancer", "Non-Cancer"],
+                    color=facet_color,        # <-- one color per facet
+                    linewidth=1,
+                    width=0.85,
+                    gap=0.15,
+                    showfliers=True,
+                    boxprops={"alpha": 0.5},
+                    medianprops={"alpha": 1},
+                    whiskerprops={"alpha": 1},
+                    capprops={"alpha": 1},
+                )
+
+            g.map_dataframe(facet_boxplot)
+
             for ax in g.axes.flat:
-                for line in ax.lines:
-                    line.set_alpha(0.7)
+                sns.despine(ax=ax, left=False, bottom=False)
+                ax.set_ylim(0, 5)
                 ax.set_xlabel("")
                 ax.set_ylabel("Shannon")
-                ax.tick_params(axis='x', rotation=45)
+                ax.tick_params(axis="x", rotation=45)
 
-            g.figure.tight_layout()
+            g.figure.set_size_inches(12, 5)
+            plt.tight_layout()
             for ext in ("svg", "pdf"):
                 g.figure.savefig(outdir / f"plots/Alpha_status_boxplot_{name}.{ext}")
             plt.close(g.figure)

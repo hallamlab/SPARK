@@ -35,6 +35,7 @@ import argparse
 from pathlib import Path
 import warnings
 import os
+from typing import Optional
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -196,21 +197,42 @@ def plot_p_vs_stat_no_overlap(
     *,
     x_col: str,
     y_col: str,
-    hue_col: str | None = None,
-    style_col: str | None = None,
-    type_palette: dict | None = None,
-    marker_dict: dict | None = None,
+    hue_col: Optional[str] = None,
+    style_col: Optional[str] = None,
+    type_palette: Optional[dict] = None,
+    marker_dict: Optional[dict] = None,
     # NEW: point label controls
-    label_col: str | None = None,
+    label_col: Optional[str] = None,
     label_fontsize: int = 8,
-    label_max_points: int | None = None,  # e.g. 200 to avoid labeling everything
+    label_max_points: Optional[int] = None,  # e.g. 200 to avoid labeling everything
+    label_bbox: bool = False,
+    label_bbox_alpha: float = 0.7,
+    label_bbox_color: str = "white",
+    label_bbox_edgecolor: str = "none",
+    label_bbox_pad: float = 0.15,
+    label_bbox_boxstyle: str = "round",
+    label_arrow: bool = True,
+    label_arrow_color: str = "black",
+    label_arrow_width: float = 1.2,
+    label_arrow_alpha: float = 1.0,
+    label_arrow_shrinkA: float = 6.0,
+    label_arrow_shrinkB: float = 0.0,
+    label_arrow_anchor: str = "text",
+    adjust_expand_points=(1.4, 1.6),
+    adjust_expand_text=(1.4, 1.6),
+    adjust_force_points=(0.5, 0.8),
+    adjust_force_text=(0.5, 0.8),
+    adjust_lim: int = 300,
+    adjust_avoid_self: bool = True,
+    adjust_only_move_points: str = "xy",
+    adjust_only_move_text: str = "xy",
     # Jitter controls (normalized units)
     min_dist_x=0.02,
     min_dist_y=0.03,
     step_x=0.35,
     step_y=0.35,
     anchor=0.05,
-    iters=0,
+    iters=200, # this is how you set the deterministic jitter, use 0 for none and 200 for a good spread
     add_random_eps=(0.0, 0.0),  # will be deterministic if kept as-is (uses rng=0)
     # Visuals
     invert_y=False,
@@ -332,36 +354,38 @@ def plot_p_vs_stat_no_overlap(
     color_handles = []
     if type_palette:
         for name in type_palette:
-            col = type_palette.get(name, "lightgray")
-            color_handles.append(
-                mlines.Line2D(
-                    [],
-                    [],
-                    marker="o",
-                    linestyle="None",
-                    markerfacecolor=col,
-                    markeredgecolor="black",
-                    markeredgewidth=0.5,
-                    markersize=8,
-                    label=str(name),
+            if name != 'not_indicator':
+                col = type_palette.get(name, "lightgray")
+                color_handles.append(
+                    mlines.Line2D(
+                        [],
+                        [],
+                        marker="o",
+                        linestyle="None",
+                        markerfacecolor=col,
+                        markeredgecolor="black",
+                        markeredgewidth=0.5,
+                        markersize=8,
+                        label=str(name),
+                    )
                 )
-            )
 
     marker_handles = []
     if show_legend and style_col is not None and markers:
         for name, mk in markers.items():
-            marker_handles.append(
-                mlines.Line2D(
-                    [],
-                    [],
-                    color="gray",
-                    marker=mk,
-                    linestyle="None",
-                    markeredgewidth=0.5,
-                    markersize=8,
-                    label=str(name),
+            if name != 'not_indicator':
+                marker_handles.append(
+                    mlines.Line2D(
+                        [],
+                        [],
+                        color="gray",
+                        marker=mk,
+                        linestyle="None",
+                        markeredgewidth=0.5,
+                        markersize=8,
+                        label=str(name),
+                    )
                 )
-            )
 
     # Measure legend sizes
     def _legend_size_in(handles, title, fontsize):
@@ -460,29 +484,93 @@ def plot_p_vs_stat_no_overlap(
         yspan = (ymax - ymin) if (ymax != ymin) else 1.0
         dx0 = 0.01 * xspan
         dy0 = 0.01 * yspan
+        label_bbox_kwargs = None
+        if label_bbox:
+            label_bbox_kwargs = dict(
+                boxstyle=f"{label_bbox_boxstyle},pad={label_bbox_pad}",
+                facecolor=label_bbox_color,
+                alpha=label_bbox_alpha,
+                edgecolor=label_bbox_edgecolor,
+            )
+        arrowprops = None
+        if label_arrow and label_arrow_anchor == "text":
+            arrowprops = dict(
+                arrowstyle="-",
+                color=label_arrow_color,
+                lw=label_arrow_width,
+                alpha=label_arrow_alpha,
+                shrinkA=label_arrow_shrinkA,
+                shrinkB=label_arrow_shrinkB,
+            )
 
         for (xv, yv), s in zip(dd_lab[["_x_", "_y_"]].to_numpy(), lab.to_numpy()):
-            texts.append(ax.text(xv + dx0, yv + dy0, s, fontsize=label_fontsize))
+            texts.append(
+                ax.text(
+                    xv + dx0,
+                    yv + dy0,
+                    s,
+                    fontsize=label_fontsize,
+                    bbox=label_bbox_kwargs,
+                )
+            )
 
         disable_adjust = (os.environ.get("ISA_DISABLE_ADJUSTTEXT", "0") == "1")
+        used_adjust = False
         if not disable_adjust:
             try:
                 from adjustText import adjust_text
+
+                only_move = None
+                if adjust_only_move_points != "none" or adjust_only_move_text != "none":
+                    only_move = {}
+                    if adjust_only_move_points != "none":
+                        only_move["points"] = adjust_only_move_points
+                    if adjust_only_move_text != "none":
+                        only_move["text"] = adjust_only_move_text
 
                 adjust_text(
                     texts,
                     ax=ax,
                     x=dd_lab["_x_"].to_numpy(),
                     y=dd_lab["_y_"].to_numpy(),
-                    expand_points=(1.2, 1.4),
-                    expand_text=(1.2, 1.4),
-                    force_points=(0.2, 0.4),
-                    force_text=(0.2, 0.4),
-                    lim=200,
-                    arrowprops=dict(arrowstyle="-", lw=0.4, alpha=0.6),
+                    expand_points=tuple(adjust_expand_points),
+                    expand_text=tuple(adjust_expand_text),
+                    force_points=tuple(adjust_force_points),
+                    force_text=tuple(adjust_force_text),
+                    lim=adjust_lim,
+                    avoid_self=adjust_avoid_self,
+                    only_move=only_move,
+                    arrowprops=arrowprops,
                 )
+                used_adjust = True
             except Exception:
                 pass
+        if label_arrow and label_arrow_anchor == "bbox":
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            for (xv, yv), txt in zip(dd_lab[["_x_", "_y_"]].to_numpy(), texts):
+                bbox = txt.get_window_extent(renderer=renderer)
+                px, py = ax.transData.transform((xv, yv))
+                cx = min(max(px, bbox.x0), bbox.x1)
+                cy = min(max(py, bbox.y0), bbox.y1)
+                x0, y0 = ax.transData.inverted().transform((cx, cy))
+                ax.plot(
+                    [xv, x0],
+                    [yv, y0],
+                    color=label_arrow_color,
+                    lw=label_arrow_width,
+                    alpha=label_arrow_alpha,
+                )
+        elif label_arrow and not used_adjust:
+            for (xv, yv), txt in zip(dd_lab[["_x_", "_y_"]].to_numpy(), texts):
+                tx, ty = txt.get_position()
+                ax.plot(
+                    [xv, tx],
+                    [yv, ty],
+                    color=label_arrow_color,
+                    lw=label_arrow_width,
+                    alpha=label_arrow_alpha,
+                )
 
     # Legend pane
     if show_legend and leg_ax is not None:
@@ -577,8 +665,90 @@ def main():
     ap.add_argument("--label-max-points", type=int, default=None,
         help="If set, only label the first N points (useful to avoid clutter).",
     )
+    ap.add_argument("--label-bbox", action="store_true",
+        help="Draw a light background box behind labels to improve readability.",
+    )
+    ap.add_argument("--label-bbox-alpha", type=float, default=0.7,
+        help="Label background alpha (default: 0.7).",
+    )
+    ap.add_argument("--label-bbox-color", default="white",
+        help="Label background color (default: white).",
+    )
+    ap.add_argument("--label-bbox-edgecolor", default="none",
+        help="Label background edge color (default: none).",
+    )
+    ap.add_argument("--label-bbox-pad", type=float, default=0.15,
+        help="Label background padding (default: 0.15).",
+    )
+    ap.add_argument("--label-bbox-boxstyle", default="round",
+        help='Label background boxstyle (default: "round").',
+    )
+    ap.add_argument("--label-arrow", action="store_true", default=True,
+        help="Draw connector lines from labels to points (default: on).",
+    )
+    ap.add_argument("--no-label-arrow", action="store_false", dest="label_arrow",
+        help="Disable connector lines from labels to points.",
+    )
+    ap.add_argument("--label-arrow-color", default="black",
+        help='Label connector line color (default: "black").',
+    )
+    ap.add_argument("--label-arrow-width", type=float, default=1.2,
+        help="Label connector line width (default: 1.2).",
+    )
+    ap.add_argument("--label-arrow-alpha", type=float, default=1.0,
+        help="Label connector line alpha (default: 1.0).",
+    )
+    ap.add_argument("--label-arrow-shrinkA", type=float, default=6.0,
+        help="Arrow shrink at text end (default: 6.0).",
+    )
+    ap.add_argument("--label-arrow-shrinkB", type=float, default=0.0,
+        help="Arrow shrink at point end (default: 0.0).",
+    )
+    ap.add_argument("--label-arrow-anchor", choices=["text", "bbox"], default="text",
+        help='Where to anchor connector lines (default: "text"; use "bbox" to attach to label edge).',
+    )
+    ap.add_argument("--adjust-expand-points", type=float, nargs=2, default=(1.4, 1.6),
+        metavar=("X", "Y"),
+        help="adjustText expand for points (default: 1.4 1.6).",
+    )
+    ap.add_argument("--adjust-expand-text", type=float, nargs=2, default=(1.4, 1.6),
+        metavar=("X", "Y"),
+        help="adjustText expand for text (default: 1.4 1.6).",
+    )
+    ap.add_argument("--adjust-force-points", type=float, nargs=2, default=(0.5, 0.8),
+        metavar=("X", "Y"),
+        help="adjustText force for points (default: 0.5 0.8).",
+    )
+    ap.add_argument("--adjust-force-text", type=float, nargs=2, default=(0.5, 0.8),
+        metavar=("X", "Y"),
+        help="adjustText force for text (default: 0.5 0.8).",
+    )
+    ap.add_argument("--adjust-lim", type=int, default=300,
+        help="adjustText iteration limit (default: 300).",
+    )
+    ap.add_argument("--adjust-avoid-self", action="store_true", default=True,
+        help="Keep labels from colliding with their own points (default: on).",
+    )
+    ap.add_argument("--no-adjust-avoid-self", action="store_false", dest="adjust_avoid_self",
+        help="Disable adjustText avoid_self.",
+    )
+    ap.add_argument("--adjust-only-move-points", choices=["x", "y", "xy", "none"], default="xy",
+        help='Restrict adjustText movement for points (default: "xy").',
+    )
+    ap.add_argument("--adjust-only-move-text", choices=["x", "y", "xy", "none"], default="xy",
+        help='Restrict adjustText movement for text (default: "xy").',
+    )
 
     args = ap.parse_args()
+
+    # ---- Label locks (combined plots only; easy to find/adjust) ----
+    LABEL_PVAL_CUTOFF = 100000000000000 #0.05
+    LABEL_STAT_CUTOFF = 0 #0.25
+    # Restrict type labels to specific groups (set to None to allow all types)
+    # Example: {"BAL", "Lung Brush"}
+    TYPE_LABEL_ALLOWLIST = {"Lung Brush", "BAL+Lung Brush", "Lung Brush+Oral Rinse", "BAL"}
+    # Force labels for these status groups in combined plots (set to None to disable)
+    STATUS_LABEL_ALLOWLIST = {"Cancer", "Non-Cancer"}
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
@@ -633,15 +803,24 @@ def main():
         tdf, index_map=type_index_map, palette=type_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=False, prefix="type"
+        force_all_sig=True, prefix="type"
     )
+    type_asv = type_sig["ASV_ID"].astype("object").fillna("").astype(str)
+    type_sig_mask = (
+        pd.to_numeric(type_sig["type_p_value"], errors="coerce") <= LABEL_PVAL_CUTOFF
+    ) & (
+        pd.to_numeric(type_sig["type_stat"], errors="coerce") >= LABEL_STAT_CUTOFF
+    )
+    if TYPE_LABEL_ALLOWLIST is not None:
+        type_sig_mask = type_sig_mask & type_sig["type_label"].isin(TYPE_LABEL_ALLOWLIST)
+    type_sig["label_type_sig"] = np.where(type_sig_mask.fillna(False), type_asv, "")
     type_sig.to_csv(tables_outdir / "type_group_ISA_enriched.tsv", sep="\t", index=False)
 
     status_sig = compute_sig_table(
         sdf, index_map=status_index_map, palette=status_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=False, prefix="status"
+        force_all_sig=True, prefix="status"
     )
     status_sig.to_csv(tables_outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
 
@@ -653,6 +832,38 @@ def main():
         hue_col="type_label",
         type_palette=type_palette,
         plot_size_in=(args.plot_width, args.plot_height),
+    )
+    plot_p_vs_stat_no_overlap(
+        type_sig,
+        plots_outdir / "type_group_ISA_plot_labelled.svg",
+        x_col="type_stat", y_col="type_log_p",
+        hue_col="type_label",
+        type_palette=type_palette,
+        plot_size_in=(args.plot_width, args.plot_height),
+        label_col="label_type_sig",
+        label_fontsize=args.label_fontsize,
+        label_max_points=args.label_max_points,
+        label_bbox=args.label_bbox,
+        label_bbox_alpha=args.label_bbox_alpha,
+        label_bbox_color=args.label_bbox_color,
+        label_bbox_edgecolor=args.label_bbox_edgecolor,
+        label_bbox_pad=args.label_bbox_pad,
+        label_bbox_boxstyle=args.label_bbox_boxstyle,
+        label_arrow=args.label_arrow,
+        label_arrow_color=args.label_arrow_color,
+        label_arrow_width=args.label_arrow_width,
+        label_arrow_alpha=args.label_arrow_alpha,
+        label_arrow_shrinkA=args.label_arrow_shrinkA,
+        label_arrow_shrinkB=args.label_arrow_shrinkB,
+        label_arrow_anchor=args.label_arrow_anchor,
+        adjust_expand_points=args.adjust_expand_points,
+        adjust_expand_text=args.adjust_expand_text,
+        adjust_force_points=args.adjust_force_points,
+        adjust_force_text=args.adjust_force_text,
+        adjust_lim=args.adjust_lim,
+        adjust_avoid_self=args.adjust_avoid_self,
+        adjust_only_move_points=args.adjust_only_move_points,
+        adjust_only_move_text=args.adjust_only_move_text,
     )
 
     # ---- Type plot using Venn membership (optional; force all sig for color only) ----
@@ -727,6 +938,7 @@ def main():
             plot_size_in=(args.plot_width, args.plot_height),
         )
     
+    venn_combined = None
     if ((type_venn_df is not None) and (status_venn_df is not None)):
         # ---- Venn Combined tables/plots: join type + status on ASV ----
         venn_combined = pd.merge(tvenn_sig[["ASV_ID", "type_stat", "type_p_value", "type_log_p",
@@ -734,6 +946,29 @@ def main():
                             svenn_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
                                         "status_significance", "status_label"]],
                             on="ASV_ID", how="outer")
+        venn_asv = venn_combined["ASV_ID"].astype("object").fillna("").astype(str)
+        venn_type_sig = (
+            pd.to_numeric(venn_combined["type_p_value"], errors="coerce") <= LABEL_PVAL_CUTOFF
+        ) & (
+            pd.to_numeric(venn_combined["type_stat"], errors="coerce") >= LABEL_STAT_CUTOFF
+        )
+        if TYPE_LABEL_ALLOWLIST is not None:
+            venn_type_sig = venn_type_sig & venn_combined["type_label"].isin(TYPE_LABEL_ALLOWLIST)
+        venn_status_sig = (
+            pd.to_numeric(venn_combined["status_p_value"], errors="coerce") <= LABEL_PVAL_CUTOFF
+        ) & (
+            pd.to_numeric(venn_combined["status_stat"], errors="coerce") >= LABEL_STAT_CUTOFF
+        )
+        venn_type_sig = venn_type_sig.fillna(False)
+        venn_status_sig = venn_status_sig.fillna(False)
+        if STATUS_LABEL_ALLOWLIST is not None:
+            venn_status_allow = venn_combined["status_label"].isin(STATUS_LABEL_ALLOWLIST)
+        else:
+            venn_status_allow = venn_status_sig
+        venn_combined["label_type_sig"] = np.where(venn_type_sig, venn_asv, "")
+        venn_combined["label_status_sig"] = np.where(venn_status_sig, venn_asv, "")
+        venn_combined["label_status_all"] = np.where(venn_status_allow.fillna(False), venn_asv, "")
+        venn_combined["label_any_sig"] = np.where((venn_type_sig | venn_status_sig), venn_asv, "")
         venn_combined.to_csv(tables_outdir / "Type_status_Venn_results.tsv", sep="\t", index=False)
     
     # ---- Status plot (ISA) ----
@@ -752,6 +987,30 @@ def main():
                         status_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
                                     "status_significance", "status_label"]],
                         on="ASV_ID", how="outer")
+    # Label only significant points for combined plots (based on which palette is used)
+    comb_asv = combined["ASV_ID"].astype("object").fillna("").astype(str)
+    comb_type_sig = (
+        pd.to_numeric(combined["type_p_value"], errors="coerce") <= LABEL_PVAL_CUTOFF
+    ) & (
+        pd.to_numeric(combined["type_stat"], errors="coerce") >= LABEL_STAT_CUTOFF
+    )
+    if TYPE_LABEL_ALLOWLIST is not None:
+        comb_type_sig = comb_type_sig & combined["type_label"].isin(TYPE_LABEL_ALLOWLIST)
+    comb_status_sig = (
+        pd.to_numeric(combined["status_p_value"], errors="coerce") <= LABEL_PVAL_CUTOFF
+    ) & (
+        pd.to_numeric(combined["status_stat"], errors="coerce") >= LABEL_STAT_CUTOFF
+    )
+    comb_type_sig = comb_type_sig.fillna(False)
+    comb_status_sig = comb_status_sig.fillna(False)
+    if STATUS_LABEL_ALLOWLIST is not None:
+        comb_status_allow = combined["status_label"].isin(STATUS_LABEL_ALLOWLIST)
+    else:
+        comb_status_allow = comb_status_sig
+    combined["label_type_sig"] = np.where(comb_type_sig, comb_asv, "")
+    combined["label_status_sig"] = np.where(comb_status_sig, comb_asv, "")
+    combined["label_status_all"] = np.where(comb_status_allow.fillna(False), comb_asv, "")
+    combined["label_any_sig"] = np.where((comb_type_sig | comb_status_sig), comb_asv, "")
     combined.to_csv(tables_outdir / "Type_status_ISA_results.tsv", sep="\t", index=False)
 
     plot_p_vs_stat_no_overlap(
@@ -772,33 +1031,76 @@ def main():
         type_palette=status_palette, # marker_dict=status_markers,
         legend_color_title="Status", #legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
-        label_col=args.label_col,
+        label_col="label_status_all",
         label_fontsize=args.label_fontsize,
         label_max_points=args.label_max_points,
+        label_bbox=args.label_bbox,
+        label_bbox_alpha=args.label_bbox_alpha,
+        label_bbox_color=args.label_bbox_color,
+        label_bbox_edgecolor=args.label_bbox_edgecolor,
+        label_bbox_pad=args.label_bbox_pad,
+        label_bbox_boxstyle=args.label_bbox_boxstyle,
+        label_arrow=args.label_arrow,
+        label_arrow_color=args.label_arrow_color,
+        label_arrow_width=args.label_arrow_width,
+        label_arrow_alpha=args.label_arrow_alpha,
+        label_arrow_shrinkA=args.label_arrow_shrinkA,
+        label_arrow_shrinkB=args.label_arrow_shrinkB,
+        label_arrow_anchor=args.label_arrow_anchor,
+        adjust_expand_points=args.adjust_expand_points,
+        adjust_expand_text=args.adjust_expand_text,
+        adjust_force_points=args.adjust_force_points,
+        adjust_force_text=args.adjust_force_text,
+        adjust_lim=args.adjust_lim,
+        adjust_avoid_self=args.adjust_avoid_self,
+        adjust_only_move_points=args.adjust_only_move_points,
+        adjust_only_move_text=args.adjust_only_move_text,
     )
 
-    plot_p_vs_stat_no_overlap(
-        venn_combined,
-        plots_outdir / "Combined_Venn_plot.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="status_label", # style_col="status_label",
-        type_palette=status_palette, # marker_dict=status_markers,
-        legend_color_title="Status", # legend_marker_title="Status",
-        plot_size_in=(args.plot_width, args.plot_height),
-    )
+    if venn_combined is not None:
+        plot_p_vs_stat_no_overlap(
+            venn_combined,
+            plots_outdir / "Combined_Venn_plot.svg",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="status_label", # style_col="status_label",
+            type_palette=status_palette, # marker_dict=status_markers,
+            legend_color_title="Status", # legend_marker_title="Status",
+            plot_size_in=(args.plot_width, args.plot_height),
+        )
 
-    plot_p_vs_stat_no_overlap(
-        venn_combined,
-        plots_outdir / "Combined_Venn_plot_labelled.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="status_label", # style_col="status_label",
-        type_palette=status_palette, # marker_dict=status_markers,
-        legend_color_title="Status", # legend_marker_title="Status",
-        plot_size_in=(args.plot_width, args.plot_height),
-        label_col=args.label_col,
-        label_fontsize=args.label_fontsize,
-        label_max_points=args.label_max_points,
-    )
+        plot_p_vs_stat_no_overlap(
+            venn_combined,
+            plots_outdir / "Combined_Venn_plot_labelled.svg",
+            x_col="type_stat", y_col="type_log_p",
+            hue_col="status_label", # style_col="status_label",
+            type_palette=status_palette, # marker_dict=status_markers,
+            legend_color_title="Status", # legend_marker_title="Status",
+            plot_size_in=(args.plot_width, args.plot_height),
+            label_col="label_status_all",
+            label_fontsize=args.label_fontsize,
+            label_max_points=args.label_max_points,
+            label_bbox=args.label_bbox,
+            label_bbox_alpha=args.label_bbox_alpha,
+            label_bbox_color=args.label_bbox_color,
+            label_bbox_edgecolor=args.label_bbox_edgecolor,
+            label_bbox_pad=args.label_bbox_pad,
+            label_bbox_boxstyle=args.label_bbox_boxstyle,
+            label_arrow=args.label_arrow,
+            label_arrow_color=args.label_arrow_color,
+            label_arrow_width=args.label_arrow_width,
+            label_arrow_alpha=args.label_arrow_alpha,
+            label_arrow_shrinkA=args.label_arrow_shrinkA,
+            label_arrow_shrinkB=args.label_arrow_shrinkB,
+            label_arrow_anchor=args.label_arrow_anchor,
+            adjust_expand_points=args.adjust_expand_points,
+            adjust_expand_text=args.adjust_expand_text,
+            adjust_force_points=args.adjust_force_points,
+            adjust_force_text=args.adjust_force_text,
+            adjust_lim=args.adjust_lim,
+            adjust_avoid_self=args.adjust_avoid_self,
+            adjust_only_move_points=args.adjust_only_move_points,
+            adjust_only_move_text=args.adjust_only_move_text,
+        )
 
     # ---- Phylum-colored variants (if taxonomy provided) ----
     if tax_df is not None:
@@ -837,36 +1139,79 @@ def main():
             type_palette=phyl_pal, # marker_dict=status_markers,
             legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
-            label_col=args.label_col,
+            label_col="label_any_sig",
             label_fontsize=args.label_fontsize,
             label_max_points=args.label_max_points,           
+            label_bbox=args.label_bbox,
+            label_bbox_alpha=args.label_bbox_alpha,
+            label_bbox_color=args.label_bbox_color,
+            label_bbox_edgecolor=args.label_bbox_edgecolor,
+            label_bbox_pad=args.label_bbox_pad,
+            label_bbox_boxstyle=args.label_bbox_boxstyle,
+            label_arrow=args.label_arrow,
+            label_arrow_color=args.label_arrow_color,
+            label_arrow_width=args.label_arrow_width,
+            label_arrow_alpha=args.label_arrow_alpha,
+            label_arrow_shrinkA=args.label_arrow_shrinkA,
+            label_arrow_shrinkB=args.label_arrow_shrinkB,
+            label_arrow_anchor=args.label_arrow_anchor,
+            adjust_expand_points=args.adjust_expand_points,
+            adjust_expand_text=args.adjust_expand_text,
+            adjust_force_points=args.adjust_force_points,
+            adjust_force_text=args.adjust_force_text,
+            adjust_lim=args.adjust_lim,
+            adjust_avoid_self=args.adjust_avoid_self,
+            adjust_only_move_points=args.adjust_only_move_points,
+            adjust_only_move_text=args.adjust_only_move_text,
         )
 
         # Venn Combined + taxonomy
-        venn_comb_tax = venn_combined.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
-        venn_comb_tax.to_csv(tables_outdir / "Combined_Venn_with_taxonomy.tsv", sep="\t", index=False)
-        plot_p_vs_stat_no_overlap(
-            venn_comb_tax,
-            plots_outdir / "Combined_Venn_plot_Phylum.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="Phylum", # style_col="status_label",
-            type_palette=phyl_pal, # marker_dict=status_markers,
-            legend_color_title="Phylum", # legend_marker_title="Status",
-            plot_size_in=(args.plot_width, args.plot_height),
-        )
+        if venn_combined is not None:
+            venn_comb_tax = venn_combined.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
+            venn_comb_tax.to_csv(tables_outdir / "Combined_Venn_with_taxonomy.tsv", sep="\t", index=False)
+            plot_p_vs_stat_no_overlap(
+                venn_comb_tax,
+                plots_outdir / "Combined_Venn_plot_Phylum.svg",
+                x_col="type_stat", y_col="type_log_p",
+                hue_col="Phylum", # style_col="status_label",
+                type_palette=phyl_pal, # marker_dict=status_markers,
+                legend_color_title="Phylum", # legend_marker_title="Status",
+                plot_size_in=(args.plot_width, args.plot_height),
+            )
 
-        plot_p_vs_stat_no_overlap(
-            venn_comb_tax,
-            plots_outdir / "Combined_Venn_plot_Phylum_labelled.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="Phylum", # style_col="status_label",
-            type_palette=phyl_pal, # marker_dict=status_markers,
-            legend_color_title="Phylum", # legend_marker_title="Status",
-            plot_size_in=(args.plot_width, args.plot_height),
-            label_col=args.label_col,
-            label_fontsize=args.label_fontsize,
-            label_max_points=args.label_max_points,           
-        )
+            plot_p_vs_stat_no_overlap(
+                venn_comb_tax,
+                plots_outdir / "Combined_Venn_plot_Phylum_labelled.svg",
+                x_col="type_stat", y_col="type_log_p",
+                hue_col="Phylum", # style_col="status_label",
+                type_palette=phyl_pal, # marker_dict=status_markers,
+                legend_color_title="Phylum", # legend_marker_title="Status",
+                plot_size_in=(args.plot_width, args.plot_height),
+                label_col="label_any_sig",
+                label_fontsize=args.label_fontsize,
+                label_max_points=args.label_max_points,           
+                label_bbox=args.label_bbox,
+                label_bbox_alpha=args.label_bbox_alpha,
+                label_bbox_color=args.label_bbox_color,
+                label_bbox_edgecolor=args.label_bbox_edgecolor,
+                label_bbox_pad=args.label_bbox_pad,
+                label_bbox_boxstyle=args.label_bbox_boxstyle,
+                label_arrow=args.label_arrow,
+                label_arrow_color=args.label_arrow_color,
+                label_arrow_width=args.label_arrow_width,
+                label_arrow_alpha=args.label_arrow_alpha,
+                label_arrow_shrinkA=args.label_arrow_shrinkA,
+                label_arrow_shrinkB=args.label_arrow_shrinkB,
+                label_arrow_anchor=args.label_arrow_anchor,
+                adjust_expand_points=args.adjust_expand_points,
+                adjust_expand_text=args.adjust_expand_text,
+                adjust_force_points=args.adjust_force_points,
+                adjust_force_text=args.adjust_force_text,
+                adjust_lim=args.adjust_lim,
+                adjust_avoid_self=args.adjust_avoid_self,
+                adjust_only_move_points=args.adjust_only_move_points,
+                adjust_only_move_text=args.adjust_only_move_text,
+            )
 
     print(f"Done. Outputs in: {outdir}")
 
