@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""
+Actual-data taxonomic abundance analysis (Cancer vs Control) stratified by sample type.
+
+Matches the taxonomic levels used in power analysis scripts:
+- Phylum
+- Family
+
+For each tax level and sample type:
+1) Aggregate ASV counts to taxon per sample
+2) Aggregate to patient level (sum across samples per patient)
+3) Convert to relative abundance
+4) Test Cancer vs Control per taxon (Mann-Whitney U, two-sided)
+5) BH-FDR correction within each tax level x sample type set
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+
+
+def aggregate_to_taxonomy(long_df: pd.DataFrame, tax_level: str, sample_col: str, count_col: str) -> pd.DataFrame:
+    agg = long_df.groupby([sample_col, tax_level], as_index=False)[count_col].sum()
+    wide = agg.pivot(index=sample_col, columns=tax_level, values=count_col).fillna(0)
+    return wide
+
+
+def relative_abundance(counts: np.ndarray) -> np.ndarray:
+    totals = counts.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return counts / totals
+
+
+def cohens_d(x: np.ndarray, y: np.ndarray) -> float:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) < 2 or len(y) < 2:
+        return np.nan
+    vx = np.var(x, ddof=1)
+    vy = np.var(y, ddof=1)
+    pooled = ((len(x) - 1) * vx + (len(y) - 1) * vy) / (len(x) + len(y) - 2)
+    if pooled <= 0:
+        return 0.0
+    return (np.mean(x) - np.mean(y)) / np.sqrt(pooled)
+
+
+def run_one_group(
+    long_df: pd.DataFrame,
+    tax_level: str,
+    sample_type: str,
+    sample_col: str,
+    patient_col: str,
+    case_col: str,
+    type_col: str,
+    count_col: str,
+    min_prevalence: float,
+) -> pd.DataFrame:
+    st = long_df[long_df[type_col] == sample_type].copy()
+    if st.empty:
+        return pd.DataFrame()
+
+    tax_wide = aggregate_to_taxonomy(st, tax_level, sample_col, count_col)
+
+    meta = st[[sample_col, patient_col, case_col]].drop_duplicates().set_index(sample_col)
+    sample_ids = meta.index.intersection(tax_wide.index)
+    if len(sample_ids) == 0:
+        return pd.DataFrame()
+
+    meta = meta.loc[sample_ids].copy()
+    tax_wide = tax_wide.loc[sample_ids].copy()
+
+    prevalence = (tax_wide > 0).mean(axis=0)
+    keep_taxa = prevalence[prevalence >= min_prevalence].index.tolist()
+    if len(keep_taxa) == 0:
+        return pd.DataFrame()
+
+    tax_wide = tax_wide[keep_taxa]
+
+    # patient-level aggregation
+    patient_counts = tax_wide.join(meta[[patient_col]]).groupby(patient_col).sum()
+    patient_case = (
+        meta[[patient_col, case_col]]
+        .drop_duplicates()
+        .assign(case_status=lambda d: np.where(d[case_col].isin(["Control", "Non-Cancer"]), "Control", "Cancer"))
+        .groupby(patient_col, as_index=False)["case_status"].first()
+        .set_index(patient_col)
+    )
+
+    common_patients = patient_counts.index.intersection(patient_case.index)
+    patient_counts = patient_counts.loc[common_patients]
+    patient_case = patient_case.loc[common_patients]
+
+    rel = pd.DataFrame(
+        relative_abundance(patient_counts.values),
+        index=patient_counts.index,
+        columns=patient_counts.columns,
+    )
+
+    labels = patient_case["case_status"]
+    n_cancer = int((labels == "Cancer").sum())
+    n_control = int((labels == "Control").sum())
+
+    rows = []
+    for taxon in rel.columns:
+        x = rel.loc[labels == "Cancer", taxon].values
+        y = rel.loc[labels == "Control", taxon].values
+
+        if len(x) >= 2 and len(y) >= 2:
+            stat, p = mannwhitneyu(x, y, alternative="two-sided")
+        else:
+            stat, p = np.nan, np.nan
+
+        rows.append(
+            {
+                "tax_level": tax_level,
+                "sample_type": sample_type,
+                "taxon": taxon,
+                "n_patients_total": len(common_patients),
+                "n_cancer": n_cancer,
+                "n_control": n_control,
+                "median_cancer": float(np.median(x)) if len(x) else np.nan,
+                "median_control": float(np.median(y)) if len(y) else np.nan,
+                "delta_median": float(np.median(x) - np.median(y)) if len(x) and len(y) else np.nan,
+                "cohens_d": cohens_d(x, y),
+                "mw_u": float(stat) if not np.isnan(stat) else np.nan,
+                "p_value": float(p) if not np.isnan(p) else np.nan,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    valid = out["p_value"].notna()
+    out["q_value"] = np.nan
+    if valid.sum() > 0:
+        out.loc[valid, "q_value"] = multipletests(out.loc[valid, "p_value"], method="fdr_bh")[1]
+    out["significant_fdr_0.05"] = out["q_value"] < 0.05
+    return out.sort_values("q_value", na_position="last")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Taxonomic abundance analysis (Cancer vs Control) on observed data")
+    p.add_argument("--data-long", required=True)
+    p.add_argument("--tax-levels", default="Phylum,Family")
+    p.add_argument("--sample-types", default="BAL,Lung Brush,Oral Rinse")
+    p.add_argument("--sample-col", default="lmp_id")
+    p.add_argument("--patient-col", default="Participant_ID")
+    p.add_argument("--case-col", default="Case")
+    p.add_argument("--type-col", default="type_group")
+    p.add_argument("--count-col", default="count")
+    p.add_argument("--min-prevalence", type=float, default=0.10)
+    p.add_argument("--outdir", required=True)
+    args = p.parse_args()
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    long_df = pd.read_csv(args.data_long, sep="\t", low_memory=False)
+
+    tax_levels = [x.strip() for x in args.tax_levels.split(",") if x.strip()]
+    sample_types = [x.strip() for x in args.sample_types.split(",") if x.strip()]
+
+    all_results = []
+    for tax_level in tax_levels:
+        for st in sample_types:
+            res = run_one_group(
+                long_df,
+                tax_level=tax_level,
+                sample_type=st,
+                sample_col=args.sample_col,
+                patient_col=args.patient_col,
+                case_col=args.case_col,
+                type_col=args.type_col,
+                count_col=args.count_col,
+                min_prevalence=args.min_prevalence,
+            )
+            if not res.empty:
+                all_results.append(res)
+
+    if not all_results:
+        raise SystemExit("No results produced; check filters/column names.")
+
+    results = pd.concat(all_results, ignore_index=True)
+    results.to_csv(outdir / "taxonomic_abundance_observed.tsv", sep="\t", index=False)
+    results[results["significant_fdr_0.05"]].to_csv(
+        outdir / "taxonomic_abundance_observed_significant.tsv", sep="\t", index=False
+    )
+
+    print(f"Saved: {outdir / 'taxonomic_abundance_observed.tsv'}")
+    print(f"Saved: {outdir / 'taxonomic_abundance_observed_significant.tsv'}")
+
+
+if __name__ == "__main__":
+    main()

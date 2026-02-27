@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""
+Actual-data taxonomic abundance analysis across sample types.
+
+Matches power-analysis taxonomy levels and paired structure.
+For each taxon at each taxonomic level:
+- Omnibus (optional): Friedman test across sample types for patients with all types
+- Pairwise planned comparisons (paired Wilcoxon signed-rank):
+  BAL vs Oral Rinse, BAL vs Lung Brush, Oral Rinse vs Lung Brush
+- BH-FDR correction across taxa per contrast (and for omnibus separately)
+"""
+
+from __future__ import annotations
+
+import argparse
+from itertools import combinations
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy.stats import friedmanchisquare, wilcoxon
+from statsmodels.stats.multitest import multipletests
+
+
+def aggregate_to_taxonomy(long_df: pd.DataFrame, tax_level: str, sample_col: str, count_col: str) -> pd.DataFrame:
+    agg = long_df.groupby([sample_col, tax_level], as_index=False)[count_col].sum()
+    wide = agg.pivot(index=sample_col, columns=tax_level, values=count_col).fillna(0)
+    return wide
+
+
+def relative_abundance(counts: np.ndarray) -> np.ndarray:
+    totals = counts.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return counts / totals
+
+
+def prepare_patient_type_table(
+    long_df: pd.DataFrame,
+    tax_level: str,
+    sample_col: str,
+    patient_col: str,
+    type_col: str,
+    count_col: str,
+    min_prevalence: float,
+    sample_types: list[str],
+) -> tuple[dict[str, pd.DataFrame], list[str]]:
+    df = long_df[long_df[type_col].isin(sample_types)].copy()
+    tax_wide = aggregate_to_taxonomy(df, tax_level, sample_col, count_col)
+    meta = df[[sample_col, patient_col, type_col]].drop_duplicates().set_index(sample_col)
+    sample_ids = meta.index.intersection(tax_wide.index)
+    meta = meta.loc[sample_ids].copy()
+    tax_wide = tax_wide.loc[sample_ids].copy()
+
+    prevalence = (tax_wide > 0).mean(axis=0)
+    keep_taxa = prevalence[prevalence >= min_prevalence].index.tolist()
+    tax_wide = tax_wide[keep_taxa]
+
+    patient_by_type: dict[str, pd.DataFrame] = {}
+    for st in sample_types:
+        st_samples = meta.index[meta[type_col] == st]
+        if len(st_samples) == 0:
+            continue
+        st_counts = tax_wide.loc[st_samples].copy()
+        st_patients = meta.loc[st_samples, patient_col].values
+
+        # aggregate to one row per patient for this type
+        patient_counts = st_counts.assign(_patient=st_patients).groupby("_patient").sum()
+        rel = pd.DataFrame(relative_abundance(patient_counts.values), index=patient_counts.index, columns=patient_counts.columns)
+        patient_by_type[st] = rel
+
+    return patient_by_type, keep_taxa
+
+
+def run_pairwise_tests(patient_by_type: dict[str, pd.DataFrame], taxa: list[str], pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    rows = []
+    for a, b in pairs:
+        if a not in patient_by_type or b not in patient_by_type:
+            continue
+        shared = patient_by_type[a].index.intersection(patient_by_type[b].index)
+        for taxon in taxa:
+            if len(shared) >= 3:
+                x = patient_by_type[a].loc[shared, taxon].values
+                y = patient_by_type[b].loc[shared, taxon].values
+                try:
+                    stat, p = wilcoxon(x, y, zero_method="wilcox", correction=False, alternative="two-sided", mode="auto")
+                except ValueError:
+                    stat, p = np.nan, 1.0
+                median_delta = float(np.median(x - y))
+            else:
+                stat, p, median_delta = np.nan, np.nan, np.nan
+
+            rows.append(
+                {
+                    "contrast": f"{a}_vs_{b}",
+                    "group1": a,
+                    "group2": b,
+                    "taxon": taxon,
+                    "n_paired_patients": len(shared),
+                    "median_delta_g1_minus_g2": median_delta,
+                    "wilcoxon_w": float(stat) if not np.isnan(stat) else np.nan,
+                    "p_value": float(p) if not np.isnan(p) else np.nan,
+                }
+            )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+
+    out["q_value"] = np.nan
+    for c in out["contrast"].unique():
+        idx = out["contrast"] == c
+        valid = idx & out["p_value"].notna()
+        if valid.sum() > 0:
+            out.loc[valid, "q_value"] = multipletests(out.loc[valid, "p_value"], method="fdr_bh")[1]
+    out["significant_fdr_0.05"] = out["q_value"] < 0.05
+    return out
+
+
+def run_omnibus_friedman(patient_by_type: dict[str, pd.DataFrame], taxa: list[str], sample_types: list[str]) -> pd.DataFrame:
+    available = [s for s in sample_types if s in patient_by_type]
+    if len(available) < 3:
+        return pd.DataFrame()
+
+    shared = patient_by_type[available[0]].index
+    for s in available[1:]:
+        shared = shared.intersection(patient_by_type[s].index)
+
+    rows = []
+    for taxon in taxa:
+        if len(shared) >= 3:
+            vectors = [patient_by_type[s].loc[shared, taxon].values for s in available]
+            try:
+                stat, p = friedmanchisquare(*vectors)
+            except ValueError:
+                stat, p = np.nan, np.nan
+        else:
+            stat, p = np.nan, np.nan
+
+        rows.append(
+            {
+                "test": "friedman",
+                "sample_types": "|".join(available),
+                "taxon": taxon,
+                "n_complete_patients": len(shared),
+                "friedman_chi2": float(stat) if not np.isnan(stat) else np.nan,
+                "p_value": float(p) if not np.isnan(p) else np.nan,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    valid = out["p_value"].notna()
+    out["q_value"] = np.nan
+    if valid.sum() > 0:
+        out.loc[valid, "q_value"] = multipletests(out.loc[valid, "p_value"], method="fdr_bh")[1]
+    out["significant_fdr_0.05"] = out["q_value"] < 0.05
+    return out
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Taxonomic abundance analysis across sample types on observed data")
+    p.add_argument("--data-long", required=True)
+    p.add_argument("--tax-levels", default="Phylum,Family")
+    p.add_argument("--sample-types", default="BAL,Oral Rinse,Lung Brush")
+    p.add_argument("--sample-col", default="lmp_id")
+    p.add_argument("--patient-col", default="Participant_ID")
+    p.add_argument("--type-col", default="type_group")
+    p.add_argument("--count-col", default="count")
+    p.add_argument("--min-prevalence", type=float, default=0.10)
+    p.add_argument("--skip-omnibus", action="store_true")
+    p.add_argument("--outdir", required=True)
+    args = p.parse_args()
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    long_df = pd.read_csv(args.data_long, sep="\t", low_memory=False)
+    tax_levels = [x.strip() for x in args.tax_levels.split(",") if x.strip()]
+    sample_types = [x.strip() for x in args.sample_types.split(",") if x.strip()]
+    pairs = list(combinations(sample_types, 2))
+
+    pair_results = []
+    omni_results = []
+
+    for tax_level in tax_levels:
+        patient_by_type, taxa = prepare_patient_type_table(
+            long_df,
+            tax_level=tax_level,
+            sample_col=args.sample_col,
+            patient_col=args.patient_col,
+            type_col=args.type_col,
+            count_col=args.count_col,
+            min_prevalence=args.min_prevalence,
+            sample_types=sample_types,
+        )
+
+        pair_df = run_pairwise_tests(patient_by_type, taxa, pairs)
+        if not pair_df.empty:
+            pair_df.insert(0, "tax_level", tax_level)
+            pair_results.append(pair_df)
+
+        if not args.skip_omnibus:
+            omni_df = run_omnibus_friedman(patient_by_type, taxa, sample_types)
+            if not omni_df.empty:
+                omni_df.insert(0, "tax_level", tax_level)
+                omni_results.append(omni_df)
+
+    if pair_results:
+        pair_out = pd.concat(pair_results, ignore_index=True)
+        pair_out.to_csv(outdir / "taxonomic_sample_type_observed_pairwise.tsv", sep="\t", index=False)
+        pair_out[pair_out["significant_fdr_0.05"]].to_csv(
+            outdir / "taxonomic_sample_type_observed_pairwise_significant.tsv", sep="\t", index=False
+        )
+        print(f"Saved: {outdir / 'taxonomic_sample_type_observed_pairwise.tsv'}")
+
+    if omni_results:
+        omni_out = pd.concat(omni_results, ignore_index=True)
+        omni_out.to_csv(outdir / "taxonomic_sample_type_observed_omnibus.tsv", sep="\t", index=False)
+        omni_out[omni_out["significant_fdr_0.05"]].to_csv(
+            outdir / "taxonomic_sample_type_observed_omnibus_significant.tsv", sep="\t", index=False
+        )
+        print(f"Saved: {outdir / 'taxonomic_sample_type_observed_omnibus.tsv'}")
+
+
+if __name__ == "__main__":
+    main()
