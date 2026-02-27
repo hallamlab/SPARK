@@ -33,6 +33,18 @@ def relative_abundance(counts: np.ndarray) -> np.ndarray:
     return counts / totals
 
 
+def rclr_transform(df: pd.DataFrame) -> pd.DataFrame:
+    arr = df.values.astype(float)
+    out = np.zeros_like(arr, dtype=float)
+    for i in range(arr.shape[0]):
+        row = arr[i, :]
+        pos = row > 0
+        if np.any(pos):
+            lv = np.log(row[pos])
+            out[i, pos] = lv - lv.mean()
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
+
+
 def prepare_patient_type_table(
     long_df: pd.DataFrame,
     tax_level: str,
@@ -42,6 +54,7 @@ def prepare_patient_type_table(
     count_col: str,
     min_prevalence: float,
     sample_types: list[str],
+    transform: str,
 ) -> tuple[dict[str, pd.DataFrame], list[str]]:
     df = long_df[long_df[type_col].isin(sample_types)].copy()
     tax_wide = aggregate_to_taxonomy(df, tax_level, sample_col, count_col)
@@ -64,8 +77,11 @@ def prepare_patient_type_table(
 
         # aggregate to one row per patient for this type
         patient_counts = st_counts.assign(_patient=st_patients).groupby("_patient").sum()
-        rel = pd.DataFrame(relative_abundance(patient_counts.values), index=patient_counts.index, columns=patient_counts.columns)
-        patient_by_type[st] = rel
+        if transform == "rclr":
+            features = rclr_transform(patient_counts)
+        else:
+            features = pd.DataFrame(relative_abundance(patient_counts.values), index=patient_counts.index, columns=patient_counts.columns)
+        patient_by_type[st] = features
 
     return patient_by_type, keep_taxa
 
@@ -166,6 +182,7 @@ def main() -> None:
     p.add_argument("--count-col", default="count")
     p.add_argument("--min-prevalence", type=float, default=0.10)
     p.add_argument("--skip-omnibus", action="store_true")
+    p.add_argument("--transform", choices=["none", "rclr"], default="none")
     p.add_argument("--outdir", required=True)
     args = p.parse_args()
 
@@ -190,6 +207,7 @@ def main() -> None:
             count_col=args.count_col,
             min_prevalence=args.min_prevalence,
             sample_types=sample_types,
+            transform=args.transform,
         )
 
         pair_df = run_pairwise_tests(patient_by_type, taxa, pairs)

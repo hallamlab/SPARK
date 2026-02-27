@@ -53,6 +53,9 @@ plt.rcParams['font.family'] = 'Source Sans Pro'
 sns.set_theme()
 sns.set_style("white")
 
+# Global significance alpha used for horizontal threshold lines in log-p plots.
+SIG_LINE_ALPHA = None
+
 
 # ------------------------------- Utilities ----------------------------------
 def parse_mapping(s: str) -> dict:
@@ -131,6 +134,7 @@ def compute_sig_table(
     index_map: dict,
     palette: dict,
     p_col: str = "p.value",
+    q_col: str = "q.value",
     stat_col: str = "stat",
     idx_col: str = "index",
     p_thresh: float = 0.05,
@@ -148,6 +152,8 @@ def compute_sig_table(
     # coerce/validate key columns
     ensure_cols(df, [p_col, stat_col, idx_col], "indicspecies sign table")
     df[ p_col] = pd.to_numeric(df[p_col], errors="coerce")
+    if q_col in df.columns:
+        df[q_col] = pd.to_numeric(df[q_col], errors="coerce")
     df[stat_col] = pd.to_numeric(df[stat_col], errors="coerce")
     df[idx_col] = pd.to_numeric(df[idx_col], errors="coerce").astype("Int64")
 
@@ -160,11 +166,12 @@ def compute_sig_table(
     with np.errstate(divide="ignore", invalid="ignore"):
         df[f"{prefix}_log_p"] = (-np.log10(df[p_col])).replace([np.inf, -np.inf], np.nan).round(3)
 
-    # significance
+    # significance: prefer corrected q-values when available.
+    sig_metric = q_col if q_col in df.columns else p_col
     if force_all_sig:
         df[f"{prefix}_significance"] = True
     else:
-        df[f"{prefix}_significance"] = (df[p_col] < p_thresh) & (df[stat_col] > stat_thresh)
+        df[f"{prefix}_significance"] = (df[sig_metric] < p_thresh) & (df[stat_col] > stat_thresh)
 
     # label from index_map
     def idx_to_label(x):
@@ -184,6 +191,7 @@ def compute_sig_table(
     # rename canonical columns for consistency
     df.rename(columns={
         p_col:  f"{prefix}_p_value",
+        q_col:  f"{prefix}_q_value",
         stat_col: f"{prefix}_stat",
         idx_col:  f"{prefix}_index"
     }, inplace=True)
@@ -459,6 +467,10 @@ def plot_p_vs_stat_no_overlap(
     )
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
+    if SIG_LINE_ALPHA is not None and isinstance(SIG_LINE_ALPHA, (int, float)) and SIG_LINE_ALPHA > 0:
+        if y_col.endswith("_log_p"):
+            y_thr = -np.log10(SIG_LINE_ALPHA)
+            ax.axhline(y=y_thr, linestyle="--", linewidth=1.0, color="gray", alpha=0.8)
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
     ax.set_ylim(ymin - 0.05, ymax + 0.05)
     if invert_y:
@@ -608,6 +620,7 @@ def plot_p_vs_stat_no_overlap(
 
 # ------------------------------- Main ---------------------------------------
 def main():
+    global SIG_LINE_ALPHA
     ap = argparse.ArgumentParser(
         description="Refactored ISA plotting pipeline (indicspecies -> tidy tables + figures)."
     )
@@ -740,6 +753,7 @@ def main():
     )
 
     args = ap.parse_args()
+    SIG_LINE_ALPHA = args.p_thresh
 
     # ---- Label locks (combined plots only; easy to find/adjust) ----
     LABEL_PVAL_CUTOFF = 100000000000000 #0.05
@@ -796,6 +810,9 @@ def main():
 
     type_palette = parse_mapping(args.type_palette)
     status_palette = parse_mapping(args.status_palette)
+    # Ensure background class is always color-mapped for seaborn categorical plots.
+    type_palette.setdefault("not_indicator", "lightgray")
+    status_palette.setdefault("not_indicator", "lightgray")
     status_markers = parse_mapping(args.status_markers)
 
     # ---- Build significance tables ----
@@ -803,7 +820,7 @@ def main():
         tdf, index_map=type_index_map, palette=type_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=True, prefix="type"
+        force_all_sig=False, prefix="type"
     )
     type_asv = type_sig["ASV_ID"].astype("object").fillna("").astype(str)
     type_sig_mask = (
@@ -820,7 +837,7 @@ def main():
         sdf, index_map=status_index_map, palette=status_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=True, prefix="status"
+        force_all_sig=False, prefix="status"
     )
     status_sig.to_csv(tables_outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
 

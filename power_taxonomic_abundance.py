@@ -18,6 +18,21 @@ from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 
+def apply_transform(count_matrix, transform):
+    if transform == 'rclr':
+        out = np.zeros_like(count_matrix, dtype=float)
+        for i in range(count_matrix.shape[0]):
+            row = count_matrix[i, :].astype(float)
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return out
+    totals = count_matrix.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return count_matrix / totals
+
+
 def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     """
     Aggregate ASV counts to taxonomic level.
@@ -212,7 +227,8 @@ def bootstrap_patients_with_spike(count_matrix, patient_ids, case_status,
 
 def run_power_simulation(count_matrix, patient_ids, case_status, taxa_names,
                          spike_scenario, n_cancer, n_control,
-                         n_simulations=1000, alpha=0.05, seed=42, use_true_null=False):
+                         n_simulations=1000, alpha=0.05, seed=42, use_true_null=False,
+                         transform='none'):
     """
     Run power simulation for taxonomic differential abundance.
 
@@ -256,8 +272,7 @@ def run_power_simulation(count_matrix, patient_ids, case_status, taxa_names,
 
         patient_case_labels = np.array([patient_to_case[p] for p in unique_patients])
 
-        # Convert to relative abundance
-        patient_rel_abund = relative_abundance(patient_counts)
+        patient_rel_abund = apply_transform(patient_counts, transform)
 
         # T-tests for each taxon
         p_values = []
@@ -318,6 +333,7 @@ def main():
     parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--sample-col", default="lmp_id")
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -414,7 +430,8 @@ def main():
                         n_simulations=args.n_simulations,
                         alpha=args.alpha,
                         seed=args.seed,
-                        use_true_null=scenario.get('use_true_null', False)
+                        use_true_null=scenario.get('use_true_null', False),
+                        transform=args.transform
                     )
 
                     print(f"→ Power={power:.3f}, Sens={sensitivity:.3f}, FDR={fdr:.3f}")

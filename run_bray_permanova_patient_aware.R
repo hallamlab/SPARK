@@ -17,6 +17,8 @@ option_list <- list(
   make_option("--type-col", type = "character", default = "type_group", help = "Sample type column"),
   make_option("--sample-types", type = "character", default = "Oral Rinse,BAL,Lung Brush",
               help = "Comma-separated sample types to include"),
+  make_option("--transform", type = "character", default = "none",
+              help = "Distance input transform: none (TSS+Bray) or rclr (Euclidean) [default: %default]"),
   make_option("--permutations", type = "integer", default = 9999, help = "Number of permutations"),
   make_option("--seed", type = "integer", default = 42, help = "Random seed"),
   make_option("--require-complete-types", action = "store_true", default = FALSE,
@@ -49,6 +51,7 @@ args$patient_col <- resolve_arg(args, "patient_col")
 args$case_col <- resolve_arg(args, "case_col")
 args$type_col <- resolve_arg(args, "type_col")
 args$sample_types <- resolve_arg(args, "sample_types")
+args$transform <- resolve_arg(args, "transform")
 args$permutations <- resolve_arg(args, "permutations")
 args$seed <- resolve_arg(args, "seed")
 args$require_complete_types <- resolve_arg(args, "require_complete_types")
@@ -58,6 +61,9 @@ required <- c("data_wide", "data_long", "outdir")
 missing <- required[sapply(required, function(x) is.null(args[[x]]))]
 if (length(missing) > 0) {
   stop(sprintf("Missing required args: %s", paste(missing, collapse = ", ")))
+}
+if (!(args$transform %in% c("none", "rclr"))) {
+  stop("--transform must be one of: none, rclr")
 }
 
 set.seed(args$seed)
@@ -85,6 +91,26 @@ normalize_tss <- function(mat) {
   rs <- rowSums(mat)
   rs[rs == 0] <- 1
   mat / rs
+}
+
+rclr_transform <- function(mat) {
+  out <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  for (i in seq_len(nrow(mat))) {
+    v <- as.numeric(mat[i, ])
+    pos <- !is.na(v) & v > 0
+    if (any(pos)) {
+      lv <- log(v[pos])
+      out[i, pos] <- lv - mean(lv)
+    }
+  }
+  out
+}
+
+prepare_dist_input <- function(mat, transform) {
+  if (transform == "rclr") {
+    return(rclr_transform(mat))
+  }
+  normalize_tss(mat)
 }
 
 tidy_adonis <- function(adonis_obj, model_label) {
@@ -119,7 +145,7 @@ extract_adonis_term <- function(adonis_obj, term, model_label, extra_cols = list
   out
 }
 
-run_betadisper <- function(dist_obj, grouping, permutations, label) {
+run_betadisper <- function(dist_obj, grouping, permutations, label, metric_label) {
   grp <- droplevels(as.factor(grouping))
   if (nlevels(grp) < 2) {
     return(data.frame(
@@ -140,7 +166,7 @@ run_betadisper <- function(dist_obj, grouping, permutations, label) {
     model = label,
     statistic = as.numeric(ptest$tab[1, f_col[1]]),
     p_value = as.numeric(ptest$tab[1, p_col[1]]),
-    note = "PERMDISP on Bray-Curtis",
+    note = paste0("PERMDISP on ", metric_label),
     stringsAsFactors = FALSE
   )
 }
@@ -175,7 +201,10 @@ cat("Bray-Curtis PERMANOVA (Patient-Aware)\n")
 cat("============================================================\n")
 cat(sprintf("Seed: %d | Permutations: %d\n", args$seed, args$permutations))
 cat(sprintf("Requested sample types: %s\n", paste(sample_types_keep_raw, collapse = ", ")))
-cat(sprintf("Using sample types: %s\n\n", paste(sample_types_keep, collapse = ", ")))
+cat(sprintf("Using sample types: %s\n", paste(sample_types_keep, collapse = ", ")))
+metric_method <- ifelse(args$transform == "rclr", "euclidean", "bray")
+metric_label <- ifelse(args$transform == "rclr", "Euclidean (rCLR)", "Bray-Curtis (TSS)")
+cat(sprintf("Distance metric: %s\n\n", metric_label))
 
 cat("Loading data...\n")
 long_df <- read.delim(args$data_long, stringsAsFactors = FALSE, check.names = FALSE)
@@ -278,8 +307,8 @@ if (nrow(counts_for_type) < 4) {
   stop("Too few rows for sample-type analysis after filtering.")
 }
 
-counts_for_type_rel <- normalize_tss(counts_for_type)
-dist_type <- vegdist(counts_for_type_rel, method = "bray")
+counts_for_type_dist <- prepare_dist_input(counts_for_type, args$transform)
+dist_type <- vegdist(counts_for_type_dist, method = metric_method)
 
 perm_type <- how(nperm = args$permutations, blocks = pt_for_type$patient_id)
 adonis_type <- adonis2(dist_type ~ sample_type, data = pt_for_type, permutations = perm_type, by = "margin")
@@ -308,8 +337,8 @@ for (pair in all_pairs) {
   }
 
   sub_counts <- counts_for_type[sub_meta$pt_key, , drop = FALSE]
-  sub_rel <- normalize_tss(sub_counts)
-  sub_dist <- vegdist(sub_rel, method = "bray")
+  sub_dist_input <- prepare_dist_input(sub_counts, args$transform)
+  sub_dist <- vegdist(sub_dist_input, method = metric_method)
   sub_perm <- how(nperm = args$permutations, blocks = sub_meta$patient_id)
 
   sub_adonis <- adonis2(sub_dist ~ sample_type, data = sub_meta, permutations = sub_perm, by = "margin")
@@ -371,8 +400,8 @@ if (!all(rownames(counts_patient) == patient_case$patient_id)) {
 }
 rownames(patient_case) <- patient_case$patient_id
 
-counts_patient_rel <- normalize_tss(counts_patient)
-dist_patient <- vegdist(counts_patient_rel, method = "bray")
+counts_patient_dist <- prepare_dist_input(counts_patient, args$transform)
+dist_patient <- vegdist(counts_patient_dist, method = metric_method)
 adonis_case_pooled <- adonis2(dist_patient ~ case_status,
                               data = patient_case,
                               permutations = args$permutations,
@@ -428,8 +457,8 @@ for (stype in sort(unique(pt_meta$sample_type))) {
     next
   }
 
-  sub_rel <- normalize_tss(sub_counts)
-  sub_dist <- vegdist(sub_rel, method = "bray")
+  sub_dist_input <- prepare_dist_input(sub_counts, args$transform)
+  sub_dist <- vegdist(sub_dist_input, method = metric_method)
   sub_adonis <- adonis2(sub_dist ~ case_status,
                         data = sub_meta,
                         permutations = args$permutations,
@@ -484,8 +513,8 @@ write.table(case_by_type_dist_df,
 cat("Running dispersion diagnostics (PERMDISP)...\n")
 
 dispersion_rows <- bind_rows(
-  run_betadisper(dist_type, pt_for_type$sample_type, args$permutations, "sample_type_within_patient"),
-  run_betadisper(dist_patient, patient_case$case_status, args$permutations, "case_status_patient_pooled")
+  run_betadisper(dist_type, pt_for_type$sample_type, args$permutations, "sample_type_within_patient", metric_label),
+  run_betadisper(dist_patient, patient_case$case_status, args$permutations, "case_status_patient_pooled", metric_label)
 )
 
 for (stype in sort(unique(pt_meta$sample_type))) {
@@ -500,9 +529,9 @@ for (stype in sort(unique(pt_meta$sample_type))) {
     next
   }
 
-  sub_dist <- vegdist(normalize_tss(sub_counts), method = "bray")
+  sub_dist <- vegdist(prepare_dist_input(sub_counts, args$transform), method = metric_method)
   tmp <- run_betadisper(sub_dist, sub_meta$case_status, args$permutations,
-                        paste0("case_status_", stype))
+                        paste0("case_status_", stype), metric_label)
   dispersion_rows <- bind_rows(dispersion_rows, tmp)
 }
 

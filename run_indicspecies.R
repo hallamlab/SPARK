@@ -36,6 +36,8 @@ option_list <- list(
               help="Label in status column for cancer samples [default: %default]"),
   make_option("--lung-brush-label", type="character", default="Lung Brush",
               help="Value in type_group identifying Lung Brush samples [default: %default]"),
+  make_option("--transform",  type="character", default="none",
+              help="Abundance transform before multipatt: none|rclr [default: %default]"),
   make_option("--perms",      type="integer",   default=999,
               help="Permutations for multipatt [default: %default]"),
   make_option("--min-n",      type="integer",   default=2,
@@ -156,7 +158,31 @@ meta    <- meta[common, , drop = FALSE]
 message("ASV table dimensions: ", paste(dim(asv_mat), collapse = " x "))
 message("Metadata dimensions: ", paste(dim(meta), collapse = " x "))
 
+if (!(opt$transform %in% c("none", "rclr"))) {
+  stop("--transform must be one of: none, rclr")
+}
+
 # ---------- helpers ----------
+apply_matrix_transform <- function(mat, method = "none") {
+  method <- tolower(method)
+  if (method == "none") {
+    return(mat)
+  }
+  if (method != "rclr") {
+    stop("Unsupported transform: ", method)
+  }
+  out <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  for (i in seq_len(nrow(mat))) {
+    v <- as.numeric(mat[i, ])
+    pos <- !is.na(v) & v > 0
+    if (any(pos)) {
+      lv <- log(v[pos])
+      out[i, pos] <- lv - mean(lv)
+    }
+  }
+  out
+}
+
 run_indics <- function(X_samples_by_features, grouping, perms = 999, duleg = FALSE, patient_blocks = NULL) {
   # indicspecies::multipatt expects samples in rows, species/features in columns
   # If patient_blocks provided, use blocked permutations (for within-patient comparisons)
@@ -194,6 +220,19 @@ summarize_multipatt <- function(fit) {
 }
 
 write_tables <- function(df_sign_only, df_full, base) {
+  drop_full_union_patterns <- function(df) {
+    s_cols <- grep("^s\\.", names(df), value = TRUE)
+    if (length(s_cols) == 0 || nrow(df) == 0) {
+      return(df)
+    }
+    # Non-informative union pattern: feature associated with all groups.
+    is_full_union <- rowSums(df[, s_cols, drop = FALSE], na.rm = TRUE) == length(s_cols)
+    df[!is_full_union, , drop = FALSE]
+  }
+
+  df_sign_only <- drop_full_union_patterns(df_sign_only)
+  df_full <- drop_full_union_patterns(df_full)
+
   out_results <- file.path(outdir, paste0(base, "_results.tsv"))
   out_summary <- file.path(outdir, paste0(base, "_summary.tsv"))
   readr::write_tsv(df_sign_only, out_results)
@@ -304,6 +343,7 @@ for (gcol in group_cols) {
       }
 
       X_pat <- aggregate_to_patient(X_site, meta_site[[opt$`patient-col`]])
+      X_pat <- apply_matrix_transform(X_pat, opt$transform)
       status_map <- meta_site %>%
         transmute(
           patient_id___ = as.character(.data[[opt$`patient-col`]]),
@@ -378,6 +418,7 @@ for (gcol in group_cols) {
               warning("Skipping Lung Brush no-contralateral status ISA after min-n filtering.")
             } else {
               X_pat_nc <- aggregate_to_patient(X_site_nc, meta_site_nc[[opt$`patient-col`]])
+              X_pat_nc <- apply_matrix_transform(X_pat_nc, opt$transform)
               status_map_nc <- meta_site_nc %>%
                 transmute(
                   patient_id___ = as.character(.data[[opt$`patient-col`]]),
@@ -445,14 +486,16 @@ for (gcol in group_cols) {
     }
   }
 
+  X_for_isa <- apply_matrix_transform(X, opt$transform)
+
   message("Running multipatt for '", gcol, "' (single groups, duleg=FALSE) …")
-  fit1 <- run_indics(X, grouping, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
+  fit1 <- run_indics(X_for_isa, grouping, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
   res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
   res1_full <- summarize_multipatt(fit1)
   write_tables(res1_sign, res1_full, paste0(gcol, "_indicator_species"))
 
   message("Running multipatt for '", gcol, "' (combos allowed, duleg=TRUE) …")
-  fit2 <- run_indics(X, grouping, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
+  fit2 <- run_indics(X_for_isa, grouping, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
   res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
   res2_full <- summarize_multipatt(fit2)
   write_tables(res2_sign, res2_full, paste0(gcol, "_indicator_species_DULEG"))

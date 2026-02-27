@@ -56,6 +56,8 @@ option_list <- list(
               help="Value in type_group identifying Lung Brush samples [default: %default]"),
   make_option("--sample-sizes", type="character", default="6,8,10,15,20,25,30",
               help="Comma-separated sample sizes to test [default: %default]"),
+  make_option("--transform", type="character", default="none",
+              help="Abundance transform before multipatt: none|rclr [default: %default]"),
   make_option("--n-simulations", type="integer", default=1000,
               help="Number of bootstrap simulations [default: %default]"),
   make_option("--perms", type="integer", default=199,
@@ -96,6 +98,10 @@ if (is.null(args$`test-duleg`)) args$`test-duleg` <- TRUE
 if (is.null(args$`sample-sizes`)) args$`sample-sizes` <- "6,8,10,15,20,25,30"
 if (is.null(args$`group-cols`)) args$`group-cols` <- "status,type_group"
 if (is.null(args$`status-sites`)) args$`status-sites` <- ""
+
+if (!(args$transform %in% c("none", "rclr"))) {
+  stop("--transform must be one of: none, rclr")
+}
 
 set.seed(args$seed)
 
@@ -528,6 +534,30 @@ spike_in_first_group <- function(counts, grouping, spike_asv_idx, fold_change) {
   return(spiked_counts)
 }
 
+apply_matrix_transform <- function(mat, method = "none") {
+  method <- tolower(method)
+  if (method == "none") {
+    rs <- rowSums(mat)
+    rs[rs == 0] <- 1
+    rel <- sweep(mat, 1, rs, "/")
+    rel[is.na(rel)] <- 0
+    return(rel)
+  }
+  if (method != "rclr") {
+    stop("Unsupported transform: ", method)
+  }
+  out <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  for (i in seq_len(nrow(mat))) {
+    v <- as.numeric(mat[i, ])
+    pos <- !is.na(v) & v > 0
+    if (any(pos)) {
+      lv <- log(v[pos])
+      out[i, pos] <- lv - mean(lv)
+    }
+  }
+  out
+}
+
 #' Run ISA power simulation (generic for any grouping)
 #'
 #' @param counts Sample × ASV count matrix
@@ -549,7 +579,8 @@ run_isa_power_generic <- function(counts, patient_ids, grouping,
                                    use_true_null = FALSE,
                                    use_blocking = FALSE,
                                    n_simulations = 1000, n_perm = 199,
-                                   alpha = 0.05, seed = 42) {
+                                   alpha = 0.05, seed = 42,
+                                   transform = "none") {
 
   n_total_asvs <- ncol(counts)
   n_spiked <- ifelse(is.null(spike_asv_idx), 0, length(spike_asv_idx))
@@ -602,8 +633,7 @@ run_isa_power_generic <- function(counts, patient_ids, grouping,
     # For WITHIN-patient: keep sample level but use blocked permutations
     if (use_blocking) {
       # Sample-level analysis with patient blocking
-      sample_rel <- sweep(boot_data$counts, 1, rowSums(boot_data$counts), "/")
-      sample_rel[is.na(sample_rel)] <- 0
+      sample_rel <- apply_matrix_transform(boot_data$counts, transform)
       sample_grouping <- boot_data$grouping
       patient_blocks <- factor(boot_data$patients)
 
@@ -635,9 +665,7 @@ run_isa_power_generic <- function(counts, patient_ids, grouping,
       })
       patient_grouping <- factor(patient_grouping, levels = levels(grouping))
 
-      # Convert to relative abundance (compositional data)
-      patient_rel <- sweep(patient_counts, 1, rowSums(patient_counts), "/")
-      patient_rel[is.na(patient_rel)] <- 0
+      patient_rel <- apply_matrix_transform(patient_counts, transform)
 
       # Run multipatt
       tryCatch({

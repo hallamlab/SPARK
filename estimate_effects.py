@@ -55,18 +55,31 @@ def get_sample_metadata(long_df, sample_col='lmp_id', patient_col='Participant_I
 
 # ======================== PERMANOVA Effect Size ========================
 
-def bray_curtis_from_counts(count_matrix):
+def apply_transform(count_matrix, transform='none'):
+    if transform == 'rclr':
+        out = np.zeros_like(count_matrix, dtype=float)
+        for i in range(count_matrix.shape[0]):
+            row = count_matrix[i, :].astype(float)
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return out
+    totals = count_matrix.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return count_matrix / totals
+
+
+def bray_curtis_from_counts(count_matrix, transform='none'):
     """
     Compute Bray-Curtis dissimilarity from count matrix (samples × ASVs).
 
     IMPORTANT: Converts to relative abundance before computing distance.
     This removes library size effects and focuses on compositional differences.
     """
-    # Convert to relative abundance (compositional data)
-    rel_abund = count_matrix / count_matrix.sum(axis=1, keepdims=True)
-
-    # Compute Bray-Curtis on relative abundances
-    bc = pdist(rel_abund, metric='braycurtis')
+    data = apply_transform(count_matrix, transform=transform)
+    metric = 'euclidean' if transform == 'rclr' else 'braycurtis'
+    bc = pdist(data, metric=metric)
     return squareform(bc)
 
 
@@ -94,10 +107,10 @@ def permanova_r2(dist_matrix, group_labels):
     return R2
 
 
-def bootstrap_permanova_r2(count_matrix, group_labels, patient_ids, n_bootstrap=1000, seed=42):
+def bootstrap_permanova_r2(count_matrix, group_labels, patient_ids, n_bootstrap=1000, seed=42, transform='none'):
     """Bootstrap PERMANOVA R² at patient level."""
     np.random.seed(seed)
-    dist_matrix = bray_curtis_from_counts(count_matrix)
+    dist_matrix = bray_curtis_from_counts(count_matrix, transform=transform)
     observed_r2 = permanova_r2(dist_matrix, group_labels)
 
     unique_patients = np.unique(patient_ids)
@@ -115,7 +128,7 @@ def bootstrap_permanova_r2(count_matrix, group_labels, patient_ids, n_bootstrap=
             boot_groups.extend(group_labels[patient_samples])
 
         boot_count_matrix = count_matrix[boot_indices, :]
-        boot_dist = bray_curtis_from_counts(boot_count_matrix)
+        boot_dist = bray_curtis_from_counts(boot_count_matrix, transform=transform)
         boot_r2 = permanova_r2(boot_dist, np.array(boot_groups))
         r2_bootstrap.append(boot_r2)
 
@@ -124,7 +137,7 @@ def bootstrap_permanova_r2(count_matrix, group_labels, patient_ids, n_bootstrap=
             np.percentile(r2_bootstrap, 25), np.percentile(r2_bootstrap, 75))
 
 
-def jackknife_permanova_r2_patient_level(count_matrix, group_labels, patient_ids):
+def jackknife_permanova_r2_patient_level(count_matrix, group_labels, patient_ids, transform='none'):
     """
     Leave-one-patient-out (LOPO) jackknife for PERMANOVA R².
 
@@ -144,7 +157,7 @@ def jackknife_permanova_r2_patient_level(count_matrix, group_labels, patient_ids
     patient_groups = np.array([patient_to_group[p] for p in unique_patients])
 
     # Observed R² on full patient-level data
-    dist_matrix_full = bray_curtis_from_counts(patient_counts)
+    dist_matrix_full = bray_curtis_from_counts(patient_counts, transform=transform)
     observed_r2 = permanova_r2(dist_matrix_full, patient_groups)
 
     # Jackknife: leave one patient out at a time
@@ -156,7 +169,7 @@ def jackknife_permanova_r2_patient_level(count_matrix, group_labels, patient_ids
         jack_counts = patient_counts[jack_mask, :]
         jack_groups = patient_groups[jack_mask]
 
-        jack_dist = bray_curtis_from_counts(jack_counts)
+        jack_dist = bray_curtis_from_counts(jack_counts, transform=transform)
         jack_r2 = permanova_r2(jack_dist, jack_groups)
         r2_jackknife.append(jack_r2)
 
@@ -273,7 +286,7 @@ def classify_asvs(wide_df, prevalence_thresholds=(0.2, 0.5)):
 
 # ======================== Taxonomic Abundance Effect Sizes ========================
 
-def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', count_col='count'):
+def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', count_col='count', transform='none'):
     """
     Calculate relative abundances at a given taxonomic level.
     Returns a DataFrame with samples as rows and taxa as columns.
@@ -284,21 +297,30 @@ def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', coun
     # Pivot to wide format (samples × taxa)
     wide = agg.pivot(index=sample_col, columns=tax_level, values=count_col).fillna(0)
 
-    # Convert to relative abundances
-    rel_abund = wide.div(wide.sum(axis=1), axis=0)
+    if transform == "rclr":
+        arr = wide.values.astype(float)
+        out = np.zeros_like(arr, dtype=float)
+        for i in range(arr.shape[0]):
+            row = arr[i, :]
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return pd.DataFrame(out, index=wide.index, columns=wide.columns)
 
+    rel_abund = wide.div(wide.sum(axis=1), axis=0)
     return rel_abund
 
 
 def taxonomic_effect_sizes(long_df, metadata, tax_level='Phylum',
                           case_col='Case', patient_col='Participant_ID',
-                          n_bootstrap=1000, seed=42, min_prevalence=0.1):
+                          n_bootstrap=1000, seed=42, min_prevalence=0.1, transform='none'):
     """
     Compute effect sizes (Cohen's d) for differential abundance at a taxonomic level.
     Uses patient-level aggregation and bootstrap for confidence intervals.
     """
     # Get relative abundances
-    rel_abund = calculate_taxonomic_abundances(long_df, tax_level)
+    rel_abund = calculate_taxonomic_abundances(long_df, tax_level, transform=transform)
 
     # Filter to samples in metadata
     sample_ids = metadata.index.intersection(rel_abund.index)
@@ -379,6 +401,7 @@ def main():
     parser.add_argument("--n-bootstrap", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -430,7 +453,7 @@ def main():
         if n_cancer_pts >= 2 and n_control_pts >= 2:
             print(f"  Computing patient-level jackknife (LOPO)...")
             r2_obs, r2_ci_low, r2_ci_high, r2_p25, r2_p75 = jackknife_permanova_r2_patient_level(
-                cc_count, cc_groups, cc_patients)
+                cc_count, cc_groups, cc_patients, transform=args.transform)
 
             print(f"  R² = {r2_obs:.4f} [95% CI: {r2_ci_low:.4f}-{r2_ci_high:.4f}]")
             print(f"  25th/75th: {r2_p25:.4f}/{r2_p75:.4f}")
@@ -461,7 +484,7 @@ def main():
 
     print(f"  Computing patient-level jackknife (LOPO)...")
     r2_obs, r2_ci_low, r2_ci_high, r2_p25, r2_p75 = jackknife_permanova_r2_patient_level(
-        cc_count, cc_groups, cc_patients)
+        cc_count, cc_groups, cc_patients, transform=args.transform)
 
     print(f"  R² = {r2_obs:.4f} [95% CI: {r2_ci_low:.4f}-{r2_ci_high:.4f}]")
     print(f"  25th/75th: {r2_p25:.4f}/{r2_p75:.4f}")
@@ -573,13 +596,13 @@ def main():
     phylum_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Phylum',
         case_col=args.case_col, patient_col=args.patient_col,
-        n_bootstrap=args.n_bootstrap, seed=args.seed
+        n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 
     family_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Family',
         case_col=args.case_col, patient_col=args.patient_col,
-        n_bootstrap=args.n_bootstrap, seed=args.seed
+        n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 
     print("\n--- Top 5 Phyla by |Cohen's d| ---")
@@ -597,7 +620,7 @@ def main():
     # Use all samples, compute distance by sample type
     print(f"  Computing patient-level jackknife (LOPO) for sample type effect...")
     r2_stype_obs, r2_stype_ci_low, r2_stype_ci_high, r2_stype_p25, r2_stype_p75 = jackknife_permanova_r2_patient_level(
-        count_matrix, sample_types, patient_ids)
+        count_matrix, sample_types, patient_ids, transform=args.transform)
 
     print(f"  R² = {r2_stype_obs:.4f} [95% CI: {r2_stype_ci_low:.4f}-{r2_stype_ci_high:.4f}]")
     print(f"  25th/75th: {r2_stype_p25:.4f}/{r2_stype_p75:.4f}")

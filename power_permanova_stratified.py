@@ -18,18 +18,30 @@ from simulate_data import bootstrap_patients, spike_in_fold_change, filter_by_sa
 warnings.filterwarnings('ignore')
 
 
-def bray_curtis_from_counts(count_matrix):
+def apply_transform(count_matrix, transform):
+    if transform == 'rclr':
+        out = np.zeros_like(count_matrix, dtype=float)
+        for i in range(count_matrix.shape[0]):
+            row = count_matrix[i, :].astype(float)
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return out
+    totals = count_matrix.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return count_matrix / totals
+
+def bray_curtis_from_counts(count_matrix, transform='none'):
     """
     Compute Bray-Curtis dissimilarity from count matrix (samples × ASVs).
 
     IMPORTANT: Converts to relative abundance before computing distance.
     This removes library size effects and focuses on compositional differences.
     """
-    # Convert to relative abundance (compositional data)
-    rel_abund = count_matrix / count_matrix.sum(axis=1, keepdims=True)
-
-    # Compute Bray-Curtis on relative abundances
-    bc = pdist(rel_abund, metric='braycurtis')
+    data = apply_transform(count_matrix, transform)
+    metric = 'euclidean' if transform == 'rclr' else 'braycurtis'
+    bc = pdist(data, metric=metric)
     return squareform(bc)
 
 
@@ -128,7 +140,7 @@ def permanova_permutation_test(dist_matrix, group_labels, patient_ids, n_perm=19
 def run_power_simulation(count_matrix, patient_ids, case_status, asv_names,
                          spike_asvs, spike_fold_change, n_cancer, n_control,
                          n_simulations=1000, n_perm=199, alpha=0.05, seed=42,
-                         use_true_null=False):
+                         use_true_null=False, transform='none'):
     """
     Run power simulation for PERMANOVA at given sample size and spike scenario.
 
@@ -157,7 +169,7 @@ def run_power_simulation(count_matrix, patient_ids, case_status, asv_names,
             boot_counts = spike_in_fold_change(boot_counts, boot_case, asv_indices,
                                               spike_fold_change, 'Cancer')
 
-        bc_dist = bray_curtis_from_counts(boot_counts)
+        bc_dist = bray_curtis_from_counts(boot_counts, transform=transform)
         r2, p_value = permanova_permutation_test(bc_dist, boot_case, boot_patients,
                                                  n_perm=n_perm, seed=seed+i)
 
@@ -183,6 +195,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -238,7 +251,8 @@ def main():
                     scenario['asvs'], scenario['fold_change'],
                     n_cancer, args.n_control,
                     args.n_simulations, args.n_perm, args.alpha, args.seed,
-                    use_true_null=scenario.get('use_true_null', False)
+                    use_true_null=scenario.get('use_true_null', False),
+                    transform=args.transform
                 )
 
                 print(f"Power={power:.3f}, R²={mean_r2:.4f}")

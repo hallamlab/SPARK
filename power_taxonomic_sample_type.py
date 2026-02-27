@@ -18,6 +18,21 @@ from itertools import combinations
 warnings.filterwarnings('ignore')
 
 
+def apply_transform(count_matrix, transform):
+    if transform == 'rclr':
+        out = np.zeros_like(count_matrix, dtype=float)
+        for i in range(count_matrix.shape[0]):
+            row = count_matrix[i, :].astype(float)
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return out
+    totals = count_matrix.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return count_matrix / totals
+
+
 def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     """Aggregate ASV counts to taxonomic level."""
     agg = long_df.groupby(['lmp_id', tax_level])['count'].sum().reset_index()
@@ -106,7 +121,8 @@ def patient_level_abundance_by_type(count_matrix, patient_ids, sample_types):
 
 
 def run_power_simulation(count_matrix, patient_ids, sample_types, taxa_names,
-                         n_patients, n_simulations=1000, alpha=0.05, seed=42):
+                         n_patients, n_simulations=1000, alpha=0.05, seed=42,
+                         transform='none'):
     """
     Power to detect sample type differences in taxonomic abundance.
 
@@ -184,6 +200,7 @@ def main():
     parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--sample-col", default="lmp_id")
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -237,7 +254,8 @@ def main():
                 n_patients=n,
                 n_simulations=args.n_simulations,
                 alpha=args.alpha,
-                seed=args.seed
+                seed=args.seed,
+                transform=args.transform
             )
 
             print(f"→ Power={power:.3f}")

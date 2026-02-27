@@ -43,6 +43,8 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none",
+                       help="Compositional transform for non-Shannon analyses")
 
     # Analysis selection flags
     parser.add_argument("--analyses", default="all",
@@ -104,7 +106,8 @@ def main():
             '--n-perm', str(args.n_perm),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--transform', args.transform
         ]
 
         if run_command(cmd, "1. Cancer vs Control - PERMANOVA (Stratified)"):
@@ -144,7 +147,8 @@ def main():
             '--n-perm', str(args.n_perm),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--transform', args.transform
         ]
 
         if run_command(cmd, "3. Sample Type Comparisons - PERMANOVA"):
@@ -184,7 +188,8 @@ def main():
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--transform', args.transform
         ]
 
         if run_command(cmd, "5a. Taxonomic Abundance - Cancer vs Control (Phylum + Family)"):
@@ -200,7 +205,8 @@ def main():
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--transform', args.transform
         ]
 
         if run_command(cmd, "5b. Taxonomic Abundance - Sample Type Comparison (Phylum + Family)"):
@@ -214,7 +220,7 @@ def main():
 
     if run_isa and not args.skip_isa:
         cmd = [
-            'Rscript', 'power_isa_complete.R',
+            'Rscript', 'power_indicspecies.R',
             '--data-long', args.data_long,
             '--data-wide', args.data_wide,
             '--effect-sizes-dir', str(effect_sizes_dir),
@@ -225,7 +231,8 @@ def main():
             '--n-perm', str(args.n_perm),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--transform', args.transform
         ]
 
         if run_command(cmd, "6. Indicator Species Analysis - Cancer vs Control + Sample Type"):

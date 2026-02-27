@@ -23,16 +23,28 @@ from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 
-def bray_curtis_from_counts(count_matrix):
+def apply_transform(count_matrix, transform):
+    if transform == 'rclr':
+        out = np.zeros_like(count_matrix, dtype=float)
+        for i in range(count_matrix.shape[0]):
+            row = count_matrix[i, :].astype(float)
+            pos = row > 0
+            if np.any(pos):
+                lv = np.log(row[pos])
+                out[i, pos] = lv - lv.mean()
+        return out
+    totals = count_matrix.sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    return count_matrix / totals
+
+def bray_curtis_from_counts(count_matrix, transform='none'):
     """
     Compute Bray-Curtis dissimilarity from count matrix.
     Converts to relative abundance before computing distance.
     """
-    # Convert to relative abundance (compositional data)
-    rel_abund = count_matrix / count_matrix.sum(axis=1, keepdims=True)
-
-    # Compute Bray-Curtis on relative abundances
-    bc = pdist(rel_abund, metric='braycurtis')
+    data = apply_transform(count_matrix, transform)
+    metric = 'euclidean' if transform == 'rclr' else 'braycurtis'
+    bc = pdist(data, metric=metric)
     return squareform(bc)
 
 
@@ -185,7 +197,7 @@ def bootstrap_patients_sample_types(count_matrix, patient_ids, sample_types,
 
 def run_power_simulation_omnibus(count_matrix, patient_ids, sample_types,
                                   n_patients, n_simulations=1000, n_perm=199,
-                                  alpha=0.05, seed=42):
+                                  alpha=0.05, seed=42, transform='none'):
     """
     Power simulation for omnibus sample type test (all types together).
     """
@@ -216,7 +228,7 @@ def run_power_simulation_omnibus(count_matrix, patient_ids, sample_types,
             continue
 
         # Compute Bray-Curtis
-        bc_dist = bray_curtis_from_counts(agg_counts)
+        bc_dist = bray_curtis_from_counts(agg_counts, transform=transform)
 
         # PERMANOVA with blocked permutations
         r2, p_value = permanova_permutation_test_blocked(
@@ -237,7 +249,7 @@ def run_power_simulation_omnibus(count_matrix, patient_ids, sample_types,
 def run_power_simulation_pairwise(count_matrix, patient_ids, sample_types,
                                    stype1, stype2, n_patients,
                                    n_simulations=1000, n_perm=199,
-                                   alpha=0.05, seed=42):
+                                   alpha=0.05, seed=42, transform='none'):
     """
     Power simulation for pairwise sample type comparison.
 
@@ -276,7 +288,7 @@ def run_power_simulation_pairwise(count_matrix, patient_ids, sample_types,
             continue
 
         # Compute Bray-Curtis
-        bc_dist = bray_curtis_from_counts(agg_counts)
+        bc_dist = bray_curtis_from_counts(agg_counts, transform=transform)
 
         # PERMANOVA with blocked permutations
         r2, p_value = permanova_permutation_test_blocked(
@@ -306,6 +318,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
+    parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -352,7 +365,8 @@ def main():
 
         power, mean_r2, r2_vals = run_power_simulation_omnibus(
             agg_counts, agg_patients, agg_stypes,
-            n_patients, args.n_simulations, args.n_perm, args.alpha, args.seed
+            n_patients, args.n_simulations, args.n_perm, args.alpha, args.seed,
+            transform=args.transform
         )
 
         print(f"Power={power:.3f}, R²={mean_r2:.4f}")
@@ -387,7 +401,8 @@ def main():
             power, mean_r2, r2_vals = run_power_simulation_pairwise(
                 agg_counts, agg_patients, agg_stypes,
                 stype1, stype2, n_patients,
-                args.n_simulations, args.n_perm, args.alpha, args.seed
+                args.n_simulations, args.n_perm, args.alpha, args.seed,
+                transform=args.transform
             )
 
             print(f"Power={power:.3f}, R²={mean_r2:.4f}")

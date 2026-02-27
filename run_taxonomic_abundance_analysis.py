@@ -36,6 +36,18 @@ def relative_abundance(counts: np.ndarray) -> np.ndarray:
     return counts / totals
 
 
+def rclr_transform(df: pd.DataFrame) -> pd.DataFrame:
+    arr = df.values.astype(float)
+    out = np.zeros_like(arr, dtype=float)
+    for i in range(arr.shape[0]):
+        row = arr[i, :]
+        pos = row > 0
+        if np.any(pos):
+            lv = np.log(row[pos])
+            out[i, pos] = lv - lv.mean()
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
+
+
 def cohens_d(x: np.ndarray, y: np.ndarray) -> float:
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -59,6 +71,7 @@ def run_one_group(
     type_col: str,
     count_col: str,
     min_prevalence: float,
+    transform: str,
 ) -> pd.DataFrame:
     st = long_df[long_df[type_col] == sample_type].copy()
     if st.empty:
@@ -95,20 +108,23 @@ def run_one_group(
     patient_counts = patient_counts.loc[common_patients]
     patient_case = patient_case.loc[common_patients]
 
-    rel = pd.DataFrame(
-        relative_abundance(patient_counts.values),
-        index=patient_counts.index,
-        columns=patient_counts.columns,
-    )
+    if transform == "rclr":
+        features = rclr_transform(patient_counts)
+    else:
+        features = pd.DataFrame(
+            relative_abundance(patient_counts.values),
+            index=patient_counts.index,
+            columns=patient_counts.columns,
+        )
 
     labels = patient_case["case_status"]
     n_cancer = int((labels == "Cancer").sum())
     n_control = int((labels == "Control").sum())
 
     rows = []
-    for taxon in rel.columns:
-        x = rel.loc[labels == "Cancer", taxon].values
-        y = rel.loc[labels == "Control", taxon].values
+    for taxon in features.columns:
+        x = features.loc[labels == "Cancer", taxon].values
+        y = features.loc[labels == "Control", taxon].values
 
         if len(x) >= 2 and len(y) >= 2:
             stat, p = mannwhitneyu(x, y, alternative="two-sided")
@@ -152,6 +168,7 @@ def main() -> None:
     p.add_argument("--type-col", default="type_group")
     p.add_argument("--count-col", default="count")
     p.add_argument("--min-prevalence", type=float, default=0.10)
+    p.add_argument("--transform", choices=["none", "rclr"], default="none")
     p.add_argument("--outdir", required=True)
     args = p.parse_args()
 
@@ -176,6 +193,7 @@ def main() -> None:
                 type_col=args.type_col,
                 count_col=args.count_col,
                 min_prevalence=args.min_prevalence,
+                transform=args.transform,
             )
             if not res.empty:
                 all_results.append(res)
