@@ -13,6 +13,20 @@ dependencies:
   - umap-learn
   - hdbscan
   - scipy
-  - pip
-  - pip:
-      - pycombat
+  - adjusttext
+  - r-base>=4.3
+  - r-remotes
+  - r-foreach
+  - r-doparallel
+  - r-quantreg
+  - r-glmnet
+  - r-lmtest
+  - r-randomforest
+  - r-rocr
+  - r-vegan
+  - r-ape
+  - r-compositions
+  - r-dplyr
+  - r-gplots
+  - r-knitr
+  - r-rmarkdown

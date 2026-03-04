@@ -215,15 +215,48 @@ def plot_alpha_faceted(df: pd.DataFrame, group_col: str, facet_col: str,
                        value_col: str, facet_order: List[str],
                        facet_palette: Dict[str, str], output_path: Path) -> None:
     """Create faceted boxplots for alpha diversity by secondary variable."""
+    df = df.copy()
+    if df.empty:
+        warnings.warn("No data available for faceted alpha plot; skipping.")
+        return
+
+    # Normalize types to stabilize palette/hue behavior in seaborn
+    df[group_col] = df[group_col].astype(str)
+    df[facet_col] = df[facet_col].astype(str)
+    facet_order = [str(g) for g in facet_order]
+
+    # Remove rows missing required values for plotting
+    df = df[df[group_col].notna() & df[facet_col].notna() & df[value_col].notna()].copy()
+    if df.empty:
+        warnings.warn("No plottable rows for faceted alpha plot after filtering; skipping.")
+        return
+
+    def _facet_boxplot(data, x, y, **kwargs):
+        if data.empty:
+            return
+        # Keep only x levels present in this facet to avoid seaborn edge-case failures
+        x_levels = [lvl for lvl in sorted(data[x].dropna().unique().tolist()) if lvl in facet_palette]
+        if not x_levels:
+            return
+        sns.boxplot(
+            data=data,
+            x=x,
+            y=y,
+            hue=x,
+            order=x_levels,
+            hue_order=x_levels,
+            palette=facet_palette,
+            linewidth=1.5,
+            legend=False,
+            ax=plt.gca(),
+        )
+
     g = sns.FacetGrid(
         df, col=group_col, col_wrap=3, sharey=True,
         col_order=facet_order, height=4, aspect=1.2
     )
     
-    g.map_dataframe(
-        sns.boxplot, x=facet_col, y=value_col,
-        palette=facet_palette, linewidth=1.5
-    )
+    g.map_dataframe(_facet_boxplot, x=facet_col, y=value_col)
     
     for ax in g.axes.flat:
         ax.set_xlabel("")

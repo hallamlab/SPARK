@@ -59,7 +59,7 @@ from matplotlib.colors import to_rgba
 
 plt.switch_backend("Agg")
 
-SAMPLE_ID_COL = 'sampleid'
+SAMPLE_ID_COL = 'sampleID'
 
 
 # ----------------------------- IO & Prep ------------------------------------

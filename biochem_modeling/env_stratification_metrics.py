@@ -107,14 +107,21 @@ def _compute_pressure(
     return gsw.p_from_z(-depth, lat)
 
 
+def _integrate_trapezoid(y: np.ndarray, x: np.ndarray) -> float:
+    # np.trapezoid was added in newer NumPy; use trapz for compatibility.
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
+
+
 def _compute_pea(depth: np.ndarray, sigma0: np.ndarray, lat: float | None) -> float:
     depth_rel = depth - np.nanmin(depth)
     h = np.nanmax(depth_rel)
     if not np.isfinite(h) or h <= 0:
         return np.nan
-    rho_bar = np.trapezoid(sigma0, depth_rel) / h
+    rho_bar = _integrate_trapezoid(sigma0, depth_rel) / h
     g = float(gsw.grav(lat, 0)) if lat is not None else 9.81
-    pea = g / h * np.trapezoid((sigma0 - rho_bar) * depth_rel, depth_rel)
+    pea = g / h * _integrate_trapezoid((sigma0 - rho_bar) * depth_rel, depth_rel)
     return float(pea)
 
 

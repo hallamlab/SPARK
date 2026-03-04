@@ -166,10 +166,9 @@ tables/
   - run_config.json
 
 plots/
-  - lollipop_comp{k}_raw.(png|pdf|svg)
-  - lollipop_comp{k}_depth_adjusted.(png|pdf|svg)
-  - heatmap_effectsize_raw.(png|pdf|svg)
-  - heatmap_effectsize_depth_adjusted.(png|pdf|svg)
+  - lollipop_{model}_c{k}_{component_label}_{raw|depth_adjusted}.(png|pdf|svg)
+  - heatmap_effectsize_{model}_{raw|depth_adjusted}_component_labels.(png|pdf|svg)
+  - heatmap_effectsize_hybrid_{raw|depth_adjusted}_component_labels_splitfiltered.(png|pdf|svg)  [when split filter is used]
 
 Plot semantics:
   - Lollipop plots show Hedges’ g with cruise-blocked CIs for the strongest positive and negative
@@ -191,12 +190,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
 
 # -----------------------------
@@ -209,6 +210,20 @@ O2_PALETTE = {
     "suboxic": "green",
     "anoxic": "purple",
 }
+
+O2_COMPONENT_INDEX_TO_NAME = {
+    0: "oxic",
+    1: "dysoxic",
+    2: "suboxic",
+    3: "anoxic",
+}
+
+# Low values -> blue, high values -> orange (with neutral midpoint).
+HEATMAP_CMAP = LinearSegmentedColormap.from_list(
+    "blue_white_orange",
+    ["#1f5aa6", "#f7f7f7", "#f08a24"],
+    N=2048,
+)
 
 DEFAULT_ID_COL = "cruise_year_month_depth"
 DEFAULT_CRUISE_COL = "Cruise"
@@ -225,7 +240,10 @@ DEFAULT_OXYGEN_COL = "Oxygen"
 @dataclass
 class Config:
     matrix_cleaned: str
-    assignments: str
+    assignments: str | None
+    assignments_gmm: str | None
+    assignments_o2: str | None
+    assignments_hybrid: str | None
     outdir: str
     sep_matrix: str
     sep_assign: str
@@ -258,6 +276,10 @@ class Config:
     # Depth adjustment
     do_depth_adjust: bool
 
+    # Optional: restrict HYBRID heatmap compartments to those retained in split table.
+    hybrid_split_table: str | None
+    hybrid_split_col: str
+
 
 def parse_args() -> Config:
     ap = argparse.ArgumentParser(
@@ -265,7 +287,14 @@ def parse_args() -> Config:
     )
 
     ap.add_argument("--matrix-cleaned", required=True, help="Path to PCA matrix_cleaned.csv")
-    ap.add_argument("--assignments", required=True, help="Path to compartments_assignments_smoothed.csv")
+    ap.add_argument(
+        "--assignments",
+        default=None,
+        help="Legacy single assignments path. If model-specific assignment paths are provided, this is ignored.",
+    )
+    ap.add_argument("--assignments-gmm", default=None, help="Path to smoothed GMM assignments table.")
+    ap.add_argument("--assignments-o2", default=None, help="Path to smoothed O2 assignments table.")
+    ap.add_argument("--assignments-hybrid", default=None, help="Path to smoothed hybrid assignments table.")
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--sep-matrix", default=",", help="Delimiter for matrix_cleaned (default ',')")
     ap.add_argument("--sep-assign", default=",", help="Delimiter for assignments (default ',')")
@@ -298,6 +327,24 @@ def parse_args() -> Config:
         help="Also compute depth-adjusted associations (residualize features vs Depth_anchored).",
     )
 
+    ap.add_argument(
+        "--hybrid-split-table",
+        default=None,
+        help=(
+            "Optional path to merged_o2_split_by_gmm.csv. "
+            "If provided, HYBRID heatmaps keep only retained subcompartments from this table "
+            "(excluding labels containing '__other')."
+        ),
+    )
+    ap.add_argument(
+        "--hybrid-split-col",
+        default="o2_subcompartment_final",
+        help=(
+            "Column in --hybrid-split-table containing split labels like 'oxic__gmm0' "
+            "(default o2_subcompartment_final)."
+        ),
+    )
+
     # O2 thresholds (uM)
     ap.add_argument("--o2-oxic-gt", type=float, default=90.0, help="oxic if O2 > this (default 90)")
     ap.add_argument("--o2-dysoxic-lo", type=float, default=20.0, help="dysoxic lower bound (default 20)")
@@ -315,6 +362,9 @@ def parse_args() -> Config:
     return Config(
         matrix_cleaned=ns.matrix_cleaned,
         assignments=ns.assignments,
+        assignments_gmm=ns.assignments_gmm,
+        assignments_o2=ns.assignments_o2,
+        assignments_hybrid=ns.assignments_hybrid,
         outdir=ns.outdir,
         sep_matrix=ns.sep_matrix,
         sep_assign=ns.sep_assign,
@@ -337,6 +387,8 @@ def parse_args() -> Config:
         min_n_comp=ns.min_n_comp,
         min_n_rest=ns.min_n_rest,
         do_depth_adjust=bool(ns.depth_adjust),
+        hybrid_split_table=ns.hybrid_split_table,
+        hybrid_split_col=ns.hybrid_split_col,
     )
 
 
@@ -373,6 +425,16 @@ def save_fig(path: str) -> None:
     plt.tight_layout()
     plt.savefig(path, dpi=300)
     plt.close()
+
+
+def safe_name(text: str) -> str:
+    """
+    Convert labels to filesystem-friendly names.
+    """
+    s = str(text).strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = s.strip("_")
+    return s if s else "na"
 
 
 # -----------------------------
@@ -524,6 +586,161 @@ def choose_feature_cols(cfg: Config, df_matrix: pd.DataFrame, df_assign: pd.Data
     return cand
 
 
+def resolve_assignment_jobs(cfg: Config) -> List[Tuple[str, str]]:
+    """
+    Resolve which assignment tables to analyze.
+    Priority:
+      1) explicit model-specific paths (--assignments-gmm/o2/hybrid)
+      2) legacy --assignments as a single 'gmm' job
+    """
+    jobs: List[Tuple[str, str]] = []
+    if cfg.assignments_gmm:
+        jobs.append(("gmm", cfg.assignments_gmm))
+    if cfg.assignments_o2:
+        jobs.append(("o2", cfg.assignments_o2))
+    if cfg.assignments_hybrid:
+        jobs.append(("hybrid", cfg.assignments_hybrid))
+
+    if jobs:
+        return jobs
+
+    if cfg.assignments:
+        return [("gmm", cfg.assignments)]
+
+    raise ValueError(
+        "No assignments inputs provided. Pass at least one of: "
+        "--assignments-gmm, --assignments-o2, --assignments-hybrid, or legacy --assignments."
+    )
+
+
+def infer_component_labels(
+    df: pd.DataFrame,
+    component_col: str = "component",
+    label_col: str = "compartment_name",
+) -> Dict[int, str]:
+    """
+    Build an integer component -> human-readable label map.
+    If label_col does not exist, returns an empty map and callers can fall back to comp{k}.
+    """
+    out: Dict[int, str] = {}
+    if component_col not in df.columns or label_col not in df.columns:
+        return out
+
+    comp_num = pd.to_numeric(df[component_col], errors="coerce")
+    labels = df[label_col].astype("object")
+    tmp = pd.DataFrame({"component": comp_num, "label": labels})
+    tmp = tmp.dropna(subset=["component", "label"]).copy()
+    if tmp.empty:
+        return out
+
+    tmp["component"] = tmp["component"].astype(int)
+    tmp["label"] = tmp["label"].astype(str).str.strip()
+    tmp = tmp[tmp["label"].str.len() > 0]
+    if tmp.empty:
+        return out
+
+    for k, sub in tmp.groupby("component", sort=True):
+        mode_vals = sub["label"].mode(dropna=True)
+        chosen = mode_vals.iloc[0] if not mode_vals.empty else sub["label"].iloc[0]
+        out[int(k)] = str(chosen)
+    return out
+
+
+def format_component_label(model_name: str, component: int, raw_label: str | None) -> str:
+    """
+    Return a readable, model-aware label for tables/plots.
+    Keeps raw labels when useful, but expands hybrid cell codes.
+    """
+    raw = (raw_label or "").strip()
+
+    if model_name == "hybrid":
+        # Hybrid builder emits names like: hyb_C2_G4
+        m = re.fullmatch(r"hyb_C(\d+)_G(\d+)", raw)
+        if m:
+            c_idx = int(m.group(1))
+            g_idx = int(m.group(2))
+            o2_name = O2_COMPONENT_INDEX_TO_NAME.get(c_idx, f"C{c_idx}")
+            return f"hybrid_{o2_name}_GMM{g_idx}"
+        return f"hybrid_comp{component}"
+
+    if model_name == "o2":
+        if raw:
+            return raw
+        return O2_COMPONENT_INDEX_TO_NAME.get(component, f"o2_comp{component}")
+
+    if model_name == "gmm":
+        if raw:
+            return raw
+        return f"gmm_comp{component}"
+
+    return raw if raw else f"comp{component}"
+
+
+def build_component_display_map(
+    df: pd.DataFrame,
+    model_name: str,
+    component_col: str,
+    raw_map: Dict[int, str],
+    n_resp_cols: int | None = None,
+) -> Dict[int, str]:
+    comp_num = pd.to_numeric(df[component_col], errors="coerce").dropna().astype(int)
+    comps = set(comp_num.unique().tolist())
+    if n_resp_cols is not None and n_resp_cols > 0:
+        comps.update(range(int(n_resp_cols)))
+    comps_sorted = sorted(int(c) for c in comps)
+    out: Dict[int, str] = {}
+    for k in comps_sorted:
+        raw_label = raw_map.get(int(k), "")
+        label = format_component_label(model_name, int(k), raw_label)
+
+        # For hybrid, some cells may have no hard assignments, so raw labels can be missing.
+        # Recover readable labels directly from component index when possible.
+        if model_name == "hybrid" and (not raw_label):
+            if n_resp_cols is not None and n_resp_cols > 0 and n_resp_cols % 4 == 0:
+                gmm_k = int(n_resp_cols // 4)
+                c_idx = int(k // gmm_k)
+                g_idx = int(k % gmm_k)
+                if 0 <= c_idx <= 3:
+                    o2_name = O2_COMPONENT_INDEX_TO_NAME.get(c_idx, f"C{c_idx}")
+                    label = f"hybrid_{o2_name}_GMM{g_idx}"
+
+        out[int(k)] = label
+    return out
+
+
+def load_hybrid_heatmap_allowed_labels(cfg: Config) -> set[str] | None:
+    """
+    Build the set of hybrid component labels to display in heatmaps from split-by-GMM output.
+    Expected split labels: '<o2>__gmm<idx>' (e.g., 'oxic__gmm0').
+    Rows containing '__other' are excluded.
+    """
+    if not cfg.hybrid_split_table:
+        return None
+    if not os.path.exists(cfg.hybrid_split_table):
+        raise ValueError(f"--hybrid-split-table not found: {cfg.hybrid_split_table}")
+
+    s = read_csv_keep_first_duplicate_cols(cfg.hybrid_split_table, cfg.sep_assign)
+    if cfg.hybrid_split_col not in s.columns:
+        raise ValueError(
+            f"--hybrid-split-col '{cfg.hybrid_split_col}' not found in {cfg.hybrid_split_table}. "
+            f"Available columns: {list(s.columns)}"
+        )
+
+    raw = s[cfg.hybrid_split_col].astype("object").fillna("").astype(str).str.strip()
+    raw = raw[raw.str.len() > 0]
+    raw = raw[~raw.str.contains("__other", case=False, regex=False)]
+
+    out: set[str] = set()
+    for v in raw.unique().tolist():
+        m = re.fullmatch(r"([A-Za-z]+)__gmm(\d+)", v, flags=re.IGNORECASE)
+        if not m:
+            continue
+        o2_name = m.group(1).lower()
+        g_idx = int(m.group(2))
+        out.add(f"hybrid_{o2_name}_GMM{g_idx}")
+    return out if out else set()
+
+
 def compute_associations(
     df: pd.DataFrame,
     resp_cols: List[str],
@@ -531,7 +748,11 @@ def compute_associations(
     cfg: Config,
     tables_dir: str,
     plots_dir: str,
+    model_name: str,
     tag: str,
+    component_label_map: Dict[int, str],
+    component_label_raw_map: Dict[int, str],
+    hybrid_heatmap_allowed_labels: set[str] | None = None,
 ) -> pd.DataFrame:
     """
     df must contain:
@@ -556,7 +777,6 @@ def compute_associations(
         Xfeat[f] = pd.to_numeric(df[f], errors="coerce").to_numpy(dtype=float)
 
     comp = pd.to_numeric(df["component"], errors="coerce").astype("Int64")
-    k_max = int(np.nanmax(comp.to_numpy(dtype=float))) if comp.notna().any() else -1
 
     rows = []
     for k in range(len(resp_cols)):
@@ -608,8 +828,11 @@ def compute_associations(
             s_lo, s_hi = percentile_ci(slope_boot)
 
             rows.append({
+                "model": model_name,
                 "tag": tag,
                 "component": int(k),
+                "component_label_raw": component_label_raw_map.get(int(k), f"comp{k}"),
+                "component_label": component_label_map.get(int(k), f"comp{k}"),
                 "feature": f,
                 "n_in": int(n_in),
                 "n_out": int(n_out),
@@ -634,7 +857,7 @@ def compute_associations(
     out["abs_slope"] = out["resp_slope_per_1SD"].abs()
     out = out.sort_values(["component", "abs_g"], ascending=[True, False])
 
-    out.to_csv(os.path.join(tables_dir, f"associations_{tag}.csv"), index=False)
+    out.to_csv(os.path.join(tables_dir, f"associations_{model_name}_{tag}.csv"), index=False)
 
     # Per-compartment lollipop plots
     for k in sorted(out["component"].unique().tolist()):
@@ -667,10 +890,17 @@ def compute_associations(
         plt.axvline(0, linewidth=1)
         plt.yticks(y, dplot["feature"].astype(str).tolist())
         plt.xlabel("Hedges g (compartment vs rest)  [cruise-blocked CI]")
-        plt.title(f"Compartment {k} feature associations ({tag})")
+        comp_label = component_label_map.get(int(k), f"comp{k}")
+        plt.title(f"{model_name.upper()} compartment {k} ({comp_label}) feature associations ({tag})")
 
+        comp_slug = safe_name(comp_label)
         for ext in ("png", "pdf", "svg"):
-            save_fig(os.path.join(plots_dir, f"lollipop_comp{k}_{tag}.{ext}"))
+            save_fig(
+                os.path.join(
+                    plots_dir,
+                    f"lollipop_{model_name}_c{k}_{comp_slug}_{tag}.{ext}",
+                )
+            )
 
     # Heatmap across compartments x features using g
     # Keep it readable: use all features if <= 30 else top 30 by global |g|
@@ -683,6 +913,11 @@ def compute_associations(
         feat_order = feat_order[:30]
 
     comps = sorted(out["component"].unique().tolist())
+    if model_name == "hybrid" and hybrid_heatmap_allowed_labels is not None:
+        comps = [
+            k for k in comps
+            if component_label_map.get(int(k), f"comp{k}") in hybrid_heatmap_allowed_labels
+        ]
     M = np.full((len(comps), len(feat_order)), np.nan, dtype=float)
     for i, k in enumerate(comps):
         dk = out[out["component"] == k].set_index("feature")
@@ -690,15 +925,50 @@ def compute_associations(
             if f in dk.index:
                 M[i, j] = float(dk.loc[f, "hedges_g"])
 
-    plt.figure(figsize=(max(9, 0.45 * len(feat_order)), max(4, 0.45 * len(comps))))
-    plt.imshow(M, aspect="auto", interpolation="nearest")
-    plt.yticks(np.arange(len(comps)), [f"comp{k}" for k in comps])
-    plt.xticks(np.arange(len(feat_order)), feat_order, rotation=45, ha="right")
-    plt.colorbar(label="Hedges g")
-    plt.title(f"Effect size heatmap (top features) — {tag}")
+    # Remove all-empty rows/columns so heatmaps only display informative entries.
+    keep_rows = np.isfinite(M).any(axis=1)
+    keep_cols = np.isfinite(M).any(axis=0)
+    M_plot = M[np.ix_(keep_rows, keep_cols)]
+    comps_plot = [comps[i] for i in range(len(comps)) if keep_rows[i]]
+    feat_plot = [feat_order[j] for j in range(len(feat_order)) if keep_cols[j]]
 
-    for ext in ("png", "pdf", "svg"):
-        save_fig(os.path.join(plots_dir, f"heatmap_effectsize_{tag}.{ext}"))
+    if M_plot.size > 0 and np.isfinite(M_plot).any():
+        vals = M_plot[np.isfinite(M_plot)]
+        vmax = float(np.nanquantile(np.abs(vals), 0.98))
+        if not np.isfinite(vmax) or vmax <= 0:
+            vmax = float(np.nanmax(np.abs(vals))) if vals.size else 1.0
+        if not np.isfinite(vmax) or vmax <= 0:
+            vmax = 1.0
+
+        cmap = HEATMAP_CMAP.copy()
+        cmap.set_bad("#e6e6e6")
+        norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+
+        plt.figure(figsize=(max(9, 0.45 * len(feat_plot)), max(4, 0.45 * len(comps_plot))))
+        im = plt.imshow(M_plot, aspect="auto", interpolation="nearest", cmap=cmap, norm=norm)
+    else:
+        # No finite values remain after filtering; skip plotting this heatmap.
+        im = None
+    if im is not None:
+        plt.yticks(
+            np.arange(len(comps_plot)),
+            [component_label_map.get(int(k), f"comp{k}") for k in comps_plot],
+        )
+        plt.xticks(np.arange(len(feat_plot)), feat_plot, rotation=45, ha="right")
+        cbar = plt.colorbar(im, label="Hedges g")
+        cbar.ax.tick_params(labelsize=8)
+        plt.title(f"{model_name.upper()} effect size heatmap (top features) — {tag}")
+
+        heatmap_suffix = "component_labels"
+        if model_name == "hybrid" and hybrid_heatmap_allowed_labels is not None:
+            heatmap_suffix = "component_labels_splitfiltered"
+        for ext in ("png", "pdf", "svg"):
+            save_fig(
+                os.path.join(
+                    plots_dir,
+                    f"heatmap_effectsize_{model_name}_{tag}_{heatmap_suffix}.{ext}",
+                )
+            )
 
     # Convenience “toprank” table per compartment
     top_rows = []
@@ -713,7 +983,7 @@ def compute_associations(
         top_rows.append(dk)
     if top_rows:
         top_df = pd.concat(top_rows, axis=0)
-        top_df.to_csv(os.path.join(tables_dir, f"associations_{tag}_toprank.csv"), index=False)
+        top_df.to_csv(os.path.join(tables_dir, f"associations_{model_name}_{tag}_toprank.csv"), index=False)
 
     return out
 
@@ -722,7 +992,7 @@ def compute_associations(
 # O2 vs GMM quick cross-tab
 # -----------------------------
 
-def o2_vs_gmm_crosstab(df: pd.DataFrame, tables_dir: str) -> None:
+def o2_vs_component_crosstab(df: pd.DataFrame, tables_dir: str, model_name: str) -> None:
     if "O2_compartment" not in df.columns or "component" not in df.columns:
         return
     tab = (
@@ -734,7 +1004,24 @@ def o2_vs_gmm_crosstab(df: pd.DataFrame, tables_dir: str) -> None:
     # normalize by O2 row
     tot = tab.groupby("O2_compartment")["n"].transform("sum")
     tab["frac_within_o2"] = tab["n"] / tot
-    tab.to_csv(os.path.join(tables_dir, "o2_compartment_confusion_vs_gmm.csv"), index=False)
+    if "component_label" in df.columns:
+        label_map = (
+            df.loc[:, ["component", "component_label"]]
+            .dropna(subset=["component", "component_label"])
+            .drop_duplicates(subset=["component"])
+            .copy()
+        )
+        if not label_map.empty:
+            label_map["component"] = pd.to_numeric(label_map["component"], errors="coerce")
+            label_map = label_map.dropna(subset=["component"])
+            label_map["component"] = label_map["component"].astype(int)
+            tab["component"] = pd.to_numeric(tab["component"], errors="coerce").astype("Int64")
+            tab = tab.merge(label_map, on="component", how="left")
+    out_path = os.path.join(tables_dir, f"o2_compartment_confusion_vs_{model_name}.csv")
+    tab.to_csv(out_path, index=False)
+    if model_name == "gmm":
+        # Backward-compatible filename used in earlier notebooks.
+        tab.to_csv(os.path.join(tables_dir, "o2_compartment_confusion_vs_gmm.csv"), index=False)
 
 
 # -----------------------------
@@ -744,98 +1031,174 @@ def o2_vs_gmm_crosstab(df: pd.DataFrame, tables_dir: str) -> None:
 def main() -> None:
     cfg = parse_args()
     tables_dir, plots_dir = ensure_dirs(cfg.outdir)
+    assignment_jobs = resolve_assignment_jobs(cfg)
+    hybrid_heatmap_allowed_labels = load_hybrid_heatmap_allowed_labels(cfg)
+    if hybrid_heatmap_allowed_labels is not None:
+        pd.DataFrame(
+            {"component_label_allowed": sorted(hybrid_heatmap_allowed_labels)}
+        ).to_csv(
+            os.path.join(tables_dir, "hybrid_heatmap_allowed_labels.csv"),
+            index=False,
+        )
 
     with open(os.path.join(cfg.outdir, "run_config.json"), "w") as f:
-        json.dump(cfg.__dict__, f, indent=2)
+        payload = dict(cfg.__dict__)
+        payload["assignment_jobs"] = assignment_jobs
+        json.dump(payload, f, indent=2)
 
-    # Load
-    df_assign = read_csv_keep_first_duplicate_cols(cfg.assignments, cfg.sep_assign)
+    # Load matrix once (shared across models)
     df_matrix = read_csv_keep_first_duplicate_cols(cfg.matrix_cleaned, cfg.sep_matrix)
-
-    # Minimal validation
+    # Minimal validation on matrix
     for col in (cfg.id_col, cfg.cruise_col):
-        if col not in df_assign.columns:
-            raise ValueError(f"Assignments file missing required column: {col}")
         if col not in df_matrix.columns:
             raise ValueError(f"Matrix file missing required column: {col}")
 
-    # Parse resp columns
-    resp_cols = infer_resp_cols(df_assign)
-    if not resp_cols:
-        raise ValueError("No resp_* columns found in assignments file. Expected resp_0..resp_{K-1}.")
+    feature_cols: List[str] | None = None
+    summary_rows: List[Dict[str, object]] = []
+    all_raw: List[pd.DataFrame] = []
+    all_depth: List[pd.DataFrame] = []
 
-    # Merge (assignments is the authoritative per-sample label/responsibilities)
-    # Keep matrix columns we need + selected feature cols
-    feature_cols = choose_feature_cols(cfg, df_matrix, df_assign)
-    if not feature_cols:
-        raise ValueError(
-            "No feature columns selected. Provide --feature-cols explicitly "
-            "or ensure matrix_cleaned has numeric feature columns."
+    for model_name, assign_path in assignment_jobs:
+        df_assign = read_csv_keep_first_duplicate_cols(assign_path, cfg.sep_assign)
+
+        for col in (cfg.id_col, cfg.cruise_col):
+            if col not in df_assign.columns:
+                raise ValueError(f"[{model_name}] assignments file missing required column: {col}")
+        if "component" not in df_assign.columns:
+            raise ValueError(f"[{model_name}] assignments file must contain 'component' column (hard label).")
+
+        resp_cols = infer_resp_cols(df_assign)
+        if not resp_cols:
+            raise ValueError(
+                f"[{model_name}] no resp_* columns found in assignments file. "
+                "Expected resp_0..resp_{K-1}."
+            )
+
+        if feature_cols is None:
+            feature_cols = choose_feature_cols(cfg, df_matrix, df_assign)
+            if not feature_cols:
+                raise ValueError(
+                    "No feature columns selected. Provide --feature-cols explicitly "
+                    "or ensure matrix_cleaned has numeric feature columns."
+                )
+
+        meta_cols = [
+            c
+            for c in [
+                cfg.cruise_col,
+                "Year",
+                "Month",
+                "Day",
+                cfg.depth_col,
+                cfg.depth_anchored_col,
+                cfg.date_col,
+                cfg.oxygen_col,
+            ]
+            if c in df_matrix.columns
+        ]
+        matrix_keep_cols = [cfg.id_col] + [c for c in meta_cols if c != cfg.id_col] + feature_cols
+        matrix_keep_cols = [c for c in matrix_keep_cols if c in df_matrix.columns]
+
+        # Dedupe again after selection (belt+suspenders)
+        df_matrix_sub = df_matrix[matrix_keep_cols].loc[:, ~pd.Index(matrix_keep_cols).duplicated()].copy()
+        m = df_assign.merge(df_matrix_sub, on=cfg.id_col, how="left", suffixes=("", "_matrix"))
+
+        # Datetime
+        if cfg.date_col in m.columns:
+            m[cfg.date_col] = to_datetime_safe(m[cfg.date_col])
+
+        # Add O2 compartment for contextual crosstab
+        if cfg.oxygen_col in m.columns:
+            o2 = pd.to_numeric(m[cfg.oxygen_col], errors="coerce").to_numpy(dtype=float)
+            m["O2_compartment"] = [o2_compartment(v, cfg) for v in o2]
+        else:
+            m["O2_compartment"] = "NA"
+
+        component_label_raw_map = infer_component_labels(m, component_col="component", label_col="compartment_name")
+        component_label_map = build_component_display_map(
+            m,
+            model_name=model_name,
+            component_col="component",
+            raw_map=component_label_raw_map,
+            n_resp_cols=len(resp_cols),
         )
+        m["component_label"] = pd.to_numeric(m["component"], errors="coerce").map(component_label_map)
+        m["component_label_raw"] = pd.to_numeric(m["component"], errors="coerce").map(component_label_raw_map)
+        o2_vs_component_crosstab(m, tables_dir, model_name=model_name)
 
-    meta_cols = [c for c in [cfg.cruise_col, "Year", "Month", "Day", cfg.depth_col, cfg.depth_anchored_col, cfg.date_col, cfg.oxygen_col] if c in df_matrix.columns]
-    matrix_keep_cols = [cfg.id_col] + [c for c in meta_cols if c != cfg.id_col] + feature_cols
-    matrix_keep_cols = [c for c in matrix_keep_cols if c in df_matrix.columns]
-
-    # Dedupe again after selection (belt+suspenders)
-    df_matrix_sub = df_matrix[matrix_keep_cols].loc[:, ~pd.Index(matrix_keep_cols).duplicated()].copy()
-
-    m = df_assign.merge(df_matrix_sub, on=cfg.id_col, how="left", suffixes=("", "_matrix"))
-
-    # Ensure component exists
-    if "component" not in m.columns:
-        raise ValueError("Assignments file must contain 'component' column (hard label).")
-
-    # Datetime
-    if cfg.date_col in m.columns:
-        m[cfg.date_col] = to_datetime_safe(m[cfg.date_col])
-
-    # Add O2 compartment
-    if cfg.oxygen_col in m.columns:
-        o2 = pd.to_numeric(m[cfg.oxygen_col], errors="coerce").to_numpy(dtype=float)
-        m["O2_compartment"] = [o2_compartment(v, cfg) for v in o2]
-    else:
-        m["O2_compartment"] = "NA"
-
-    # Quick O2 vs GMM cross-tab
-    o2_vs_gmm_crosstab(m, tables_dir)
-
-    # RAW associations
-    compute_associations(
-        df=m,
-        resp_cols=resp_cols,
-        feature_cols=feature_cols,
-        cfg=cfg,
-        tables_dir=tables_dir,
-        plots_dir=plots_dir,
-        tag="raw",
-    )
-
-    # DEPTH-ADJUSTED associations (optional)
-    if cfg.do_depth_adjust:
-        if cfg.depth_anchored_col not in m.columns:
-            raise ValueError(f"--depth-adjust requested, but missing depth anchored column '{cfg.depth_anchored_col}' in merged data.")
-
-        m_adj = m.copy()
-        for f in feature_cols:
-            m_adj[f] = residualize_against_depth(m_adj[f], m_adj[cfg.depth_anchored_col])
-
-        compute_associations(
-            df=m_adj,
+        raw_df = compute_associations(
+            df=m,
             resp_cols=resp_cols,
             feature_cols=feature_cols,
             cfg=cfg,
             tables_dir=tables_dir,
             plots_dir=plots_dir,
-            tag="depth_adjusted",
+            model_name=model_name,
+            tag="raw",
+            component_label_map=component_label_map,
+            component_label_raw_map=component_label_raw_map,
+            hybrid_heatmap_allowed_labels=hybrid_heatmap_allowed_labels,
+        )
+        all_raw.append(raw_df)
+
+        if cfg.do_depth_adjust:
+            if cfg.depth_anchored_col not in m.columns:
+                raise ValueError(
+                    f"[{model_name}] --depth-adjust requested, but missing depth anchored column "
+                    f"'{cfg.depth_anchored_col}' in merged data."
+                )
+
+            m_adj = m.copy()
+            for f in feature_cols:
+                m_adj[f] = residualize_against_depth(m_adj[f], m_adj[cfg.depth_anchored_col])
+
+            depth_df = compute_associations(
+                df=m_adj,
+                resp_cols=resp_cols,
+                feature_cols=feature_cols,
+                cfg=cfg,
+                tables_dir=tables_dir,
+                plots_dir=plots_dir,
+                model_name=model_name,
+                tag="depth_adjusted",
+                component_label_map=component_label_map,
+                component_label_raw_map=component_label_raw_map,
+                hybrid_heatmap_allowed_labels=hybrid_heatmap_allowed_labels,
+            )
+            all_depth.append(depth_df)
+
+        summary_rows.append(
+            {
+                "model": model_name,
+                "assignments_path": assign_path,
+                "k_from_resp": len(resp_cols),
+                "n_rows_assignments": int(df_assign.shape[0]),
+                "n_rows_merged": int(m.shape[0]),
+            }
+        )
+
+    if all_raw:
+        pd.concat(all_raw, axis=0, ignore_index=True).to_csv(
+            os.path.join(tables_dir, "associations_all_raw.csv"),
+            index=False,
+        )
+    if all_depth:
+        pd.concat(all_depth, axis=0, ignore_index=True).to_csv(
+            os.path.join(tables_dir, "associations_all_depth_adjusted.csv"),
+            index=False,
+        )
+    if summary_rows:
+        pd.DataFrame(summary_rows).to_csv(
+            os.path.join(tables_dir, "model_run_summary.csv"),
+            index=False,
         )
 
     print("[OK] Done.")
     print(f"     Outdir : {cfg.outdir}")
     print(f"     Tables : {tables_dir}")
     print(f"     Plots  : {plots_dir}")
-    print(f"     K      : {len(resp_cols)} (from resp_* columns)")
-    print(f"     Features analyzed: {len(feature_cols)}")
+    print(f"     Models : {', '.join([m for m, _ in assignment_jobs])}")
+    print(f"     Features analyzed: {len(feature_cols) if feature_cols is not None else 0}")
     if cfg.do_depth_adjust:
         print("     Depth-adjusted: YES (residualize vs Depth_anchored)")
     else:

@@ -159,6 +159,9 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
         df['lung_code'] = df['Type'].astype(str).str[0].where(lambda s: s.isin(['R', 'L']), other='N')
     if keep_types is not None and 'type_group' in df.columns:
         df = df[df['type_group'].isin(keep_types)].copy()
+    if meta_sample_col in df.columns:
+        df[meta_sample_col] = df[meta_sample_col].astype('string').str.strip()
+        df = df[df[meta_sample_col].notna() & (df[meta_sample_col] != '')].copy()
     # Create sample_code if meta_sample_col exists
     if meta_sample_col in df.columns:
         df = df.drop_duplicates(subset=[meta_sample_col])
@@ -171,6 +174,133 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
     if meta_sample_col not in df.columns:
         raise ValueError(f"Metadata column '{meta_sample_col}' not found; expected column matching manifest sample IDs.")
     return df
+
+
+def load_biochem_assignments(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, sep=None, engine='python')
+
+
+def _normalize_join_token(value: object) -> str:
+    if pd.isna(value):
+        return "NA"
+    text = str(value).strip()
+    if not text:
+        return "NA"
+    num = pd.to_numeric(text, errors='coerce')
+    if pd.notna(num):
+        f = float(num)
+        if np.isfinite(f):
+            if f.is_integer():
+                return str(int(f))
+            return f"{f:g}"
+    return text
+
+
+def _build_join_key(df: pd.DataFrame, cols: Sequence[str], out_col: str) -> pd.DataFrame:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Join column(s) not found: {missing}")
+    out = df.copy()
+    norm = out[list(cols)].copy()
+    for c in cols:
+        norm[c] = norm[c].map(_normalize_join_token)
+    out[out_col] = norm.agg("|".join, axis=1)
+    return out
+
+
+def merge_biochem_assignments(
+    meta: pd.DataFrame,
+    biochem_df: pd.DataFrame,
+    meta_sample_col: str,
+    biochem_sample_col: str,
+    include_cols: Optional[Sequence[str]] = None,
+    meta_join_cols: Optional[Sequence[str]] = None,
+    biochem_join_cols: Optional[Sequence[str]] = None,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    out = meta.copy()
+    out[meta_sample_col] = out[meta_sample_col].astype('string').str.strip()
+    use_composite = bool(meta_join_cols or biochem_join_cols)
+
+    meta_key_col = "__meta_join_key__"
+    biochem_key_col = "__biochem_join_key__"
+    join_cols_left = list(meta_join_cols or [])
+    join_cols_right = list(biochem_join_cols or [])
+
+    if use_composite:
+        if len(join_cols_left) != len(join_cols_right):
+            raise ValueError(
+                "Composite join requires same number of columns in metadata and biochem tables "
+                f"(got {len(join_cols_left)} vs {len(join_cols_right)})."
+            )
+        out = _build_join_key(out, join_cols_left, meta_key_col)
+    else:
+        if biochem_sample_col not in biochem_df.columns:
+            raise ValueError(
+                f"Biochem assignments column '{biochem_sample_col}' not found in table; cannot merge to metadata."
+            )
+        out[meta_key_col] = out[meta_sample_col].map(_normalize_join_token)
+
+    bdf = biochem_df.copy()
+    if use_composite:
+        bdf = _build_join_key(bdf, join_cols_right, biochem_key_col)
+    else:
+        bdf[biochem_sample_col] = bdf[biochem_sample_col].astype('string').str.strip()
+        bdf = bdf[bdf[biochem_sample_col].notna() & (bdf[biochem_sample_col] != '')].copy()
+        bdf[biochem_key_col] = bdf[biochem_sample_col].map(_normalize_join_token)
+
+    dup_rows = int(bdf.duplicated(subset=[biochem_key_col], keep=False).sum())
+    if dup_rows:
+        warnings.warn(
+            f"Biochem assignments has {dup_rows} duplicated rows for join key. "
+            "Keeping first row per key for metadata merge."
+        )
+        bdf = bdf.drop_duplicates(subset=[biochem_key_col], keep='first')
+
+    if include_cols:
+        requested = [c for c in include_cols if c]
+    else:
+        excluded = {biochem_key_col, '__merge_key__'}
+        if use_composite:
+            excluded.update(join_cols_right)
+        else:
+            excluded.add(biochem_sample_col)
+        requested = [c for c in bdf.columns if c not in excluded]
+
+    present = [c for c in requested if c in bdf.columns and c not in {meta_sample_col}]
+    missing = [c for c in requested if c not in bdf.columns]
+    if missing and verbose:
+        print(f"[w] Biochem include columns not found and skipped: {missing}")
+
+    if not present:
+        if verbose:
+            print("[w] No biochem assignment columns selected for merge; metadata unchanged.")
+        return out
+
+    merge_df = bdf[[biochem_key_col] + present].copy()
+
+    merged = out.merge(
+        merge_df,
+        left_on=meta_key_col,
+        right_on=biochem_key_col,
+        how='left',
+        suffixes=('', '_biochem'),
+        indicator='_biochem_merge',
+    )
+    merged = merged.drop(columns=[meta_key_col, biochem_key_col], errors='ignore')
+    if verbose:
+        matched = int((merged['_biochem_merge'] == 'both').sum())
+        if use_composite:
+            print(
+                f"[i] Biochem assignments merged for {matched}/{len(merged)} metadata rows "
+                f"using metadata columns {join_cols_left} and biochem columns {join_cols_right}."
+            )
+        else:
+            print(
+                f"[i] Biochem assignments merged for {matched}/{len(merged)} metadata rows "
+                f"using metadata '{meta_sample_col}' and biochem '{biochem_sample_col}'."
+            )
+    return merged.drop(columns=['_biochem_merge'])
 
 
 def load_sample_manifest(path: Path) -> Dict[str, str]:
@@ -605,12 +735,59 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--sample-manifest", type=Path,
                     help="TSV with columns: sample_id, fastq_r1, fastq_r2")
     io.add_argument("--taxonomy", type=Path, required=True, help="SILVA taxonomy TSV (Feature ID, Taxon)")
+    io.add_argument(
+        "--biochem-assignments",
+        type=Path,
+        default=None,
+        help="Optional biochem assignments table (e.g., merged_o2_split_by_gmm.csv) to merge into metadata.",
+    )
+    io.add_argument(
+        "--stratification-timeseries",
+        type=Path,
+        default=None,
+        help="Optional stratification_timeseries table to merge into metadata.",
+    )
 
     cols = p.add_argument_group("Columns / Groups")
     cols.add_argument("--group1-col", default="group1", help="Primary grouping column in metadata")
     cols.add_argument("--color-col", default="Color", help="Color column in metadata")
     cols.add_argument("--sample-id-col", default=SAMPLE_ID_COL,
                       help="Column containing unique sample IDs (must match manifest/ASV headers)")
+    cols.add_argument(
+        "--biochem-sample-col",
+        default="cruise_year_month_depth",
+        help="Join column in biochem assignments table.",
+    )
+    cols.add_argument(
+        "--biochem-include-cols",
+        default="",
+        help="Optional comma-separated biochem columns to merge into metadata (defaults to all non-key columns).",
+    )
+    cols.add_argument(
+        "--biochem-meta-join-cols",
+        default="",
+        help="Optional metadata join columns (comma-separated), e.g. Cruise,Depth.",
+    )
+    cols.add_argument(
+        "--biochem-join-cols",
+        default="",
+        help="Optional biochem join columns (comma-separated), aligned to --biochem-meta-join-cols, e.g. Cruise,Depth_anchored.",
+    )
+    cols.add_argument(
+        "--stratification-meta-join-col",
+        default="Cruise",
+        help="Metadata join column for stratification_timeseries merge.",
+    )
+    cols.add_argument(
+        "--stratification-join-col",
+        default="Cruise",
+        help="Join column in stratification_timeseries table.",
+    )
+    cols.add_argument(
+        "--stratification-include-cols",
+        default="",
+        help="Optional comma-separated stratification_timeseries columns to merge into metadata (defaults to all non-key columns).",
+    )
     cols.add_argument("--keep-types", default="",
                       help="Comma-separated list of types to keep (order honored)")
 
@@ -662,6 +839,17 @@ def main():
     asv_micro_path = resolve(args.asv_micro)
     asv_mito_path = resolve(args.asv_mito)
     taxonomy_path = resolve(args.taxonomy)
+    biochem_assignments_path = resolve(args.biochem_assignments) if args.biochem_assignments else None
+    stratification_timeseries_path = resolve(args.stratification_timeseries) if args.stratification_timeseries else None
+    biochem_include_cols = parse_list_csv(args.biochem_include_cols)
+    biochem_meta_join_cols = parse_list_csv(args.biochem_meta_join_cols)
+    biochem_join_cols = parse_list_csv(args.biochem_join_cols)
+    stratification_include_cols = parse_list_csv(args.stratification_include_cols)
+
+    if bool(biochem_meta_join_cols) != bool(biochem_join_cols):
+        raise ValueError(
+            "--biochem-meta-join-cols and --biochem-join-cols must be provided together for composite joins."
+        )
 
     if args.verbose:
         print(f"[i] Metadata: {meta_path}")
@@ -669,10 +857,38 @@ def main():
         print(f"[i] Fastq stats: {fastq_stats_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
         print(f"[i] ASV mito : {asv_mito_path}")
+        if biochem_assignments_path:
+            print(f"[i] Biochem assignments: {biochem_assignments_path}")
+        if stratification_timeseries_path:
+            print(f"[i] Stratification timeseries: {stratification_timeseries_path}")
 
     # Read data
     meta_sample_col = args.sample_id_col
     meta = read_metadata(meta_path, meta_sample_col, keep_types)
+    if biochem_assignments_path:
+        biochem_df = load_biochem_assignments(biochem_assignments_path)
+        meta = merge_biochem_assignments(
+            meta=meta,
+            biochem_df=biochem_df,
+            meta_sample_col=meta_sample_col,
+            biochem_sample_col=args.biochem_sample_col,
+            include_cols=biochem_include_cols,
+            meta_join_cols=biochem_meta_join_cols,
+            biochem_join_cols=biochem_join_cols,
+            verbose=args.verbose,
+        )
+    if stratification_timeseries_path:
+        strat_df = load_biochem_assignments(stratification_timeseries_path)
+        meta = merge_biochem_assignments(
+            meta=meta,
+            biochem_df=strat_df,
+            meta_sample_col=meta_sample_col,
+            biochem_sample_col=args.stratification_join_col,
+            include_cols=stratification_include_cols,
+            meta_join_cols=[args.stratification_meta_join_col],
+            biochem_join_cols=[args.stratification_join_col],
+            verbose=args.verbose,
+        )
 
     manifest_path = args.sample_manifest
     manifest_map = load_sample_manifest(manifest_path)

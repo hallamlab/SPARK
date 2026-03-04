@@ -1,0 +1,71 @@
+# Full template aligned with the default-enabled metadata + mito workflow.
+# Copy to SPARK/my_run.yml and edit all /abs/path placeholders.
+
+paths:
+  input_dir: /abs/path/to/fastq_dir
+  output_dir: /abs/path/to/output_dir
+  manifest: /abs/path/to/ref_db/sample_manifest.tsv
+  work_dir: /abs/path/to/nf_work
+  conda_cache_dir: /abs/path/to/conda_cache
+
+resources:
+  threads: 12
+  single_end: false
+
+mito:
+  enabled: true
+  mito_db: /abs/path/to/blastdb/mito_ncbi
+  biof_db: /abs/path/to/blastdb/ssu_pipeline_contaminants
+
+filter_counts:
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  group_col: Depth
+  min_group_size: 3
+  abundance_threshold: 0.005
+  sample_id_col: sampleID
+  save_intermediates: true
+
+general_stats:
+  enabled: true
+
+sankey:
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  sample_col: sampleID
+  group1_col: Depth
+  color_col: Color
+  output_prefix: metadata/data_loss_sankey
+
+metadata_plots:
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  sample_col: sampleID
+  type_col: Depth
+  color_col: Color
+  run_micro: true
+  run_mito: true
+
+batch_correction:
+  enabled: false
+
+outlier_detection:
+  enabled: false
+
+collectors_curve:
+  enabled: false
+
+diversity:
+  enabled: false
+
+indicspecies:
+  enabled: false
+
+clustermaps:
+  enabled: false
+
+spieceasi:
+  enabled: false
+
+biochem_pre_asv:
+  enabled: false

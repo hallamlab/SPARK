@@ -54,6 +54,115 @@ import matplotlib.colors as mcolors
 from matplotlib.patches import Patch
 import seaborn as sns
 from upsetplot import from_contents, UpSet
+import upsetplot.plotting as upsetplot_plotting
+
+# upsetplot<=0.9.0 uses pandas chained inplace fillna in UpSet.plot_matrix.
+# Under pandas>=3 this is a no-op and leaves NaN edgecolors, which then crashes
+# matplotlib with "Invalid RGBA argument: nan". Monkeypatch with assignment-based
+# fillna to be pandas-3 safe.
+def _patch_upsetplot_plot_matrix() -> None:
+    if getattr(upsetplot_plotting.UpSet.plot_matrix, "__name__", "") == "_plot_matrix_pandas_safe":
+        return
+
+    def _plot_matrix_pandas_safe(self, ax):
+        ax = self._reorient(ax)
+        data = self.intersections
+        n_cats = data.index.nlevels
+
+        inclusion = data.index.to_frame().values
+
+        styles = [
+            [
+                self.subset_styles[i]
+                if inclusion[i, j]
+                else {"facecolor": self._other_dots_color, "linewidth": 0}
+                for j in range(n_cats)
+            ]
+            for i in range(len(data))
+        ]
+        styles = sum(styles, [])
+        style_columns = {
+            "facecolor": "facecolors",
+            "edgecolor": "edgecolors",
+            "linewidth": "linewidths",
+            "linestyle": "linestyles",
+            "hatch": "hatch",
+        }
+        styles = (
+            pd.DataFrame(styles)
+            .reindex(columns=style_columns.keys())
+            .astype(
+                {
+                    "facecolor": "O",
+                    "edgecolor": "O",
+                    "linewidth": float,
+                    "linestyle": "O",
+                    "hatch": "O",
+                }
+            )
+        )
+        styles["linewidth"] = styles["linewidth"].fillna(1)
+        styles["facecolor"] = styles["facecolor"].fillna(self._facecolor)
+        styles["edgecolor"] = styles["edgecolor"].fillna(styles["facecolor"])
+        styles["linestyle"] = styles["linestyle"].fillna("solid")
+        del styles["hatch"]
+
+        x = np.repeat(np.arange(len(data)), n_cats)
+        y = np.tile(np.arange(n_cats), len(data))
+
+        if self._element_size is not None:
+            s = (self._element_size * 0.35) ** 2
+        else:
+            s = 200
+
+        ax.scatter(
+            *self._swapaxes(x, y),
+            s=s,
+            zorder=10,
+            **styles.rename(columns=style_columns),
+        )
+
+        if self._with_lines:
+            idx = np.flatnonzero(inclusion)
+            line_data = (
+                pd.Series(y[idx], index=x[idx])
+                .groupby(level=0)
+                .aggregate(["min", "max"])
+            )
+            colors = pd.Series(
+                [
+                    style.get("edgecolor", style.get("facecolor", self._facecolor))
+                    for style in self.subset_styles
+                ],
+                name="color",
+            )
+            line_data = line_data.join(colors)
+            ax.vlines(
+                line_data.index.values,
+                line_data["min"],
+                line_data["max"],
+                lw=2,
+                colors=line_data["color"],
+                zorder=5,
+            )
+
+        tick_axis = ax.yaxis
+        tick_axis.set_ticks(np.arange(n_cats))
+        tick_axis.set_ticklabels(
+            data.index.names, rotation=0 if self._horizontal else -90
+        )
+        ax.xaxis.set_visible(False)
+        ax.tick_params(axis="both", which="both", length=0)
+        if not self._horizontal:
+            ax.yaxis.set_ticks_position("top")
+        ax.set_frame_on(False)
+        ax.set_xlim(-0.5, x[-1] + 0.5, auto=False)
+        ax.grid(False)
+
+    upsetplot_plotting.UpSet.plot_matrix = _plot_matrix_pandas_safe
+
+
+_patch_upsetplot_plot_matrix()
 
 # Optional venn backends
 _HAVE_MPL_VENN = False
@@ -138,6 +247,24 @@ def sort_groups(groups: Sequence[str]) -> List[str]:
         except (ValueError, TypeError):
             # Fall back to string sorting
             return sorted(groups, key=str)
+
+
+def sanitize_palette(
+    palette: Mapping[str, str],
+    groups: Sequence[str],
+) -> Dict[str, str]:
+    """Ensure every requested group has a valid matplotlib color."""
+    if not groups:
+        return {}
+    fallback = sns.color_palette("husl", n_colors=len(groups)).as_hex()
+    out: Dict[str, str] = {}
+    for i, g in enumerate(groups):
+        raw = palette.get(g)
+        color = str(raw).strip() if raw is not None else ""
+        if not color or color.lower() == "nan" or not mcolors.is_color_like(color):
+            color = fallback[i]
+        out[g] = color
+    return out
 
 # ---------- IO layer ----------
 class Inputs:
@@ -431,7 +558,7 @@ def run_domain(
     tx = read_taxonomy(inp.tax)
     
     # Build palette from metadata (group -> color mapping)
-    palette_df = md[[group_col, color_col]].drop_duplicates()
+    palette_df = md[[group_col, color_col]].dropna(subset=[group_col]).drop_duplicates()
     palette = dict(zip(palette_df[group_col], palette_df[color_col]))
     
     # Sort groups
@@ -441,6 +568,8 @@ def run_domain(
     if subset_groups:
         all_groups = [g for g in all_groups if g in subset_groups]
         palette = {g: palette[g] for g in all_groups if g in palette}
+
+    palette = sanitize_palette(palette, all_groups)
     
     print(f"[{inp.domain}] Groups (in order): {all_groups}")
     print(f"[{inp.domain}] Palette: {palette}")

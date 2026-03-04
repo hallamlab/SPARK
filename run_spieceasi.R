@@ -80,6 +80,19 @@ opt <- parse_args(OptionParser(option_list = opt_list, usage = usage))
 if (is.null(opt$counts) || is.null(opt$outdir)) {
   stop("Please provide --counts and --outdir", call. = FALSE)
 }
+opt$method <- tolower(opt$method)
+if (!(opt$method %in% c("glasso", "mb"))) {
+  stop(sprintf("Unsupported --method '%s'. Use one of: glasso, mb", opt$method), call. = FALSE)
+}
+if (!is.finite(opt$rep_num) || opt$rep_num < 2) {
+  stop("--rep-num must be >= 2", call. = FALSE)
+}
+if (!is.finite(opt$nlambda) || opt$nlambda < 2) {
+  stop("--nlambda must be >= 2", call. = FALSE)
+}
+if (!is.finite(opt$ncores) || opt$ncores < 1) {
+  stop("--ncores must be >= 1", call. = FALSE)
+}
 dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 
 # ----------------------------- Helpers ---------------------------------------
@@ -145,10 +158,27 @@ asv_ids <- raw[[id_col]]
 mat_df  <- dplyr::select(raw, -all_of(id_col))
 
 # Force numeric (coerce if needed)
-mat <- as.matrix(lapply(mat_df, function(x) as.numeric(as.character(x)))) |> do.call(what = cbind)
+mat <- do.call(cbind, lapply(mat_df, function(x) suppressWarnings(as.numeric(as.character(x)))))
+if (is.null(dim(mat))) mat <- matrix(mat, ncol = ncol(mat_df))
 colnames(mat) <- colnames(mat_df)
 rownames(mat) <- asv_ids
 storage.mode(mat) <- "double"
+if (anyDuplicated(rownames(mat))) {
+  dup_n <- sum(duplicated(rownames(mat)))
+  msg("Found %d duplicated ASV IDs; applying make.unique() to row names.", dup_n)
+  rownames(mat) <- make.unique(rownames(mat))
+}
+
+bad_vals <- sum(!is.finite(mat))
+if (bad_vals > 0) {
+  msg("Found %d non-finite values in count matrix; replacing with 0.", bad_vals)
+  mat[!is.finite(mat)] <- 0
+}
+neg_vals <- sum(mat < 0, na.rm = TRUE)
+if (neg_vals > 0) {
+  msg("Found %d negative count values; clipping to 0.", neg_vals)
+  mat[mat < 0] <- 0
+}
 
 # Optional sample name cleanup
 if (!is.null(opt$strip_suffix_regex)) {
@@ -159,6 +189,9 @@ if (!is.null(opt$strip_suffix_regex)) {
 if (isTRUE(opt$transpose)) {
   mat <- t(mat)
 }
+if (nrow(mat) < 2 || ncol(mat) < 2) {
+  stop(sprintf("Input matrix is too small after loading/transposition: samples=%d, ASVs=%d", nrow(mat), ncol(mat)), call. = FALSE)
+}
 
 # Filter (cached)
 count_data_filtered <- if (isFALSE(opt$force_filter)) load_if_exists(cache_counts) else FALSE
@@ -168,7 +201,7 @@ if (identical(count_data_filtered, FALSE)) {
   keep <- rep(TRUE, ncol(mat))
 
   if (opt$min_rel_abund > 0) {
-    rs <- rowSums(mat)
+    rs <- rowSums(mat, na.rm = TRUE)
     rs[rs == 0] <- 1
     rel <- mat / rs
     max_ra <- apply(rel, 2, max, na.rm = TRUE)
@@ -185,6 +218,15 @@ if (identical(count_data_filtered, FALSE)) {
   if (isTRUE(opt$remove_zero_var) && ncol(mat_f) > 0) {
     v <- apply(mat_f, 2, var, na.rm = TRUE)
     mat_f <- mat_f[, v > 0, drop = FALSE]
+  }
+  if (nrow(mat_f) < 2 || ncol(mat_f) < 2) {
+    stop(
+      sprintf(
+        "Filtering removed too much data (samples=%d, ASVs=%d). Consider lowering --min-rel-abund/--min-prevalence or disabling --remove-zero-var.",
+        nrow(mat_f), ncol(mat_f)
+      ),
+      call. = FALSE
+    )
   }
 
   count_data_filtered <- mat_f

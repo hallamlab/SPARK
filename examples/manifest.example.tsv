@@ -1,0 +1,6 @@
+# sample_id<TAB>fastq_r1<TAB>fastq_r2(optional)
+CR001_Y2024_M01_D15_Z005	/raw/project/fastq/CR001_Y2024_M01_D15_Z005_R1.fastq.gz	/raw/project/fastq/CR001_Y2024_M01_D15_Z005_R2.fastq.gz
+CR001_Y2024_M01_D15_Z020	/raw/project/fastq/CR001_Y2024_M01_D15_Z020_R1.fastq.gz	/raw/project/fastq/CR001_Y2024_M01_D15_Z020_R2.fastq.gz
+CR002_Y2024_M02_D08_Z090	/raw/project/fastq/CR002_Y2024_M02_D08_Z090_R1.fastq.gz	/raw/project/fastq/CR002_Y2024_M02_D08_Z090_R2.fastq.gz
+# Single-end example (omit the third column and set resources.single_end: true in YAML):
+# CR003_Y2024_M03_D03_Z001	/raw/project/fastq/CR003_Y2024_M03_D03_Z001_R1.fastq.gz

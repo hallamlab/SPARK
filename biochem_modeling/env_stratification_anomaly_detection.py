@@ -33,6 +33,8 @@ Example:
     --output-dir strat_monthly_out
 """
 
+from __future__ import annotations
+
 import argparse
 import warnings
 from pathlib import Path

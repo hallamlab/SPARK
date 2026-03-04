@@ -1,14 +1,72 @@
 paths:
-  input_dir: /home/ryan/Experiments/Community_Composition/25-07-30/Raw_Data
-  output_dir: /home/ryan/Experiments/Community_Composition/25-07-30/nf_output
-  manifest: /home/ryan/Community_Composition_Manifest_ampliseq_fixed.tsv
-  work_dir: /home/ryan/nf_work
-  conda_cache_dir: /home/ryan/nf_work/conda_cache
+  input_dir: /cephfs/rjm_work/si_asv/V4_ncbi_input
+  output_dir: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output
+  manifest: /cephfs/rjm_work/si_asv/ref_db/sample_manifest.tsv
+  work_dir: /cephfs/rjm_work/si_asv/nf_work
+  conda_cache_dir: /cephfs/rjm_work/si_asv/conda_cache
     # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
   threads: 12          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
   single_end: false
+
+
+biochem_pre_asv:
+  enabled: false
+  table_a: /cephfs/rjm_work/si_asv/ref_db/SI_JA_Compiled_Geochem_Dec_09_Outlier_RM.csv
+  table_b: /cephfs/rjm_work/si_asv/ref_db/SI_JA_Compiled_CTD_Data_Dec_18_2025_Outlier_RM.csv
+  output_root: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline
+  cleaned_density_filename: 02_oxygen_best_available_density_RJM.tsv
+  clean_keep_cols:
+    - cruise_year_month_depth
+    - Cruise
+    - Year
+    - Month
+    - Day
+    - Depth
+    - Phosphate
+    - Silicate
+    - Nitrite
+    - Nitrate
+    - Ammonium
+    - Hydrogen Sulfide
+    - Nitrous Oxide
+    - Methane
+    - Temperature
+    - Salinity
+    - Oxygen
+    - Density
+    - Fe
+    - Dimethyl Sulfide
+  clean_drop_cols: []
+  clean_rename_map:
+    PO4: Phosphate
+    SI: Silicate
+    NO2: Nitrite
+    NO3: Nitrate
+    NH4: Ammonium
+    H2S: Hydrogen Sulfide
+    N2O: Nitrous Oxide
+    CH4: Methane
+    Oxygen_best_available: Oxygen
+    density_kg_m3: Density
+  feature_cols: Oxygen,Nitrate,Nitrite,Nitrous Oxide,Ammonium,Hydrogen Sulfide,Methane,Phosphate,Silicate,Temperature,Salinity,Density,Fe,Dimethyl Sulfide
+  gmm_k: auto
+  eof_pcs: 1,2,4
+
+filename_patterns:
+  r1_tokens:
+    - R1
+    - 1
+  r2_tokens:
+    - R2
+    - 2
+  ext_patterns:
+    - "\\.fastq\\.gz$"
+    - "\\.fq\\.gz$"
+    - "\\.fastq$"
+    - "\\.fq$"
+  sample_strip_regex: "(_S[0-9]+)?(_L[0-9]{3})?(_R[12])?(_[12])?(_001)?$"
 
 fastp:
   trim_front_r1: 19
@@ -21,6 +79,11 @@ merge:
   min_overlap: 5
   trunc_quality: 5
   allow_stagger: true
+
+table_filter:
+  min_sample_sum: 5000
+  min_asv_sum: 0.01
+  script: filter_ASV_table.py
 
 filter:
   max_ee: 1.0
@@ -87,14 +150,14 @@ mito:
   dpi: 300
   no_plots: false
   blast_threads: 16
-  mito_db: /home/ryan/ref_db/mito_ncbi
-  biof_db: /home/ryan/ref_db/ssu_pipeline_contaminants
+  mito_db: /cephfs/rjm_work/si_asv/ref_db/mito_ncbi
+  biof_db: /cephfs/rjm_work/si_asv/ref_db/ssu_pipeline_contaminants
 
 filter_counts:
   enabled: true
-  metadata: /home/ryan/Community_Composition_Metadata_ampliseq.tsv
+  metadata: ../ref_db/asv_cruise_metadata.tsv
   output: ASV_target.tsv
-  group_col: Lighting
+  group_col: Depth
   min_group_size: 3
   abundance_threshold: 0.005
   sample_id_col: sampleID
@@ -113,43 +176,56 @@ general_stats:
 
 sankey:
   enabled: true
-  metadata: /home/ryan/Community_Composition_Metadata_ampliseq.tsv
+  metadata: ../ref_db/asv_cruise_metadata.tsv
   sub_dir: .
   sample_col: sampleID
-  group1_col: Lighting
+  group1_col: Depth
   color_col: Color
   keep_types:
-    - Light
-    - Dark
   output_prefix: metadata/data_loss_sankey
   title: Data Loss Flow
   make_labeled: true
   make_unlabeled: true
 
 metadata_plots:
-  enabled: false
+  enabled: true
   metadata: ../ref_db/asv_cruise_metadata.tsv
   sub_dir: .
+  sample_col: sampleID
   type_col: Depth
   color_col: Color
+  biochem_assignments: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline/env_o2_split_by_gmm/tables/merged_o2_split_by_gmm.csv
+  biochem_sample_col: cruise_year_month_depth
+  biochem_meta_join_cols: Cruise,Depth
+  biochem_join_cols: Cruise,Depth_anchored
+  biochem_include_cols: []
+  stratification_timeseries: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline/env_stratification_index/stratification_timeseries.tsv
+  strat_meta_join_col: Cruise
+  strat_join_col: Cruise
+  strat_include_cols: []
   keep_types:
-    - Oral Rinse
-    - Lung Brush
-    - BAL
-    - Skin Brush
-    - Scope Flush
   include_rank: []
   run_micro: true
   run_mito: true
 
 batch_correction:
-  enabled: true
+  enabled: false
   output_dir: batch_correction
   batch_col: plateID
   asv_orientation: features_rows
-  biological_covariates:
-  biological_color_col: Depth,Month
+  biological_covariates: Depth,Season 
+  biological_color_col: Depth,Season 
   color_palette_col: Color
+  conqur_mode: libsize
+  conqur_num_core: 12
+  conqur_batch_ref:
+  conqur_logistic_lasso: false
+  conqur_quantile_type: standard
+  conqur_simple_match: false
+  conqur_lambda_quantile: 2p/n
+  conqur_interplt: false
+  conqur_delta: 0.4999
+  conqur_auto_install: true
   umap_neighbors: 15
   umap_min_dist: 0.1
   hdbscan_min_cluster_size: 5
@@ -160,54 +236,11 @@ batch_correction:
   n_features_plot: 5
   random_state: 42
 
-assign_compartments:
-  enabled: true
-  output_dir: compartments
-  depth_col: Depth
-  month_col: Month
-  biochem_cols:
-    - Temperature
-    - Oxygen
-    - Nitrogen Oxides
-    - Nitrate
-    - Nitrite
-    - Ammonium
-    - Nitrous Oxide
-    - Hydrogen Sulfide
-    - Dimethyl Sulfide
-    - Methane
-    - Phosphate
-    - Silicate
-  use_integrated: true
-  verbose: true
-
-trajectory_analysis:
-  enabled: true
-  output_dir: trajectory_analysis
-  month_col: Month
-  group_cols:
-    - Depth
-    - cluster_after
-  color_col: Color
-  top_taxa: 10
-
-stratification:
-  enabled: true
-  output_dir: stratification_timeseries_analysis
-  date_col: Date
-  month_col: Month
-  year_col: Year
-  depth_col: Depth
-  consensus_threshold: 2
-  sample_id_col: sampleid
-  trajectory_group_col: cluster_after
-  trajectory_summary:
-
 outlier_detection:
-  enabled: true
+  enabled: false
   output_dir: outliers_corrected
   group_cols:
-    - Depth
+    - Depth,Season
   transform: none
   asv_orientation: samples_rows
   pre_transformed: true
@@ -227,7 +260,7 @@ outlier_detection:
   hdbscan_metric: euclidean
 
 collectors_curve:
-  enabled: true
+  enabled: false
   group_col: Depth
   color_col: Color
   permutations: 999
@@ -240,24 +273,182 @@ collectors_curve:
   show_perms: 10
   presence_threshold: 0.0
 
-table_filter:
-  min_sample_sum: 5000
-  min_asv_sum: 0.01
-  script: filter_ASV_table.py
+plot_upset:
+  enabled: false
+  sub_dir: .
+  domain: micro
+  taxonomy_path:
+  sample_id_col: sampleID
+  group_col: Depth
+  color_col: Color
+  subset_groups:
+  skip_venn: true
+  raw_only: false
+  final_only: false
+  formats: pdf,svg,png
 
-filename_patterns:
-  r1_tokens:
-    - R1
-    - 1
-  r2_tokens:
-    - R2
-    - 2
-  ext_patterns:
-    - "\\.fastq\\.gz$"
-    - "\\.fq\\.gz$"
-    - "\\.fastq$"
-    - "\\.fq$"
-  sample_strip_regex: "(_S[0-9]+)?(_L[0-9]{3})?(_R[12])?(_[12])?(_001)?$"
+bubbleplotter:
+  enabled: false
+  output_prefix: metadata/bubble_plot_asv
+  formats: pdf,png
+  figsize: "32,60"
+  bubble_scale: 10
+  no_auto_size: true
+
+umap_clustering:
+  enabled: false
+  output_prefix: metadata/umap_clustering
+  formats: pdf,png
+  normalize: clr
+  transform: sqrt
+  min_cluster_size: 10
+  min_samples: 5
+
+diversity:
+  enabled: false
+  output_dir: diversity
+  mito_output_dir: mito/diversity
+  mito_input:
+  sample_col: sampleID
+  group_col: Depth
+  color_col: Color
+  secondary_col: Season
+  exclude_groups: []
+  group_order: []
+  run_mito: true
+  umap_neighbors: 30
+  umap_min_dist: 0.01
+  permanova_perms: 999
+  random_state: 42
+  verbose: true
+
+indicspecies:
+  enabled: false
+  sample_col: sampleID
+  group_cols:
+    - Season
+    - o2_subcompartment_final
+    - anomaly_type 
+  perms: 999
+  min_n: 2
+  plot_enabled: true
+  plot_pairs_mode: all
+  plot_output_dir: indicspecies/plots
+  venn:
+  taxonomy: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
+
+clustermaps:
+  enabled: false
+  output_dir: clustermaps
+  mito_output_dir: mito/clustermaps
+  mito_input:
+  isa_file: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/indicspecies/
+  run_mito: true
+  sample_col: sampleID
+  sample_code_col: sample_code
+  asv_id_col: ASV_ID
+  group1_col: Depth
+  group2_col: Season
+  group3_col: o2_subcompartment_final
+  group4_col: anomaly_type
+  group1_order:
+  exclude_group1:
+  group1_palette: 
+  group2_palette:
+  group3_palette:
+  group4_palette:
+  ranks: Phylum,Class,Order,Family,Genus,Species,ASV_ID
+  topN: Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000
+  count_col: corr_count
+  isa_min_stat: 0.6
+  isa_significance_cols:
+  isa_stat_cols:
+  mito_sample_mode: auto
+
+spieceasi:
+  enabled: false
+  output_dir: spieceasi
+  prefix: spieceasi
+  network_enabled: true
+  modules_enabled: true
+  module_methods: leiden,louvain
+  module_primary_method: leiden
+  module_resolutions: 0.5,1.0,1.5
+  module_reps: 25
+  module_consensus_threshold: 0.8
+  module_seed: 42
+  modules_sub:
+  modules_all:
+  graph_pos_all:
+  graph_pos_sub:
+  node_features:
+  network_modes:
+    - all
+  transpose: true
+  min_rel_abund: 0.0
+  min_prevalence: 0.0
+  remove_zero_var: true
+  method: glasso
+  lambda_min_ratio: 0.01
+  nlambda: 20
+  rep_num: 50
+  thresh: 0.1
+  ncores: 8
+  seed: 10010
+  edge_threshold: 0.1
+  keep_negative: true
+  layout_iters: 1000
+  force_filter: false
+  force_spieceasi: false
+  force_graphs: true
+  layout_seed: 42
+  layout_scale: 3.0
+  degree_scale: 80.0
+  edge_width_scale: 5.0
+  isa_scale: 500.0
+
+trajectory_analysis:
+  enabled: false
+  output_dir: trajectory_analysis
+  month_col: Month
+  group_cols:
+    - Depth
+    - cluster_after
+  color_col: Color
+  top_taxa: 10
+
+stratification:
+  enabled: false
+  output_dir: stratification_timeseries_analysis
+  date_col: Date
+  month_col: Month
+  year_col: Year
+  depth_col: Depth
+  consensus_threshold: 2
+  sample_id_col: sampleID
+  trajectory_group_col: cluster_after
+  trajectory_summary:
+
+assign_compartments:
+  enabled: false
+  output_dir: compartments
+  depth_col: Depth
+  month_col: Month
+  biochem_cols:
+    - Temperature
+    - Oxygen
+    - Nitrogen Oxides
+    - Nitrate
+    - Nitrite
+    - Ammonium
+    - Nitrous Oxide
+    - Hydrogen Sulfide
+    - Dimethyl Sulfide
+    - Methane
+    - Phosphate
+    - Silicate
+  use_integrated: true
+  verbose: true
 
 environments:
   main: envs/asv_pipeline.yml
@@ -275,3 +466,29 @@ environments:
   stratification: envs/stratification.yml
   outlier_checker: envs/outlier_checker.yml
   collectors_curve: envs/collectors_curve.yml
+  biochem_pre_asv: envs/biochem.yml
+  biochem_merge: envs/biochem.yml
+  biochem_density: envs/biochem.yml
+  biochem_strat_metrics: envs/biochem.yml
+  biochem_custom_clean: envs/biochem.yml
+  biochem_eigenvectors: envs/biochem.yml
+  biochem_selectk: envs/biochem.yml
+  biochem_gmm: envs/biochem.yml
+  biochem_o2_soft: envs/biochem.yml
+  biochem_hybrid: envs/biochem.yml
+  biochem_compare: envs/biochem.yml
+  biochem_split_o2_by_gmm: envs/biochem.yml
+  biochem_strat_anomaly: envs/biochem.yml
+  biochem_state_transitions: envs/biochem.yml
+  biochem_succession: envs/biochem.yml
+  biochem_feature_assoc: envs/biochem.yml
+  biochem_eof_pipeline: envs/biochem.yml
+  biochem_eof_state_cluster: envs/biochem.yml
+  biochem_eof_mode_plots: envs/biochem.yml
+  biochem_within_gmm: envs/biochem.yml
+  diversity: envs/advanced.yml
+  indicspecies: envs/advanced.yml
+  clustermaps: envs/advanced.yml
+  spieceasi: envs/advanced.yml
+  network_modules: envs/advanced.yml
+  network: envs/advanced.yml

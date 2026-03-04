@@ -1,0 +1,4 @@
+sampleID	Depth	Depth_anchored	Color	Cruise	Year	Month	Day	Season	plateID
+CR001_Y2024_M01_D15_Z005	5	5	#1f77b4	CR001	2024	1	15	Winter	plate_A
+CR001_Y2024_M01_D15_Z020	20	20	#ff7f0e	CR001	2024	1	15	Winter	plate_A
+CR002_Y2024_M02_D08_Z090	90	90	#2ca02c	CR002	2024	2	8	Winter	plate_B

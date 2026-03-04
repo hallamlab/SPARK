@@ -7,14 +7,16 @@ Features
 - All paths & style values are configurable
 - Safe I/O + schema checks
 - Reusable spring-layout (cache to JSON)
-- Multiple plot “modes” (degree, abundance, type ISA, status ISA, venn, phylum×{abundance,ISA}, labeled variants)
+- Multiple plot “modes” (degree, abundance, ISA overlays for two group summaries, phylum×{abundance,ISA}, labeled variants)
 - Consistent aesthetics with your rcParams
 """
 
 import argparse
 import json
 import os
+import re
 import sys
+from pathlib import Path
 from typing import Dict, Iterable, Tuple, Optional, List
 
 import networkx as nx
@@ -23,6 +25,7 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
 import seaborn as sns
 import math
 from collections import Counter
@@ -271,9 +274,6 @@ def label_selected(G: nx.Graph, pos: Dict, select_nodes: List[str], text_attr: s
                 expand_text=(1.2, 1.2), force_text=0.5, force_points=0.2)
 
 
-# ---------------------------- ISA summaries ----------------------------------
-import pandas as pd
-
 def reshape_indicspecies_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
     # 1) standardize IDs
     df = summary_df.rename(columns={'ASV': 'ASV_ID'}).copy()
@@ -307,16 +307,68 @@ def reshape_indicspecies_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
     )
     return out
 
-def long_AB_for_group(summary_df: pd.DataFrame, index_map: Dict[int, str]) -> pd.DataFrame:
+def normalize_combo(label: str) -> str:
+    if not isinstance(label, str):
+        return str(label)
+    parts = [p.strip() for p in label.split("+")]
+    parts = [p for p in parts if p]
+    return " + ".join(parts) if parts else label
+
+
+def infer_index_map_from_summary(summary_df: pd.DataFrame) -> Dict[int, str]:
+    # Prefer sign columns, which are guaranteed to mirror indicspecies group order.
+    s_cols = [str(c).strip() for c in summary_df.columns if str(c).strip().startswith("s.")]
+    if s_cols:
+        groups = [c.split("s.", 1)[1].strip() for c in s_cols]
+        groups = [g for g in groups if g]
+        if groups:
+            mapping: Dict[int, str] = {}
+            n = len(groups)
+            for i in range(1, (1 << n)):
+                members = [groups[b] for b in range(n) if (i >> b) & 1]
+                if members:
+                    mapping[i] = " + ".join(members) if len(members) > 1 else members[0]
+            return mapping
+
+    # Fallback: infer from available B columns.
+    b_cols = [str(c).strip() for c in summary_df.columns if str(c).strip().endswith(".B")]
+    groups = [c[:-2].strip() for c in b_cols if c[:-2].strip()]
+    return {i + 1: g for i, g in enumerate(groups)}
+
+
+def long_AB_for_group(summary_df: pd.DataFrame, index_map: Optional[Dict[int, str]] = None) -> pd.DataFrame:
     """
-    Convert indicspecies *_summary.tsv into long-form with aligned group rows.
-    Keeps rows where Group matches the mapped 'index'.
+    Convert indicspecies *_summary.tsv into long-form and align rows by index->group mapping.
+    If strict matching yields no rows, fallback to highest-B row per ASV/index.
     """
     df = reshape_indicspecies_summary(summary_df)
-    df['Group_mapped'] = df['index'].map(index_map)
-    df = df.loc[df['Group'] == df['Group_mapped']].drop(columns=['Group_mapped'])
-    df['AxB'] = (df['A'] * df['B']).fillna(0)
-    return df
+    if index_map is None:
+        index_map = infer_index_map_from_summary(summary_df)
+
+    def idx_to_label(x):
+        try:
+            if pd.isna(x):
+                return None
+            return index_map.get(int(x))
+        except Exception:
+            return None
+
+    df["Group_mapped"] = df["index"].apply(idx_to_label)
+    df["Group_norm"] = df["Group"].map(normalize_combo)
+    df["Group_mapped_norm"] = df["Group_mapped"].map(lambda x: normalize_combo(x) if x is not None else None)
+    out = df.loc[df["Group_norm"] == df["Group_mapped_norm"]].copy()
+
+    if out.empty:
+        print("[WARN] No direct Group/index matches found in ISA summary; using max-B fallback.")
+        tmp = df.copy()
+        tmp["B_num"] = pd.to_numeric(tmp["B"], errors="coerce").fillna(0.0)
+        idx = tmp.groupby(["ASV_ID", "index"])["B_num"].idxmax()
+        out = tmp.loc[idx].copy()
+
+    out["A"] = pd.to_numeric(out["A"], errors="coerce").fillna(0.0)
+    out["B"] = pd.to_numeric(out["B"], errors="coerce").fillna(0.0)
+    out["AxB"] = (out["A"] * out["B"]).fillna(0.0)
+    return out[["ASV_ID", "index", "Group", "A", "B", "AxB"]]
 
 
 # ---------------------------- Plot modes -------------------------------------
@@ -362,31 +414,35 @@ def plot_abundance(G: nx.Graph, pos: Dict, out_svg: str):
     save_figure(out_svg)
     plt.close()
 
-def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
-    """
-    Robust type-ISA plot:
-    - Defaults missing colors to 'lightgray' and missing AxB to 0
-    - Ensures node list is non-empty
-    - Skips category draws when no nodes in that category
-    """
+def plot_group_isa(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    palette: Dict[str, str],
+    *,
+    color_attr: str,
+    size_attr: str,
+    isa_scale: float = 500,
+    label: bool = False,
+    title: Optional[str] = None,
+    legend_title: str = "Group"
+):
     nodes = list(G.nodes())
     if not nodes:
-        print("[!] plot_type_isa: graph has no nodes; skipping.")
+        print("[!] plot_group_isa: graph has no nodes; skipping.")
         return
 
-    # Build per-node attributes with safe defaults
     node_colors = []
     node_sizes  = []
+    palette_vals = set(palette.values())
     for n in nodes:
         d = G.nodes[n]
-        c = d.get("type_color", "lightgray")
-        # if value is not one of your palette values, fall back to gray
-        if c not in set(type_palette.values()):
+        c = d.get(color_attr, "lightgray")
+        if c not in palette_vals:
             c = "lightgray"
         node_colors.append(c)
 
-        s = _safe_float(d.get("AxB", 0.0), 0.0) * isa_scale
-        # floor size so matplotlib doesn't choke on all-zeros
+        s = _safe_float(d.get(size_attr, 0.0), 0.0) * isa_scale
         if not np.isfinite(s) or s <= 0:
             s = 1.0
         node_sizes.append(s)
@@ -409,24 +465,23 @@ def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, tit
         edgecolors="black", linewidths=0.25, alpha=0.9, ax=ax
     )
 
-    # Optional labels for non-gray nodes
     if label:
         for n in nodes:
-            if G.nodes[n].get("type_color", "lightgray") != "lightgray":
+            if G.nodes[n].get(color_attr, "lightgray") != "lightgray":
                 x, y = pos[n]
                 ax.text(x, y, G.nodes[n].get("Taxon", n),
                         fontsize=9, fontweight="bold",
                         ha="center", va="center")
 
-    # Legend (types) + size legend
-    type_handles = [mpatches.Patch(color=c, label=t) for t, c in type_palette.items()]
+    class_handles = [mpatches.Patch(color=c, label=t) for t, c in sorted(palette.items(), key=lambda x: str(x[0]))]
     size_legend_vals = [0.1, 0.25, 0.5, 0.75, 1.0]
     size_handles = [plt.scatter([], [], s=max(1.0, v*isa_scale),
                                 edgecolors="black", facecolors="gray", alpha=1,
                                 label=f"ISA: {v:g}") for v in size_legend_vals]
 
-    ax.legend(type_handles + size_handles, [h.get_label() for h in type_handles + size_handles],
-              loc="upper left", bbox_to_anchor=(1, 1), frameon=False, title="Node Attributes",
+    legend_handles = class_handles + size_handles
+    ax.legend(legend_handles, [h.get_label() for h in legend_handles],
+              loc="upper left", bbox_to_anchor=(1, 1), frameon=False, title=legend_title,
               scatterpoints=1, labelspacing=1.5)
 
     # Keep proportions & avoid autoscaling surprises
@@ -438,126 +493,37 @@ def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, tit
 
     ax.axis("off")
     fig.tight_layout()
-    plt.savefig(out_svg, bbox_inches="tight")
-    # optional PDF sibling
-    if out_svg.endswith(".svg"):
-        plt.savefig(out_svg.replace(".svg", ".pdf"), bbox_inches="tight")
-    plt.close(fig)
-
-def plot_type_venn(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
-    """
-    Robust Venn-colored plot:
-    - Colors from node['venn_color'] (fallback 'lightgray')
-    - Sizes from node['AxB'] * isa_scale (floored to 1)
-    - Always draws a non-empty node list in one call
-    """
-    nodes = list(G.nodes())
-    if not nodes:
-        print("[!] plot_type_venn: graph has no nodes; skipping.")
-        return
-
-    # Preflight report (prints to stdout)
-    preflight_node_attr_report(
-        G, name="type_venn",
-        color_attr="venn_color",
-        size_attr="AxB",
-        palette_values=set(type_palette.values())
-    )
-
-    # Build per-node color/size with safe defaults
-    node_colors, node_sizes = [], []
-    palette_vals = set(type_palette.values())
-    for n in nodes:
-        d = G.nodes[n]
-        c = d.get("venn_color", "lightgray")
-        if c not in palette_vals:
-            c = "lightgray"
-        node_colors.append(c)
-
-        s = _safe_float(d.get("AxB", 0.0), 0.0) * isa_scale
-        if not np.isfinite(s) or s <= 0:
-            s = 1.0
-        node_sizes.append(s)
-
-    fig = plt.figure(figsize=(18, 18))
-    ax = plt.gca()
-
-    # Edges (no connectionstyle for LineCollection)
-    nx.draw_networkx_edges(G, pos, edge_color="lightgray", alpha=0.8, ax=ax)
-
-    # Nodes (single call; never an empty list)
-    nx.draw_networkx_nodes(
-        G, pos,
-        nodelist=nodes,
-        node_color=node_colors,
-        node_size=node_sizes,
-        edgecolors="black", linewidths=0.25, alpha=0.9, ax=ax
-    )
-
-    # Optional labels for colored nodes
-    if label:
-        for n in nodes:
-            if G.nodes[n].get("venn_color", "lightgray") != "lightgray":
-                x, y = pos[n]
-                ax.text(x, y, G.nodes[n].get("Taxon", n),
-                        fontsize=9, fontweight="bold",
-                        ha="center", va="center")
-
-    # Legend (types) + size legend
-    type_handles = [mpatches.Patch(color=c, label=t) for t, c in type_palette.items()]
-    size_vals = [0.1, 0.25, 0.5, 0.75, 1.0]
-    size_handles = [plt.scatter([], [], s=max(1.0, v * isa_scale),
-                                edgecolors="black", facecolors="gray", alpha=1,
-                                label=f"ISA: {v:g}") for v in size_vals]
-
-    ax.legend(type_handles + size_handles,
-              [h.get_label() for h in type_handles + size_handles],
-              loc="upper left", bbox_to_anchor=(1, 1),
-              frameon=False, title="Node Attributes",
-              scatterpoints=1, labelspacing=1.5)
-
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.autoscale(enable=True)
-    if title:
-        ax.set_title(title)
-    ax.axis("off")
-    fig.tight_layout()
     save_figure(out_svg)
+
+def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
+    plot_group_isa(
+        G,
+        pos,
+        out_svg,
+        type_palette,
+        color_attr="type_color",
+        size_attr="AxB_group1",
+        isa_scale=isa_scale,
+        label=label,
+        title=title,
+        legend_title="Group1 ISA",
+    )
 
 
 def plot_status_isa(G: nx.Graph, pos: Dict, out_svg: str, status_palette: Dict[str, str],
                     isa_scale: float, label: bool = False):
-    plt.figure(figsize=(18, 18))
-    draw_edges_light(G, pos, alpha=1.0)
-
-    def color_fn(n): return G.nodes[n].get('status_color', 'lightgray')
-    def size_fn(n): return float(G.nodes[n].get('AxB', 0.0)) * isa_scale
-    def alpha_fn(n): return 0.5 if color_fn(n) == 'lightgray' else 1.0
-    def lw_fn(n): return 1.0 if color_fn(n) == 'white' else 0.25  # thicker edge for Non-Cancer
-
-    draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=alpha_fn, lw_fn=lw_fn)
-
-    # Legend: thicker box for Non-Cancer
-    handles = []
-    for stat, col in status_palette.items():
-        lw = 1.0 if stat == "Non-Cancer" else 0.25
-        edge = "black" if stat == "Non-Cancer" else col
-        handles.append(mpatches.Patch(facecolor=col, edgecolor=edge, linewidth=lw, label=stat))
-    size_handles = size_legend_handles([0.1, 0.25, 0.5, 0.75, 1.0], "ISA:", isa_scale)
-    plt.legend(handles=handles + size_handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Attributes", frameon=False, scatterpoints=1, labelspacing=1.5)
-
-    if label:
-        to_label = [n for n in G.nodes() if color_fn(n) != 'lightgray']
-        label_selected(G, pos, to_label, text_attr='Taxon')
-
-    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
-    ttl = "SPIEC-EASI Network\nNode color: Cancer Status | Node size: Indicator Species Strength"
-    if label: ttl += " (Labeled)"
-    plt.title(ttl)
-    plt.axis('off')
-    save_figure(out_svg)
-    plt.close()
+    plot_group_isa(
+        G,
+        pos,
+        out_svg,
+        status_palette,
+        color_attr="status_color",
+        size_attr="AxB_group2",
+        isa_scale=isa_scale,
+        label=label,
+        title="SPIEC-EASI Network\nNode color: Group2 ISA | Node size: Indicator Species Strength",
+        legend_title="Group2 ISA",
+    )
 
 
 def plot_phylum(G: nx.Graph, pos: Dict, out_svg: str, phylum_palette: Dict[str, str],
@@ -593,6 +559,111 @@ def plot_phylum(G: nx.Graph, pos: Dict, out_svg: str, phylum_palette: Dict[str, 
     plt.close()
 
 
+def infer_group_name(path: str, fallback: str) -> str:
+    stem = Path(path).name
+    stem = re.sub(r"_indicator_species(_DULEG)?_summary\.tsv$", "", stem)
+    stem = re.sub(r"[^0-9A-Za-z]+", "_", stem).strip("_")
+    return stem if stem else fallback
+
+
+def auto_palette(labels: Iterable[str]) -> Dict[str, str]:
+    vals = sorted({str(x).strip() for x in labels if pd.notna(x) and str(x).strip()})
+    if not vals:
+        return {}
+    colors = sns.color_palette("tab20", n_colors=max(3, len(vals)))
+    return {vals[i]: mcolors.to_hex(colors[i % len(colors)]) for i in range(len(vals))}
+
+
+def load_modules_table(path: Optional[str], variant_name: str) -> pd.DataFrame:
+    if not path:
+        return pd.DataFrame(columns=["Taxon", "module_id", "module_label", "node_stability", "graph_variant"])
+    if not os.path.exists(path):
+        print(f"[WARN] Module table not found for {variant_name}: {path}")
+        return pd.DataFrame(columns=["Taxon", "module_id", "module_label", "node_stability", "graph_variant"])
+    df = load_table(path, sep="\t")
+    if "Taxon" not in df.columns and "ASV_ID" in df.columns:
+        df = df.rename(columns={"ASV_ID": "Taxon"})
+    if "Taxon" not in df.columns:
+        print(f"[WARN] Module table missing Taxon/ASV_ID for {variant_name}: {path}")
+        return pd.DataFrame(columns=["Taxon", "module_id", "module_label", "node_stability", "graph_variant"])
+    if "module_id" not in df.columns:
+        print(f"[WARN] Module table missing module_id for {variant_name}: {path}")
+        return pd.DataFrame(columns=["Taxon", "module_id", "module_label", "node_stability", "graph_variant"])
+    if "module_label" not in df.columns:
+        df["module_label"] = df["module_id"].apply(lambda x: f"M{int(x)}" if pd.notna(x) else "unassigned")
+    if "node_stability" not in df.columns:
+        df["node_stability"] = np.nan
+    if "graph_variant" not in df.columns:
+        df["graph_variant"] = variant_name
+    keep = ["Taxon", "module_id", "module_label", "node_stability", "graph_variant"]
+    return df[keep].drop_duplicates(subset=["Taxon"])
+
+
+def build_module_palette(module_labels: Iterable[str]) -> Dict[str, str]:
+    vals = sorted({str(x).strip() for x in module_labels if pd.notna(x) and str(x).strip()})
+    if not vals:
+        return {}
+    colors = sns.color_palette("tab20", n_colors=max(3, len(vals)))
+    return {vals[i]: mcolors.to_hex(colors[i % len(colors)]) for i in range(len(vals))}
+
+
+def plot_modules(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    *,
+    color_attr: str,
+    label_attr: str,
+    degree_scale: float = 80.0,
+    label: bool = False,
+    title: Optional[str] = None,
+):
+    plt.figure(figsize=(18, 18))
+    e_w = [abs(G.edges[e].get('weight', 0)) * 2.0 for e in G.edges()]
+    draw_edges_light(G, pos, alpha=0.6, edge_widths=e_w)
+
+    def color_fn(n):
+        return G.nodes[n].get(color_attr, "lightgray")
+
+    def size_fn(n):
+        return (float(G.nodes[n].get("Degree", 0.0)) + 1.0) * degree_scale
+
+    def alpha_fn(n):
+        stab = _safe_float(G.nodes[n].get("node_stability", np.nan), np.nan)
+        if np.isfinite(stab):
+            return max(0.35, min(1.0, stab))
+        return 0.8 if color_fn(n) != "lightgray" else 0.35
+
+    draw_nodes_one_by_one(G, pos, color_fn, size_fn, alpha_fn=alpha_fn)
+
+    labels = []
+    for n in G.nodes():
+        lbl = G.nodes[n].get(label_attr, "")
+        col = G.nodes[n].get(color_attr, "lightgray")
+        if lbl and col != "lightgray":
+            labels.append((str(lbl), col))
+    legend_items = {}
+    for lbl, col in labels:
+        legend_items.setdefault(lbl, col)
+    patches = [mpatches.Patch(color=c, label=l) for l, c in sorted(legend_items.items(), key=lambda x: x[0])]
+    if patches:
+        plt.legend(handles=patches, loc='upper left', bbox_to_anchor=(1, 1),
+                   title="Network Modules", frameon=False, labelspacing=1.0)
+
+    if label:
+        to_label = [n for n in G.nodes() if G.nodes[n].get(color_attr, "lightgray") != "lightgray"]
+        label_selected(G, pos, to_label, text_attr='Taxon')
+
+    plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
+    if title:
+        plt.title(title)
+    else:
+        plt.title("SPIEC-EASI Network\nNode color: Module assignment | Node size: Degree")
+    plt.axis('off')
+    save_figure(out_svg)
+    plt.close()
+
+
 # ---------------------------- Main pipeline ----------------------------------
 def main():
     p = argparse.ArgumentParser(
@@ -614,12 +685,18 @@ def main():
                    help="ASV count table (tsv; default: <data-dir>/spark_combined_output/ASVs/ASV_final.micro.tsv)")
     p.add_argument("--taxonomy", default=None,
                    help="taxonomy_updated.tsv (default: <data-dir>/spark_combined_output/metadata/taxonomy_updated.tsv)")
-    p.add_argument("--venn", default=None,
-                   help="Three_types_venn_presence_table.tsv (default: <data-dir>/spark_combined_output/metadata/Three_types_venn_presence_table.tsv)")
-    p.add_argument("--type-summary", default=None,
-                   help="type_group_indicator_species_summary.tsv")
-    p.add_argument("--status-summary", default=None,
-                   help="status_indicator_species_summary.tsv")
+    p.add_argument("--group1-summary", "--type-summary", dest="group1_summary", default=None,
+                   help="First ISA summary TSV (defaults to type_group_indicator_species_summary.tsv).")
+    p.add_argument("--group2-summary", "--status-summary", dest="group2_summary", default=None,
+                   help="Second ISA summary TSV (defaults to status_indicator_species_summary.tsv).")
+    p.add_argument("--group1-name", default=None,
+                   help="Display/slug name for first ISA summary; defaults inferred from filename.")
+    p.add_argument("--group2-name", default=None,
+                   help="Display/slug name for second ISA summary; defaults inferred from filename.")
+    p.add_argument("--modules-sub", default=None,
+                   help="Optional module assignment TSV for thresholded graph.")
+    p.add_argument("--modules-all", default=None,
+                   help="Optional module assignment TSV for all-edges graph.")
 
     # Layout options
     p.add_argument("--layout-json-all", default=None, help="Cache/Load layout JSON for graph-pos-all.")
@@ -637,9 +714,13 @@ def main():
                    choices=[
                        "degree_all", "degree_sub",
                        "abundance_sub",
-                       "type_isa", "type_isa_labeled",
-                       "type_venn", "type_venn_labeled",
-                       "status_isa", "status_isa_labeled",
+                       "group1_isa", "group1_isa_labeled",
+                       "group2_isa", "group2_isa_labeled",
+                       "type_isa", "type_isa_labeled",         # backward-compat aliases
+                       "status_isa", "status_isa_labeled",     # backward-compat aliases
+                       "type_venn", "type_venn_labeled",       # deprecated aliases (no-op)
+                       "module_sub", "module_sub_labeled",
+                       "module_all", "module_all_labeled",
                        "phylum_abund", "phylum_isa",
                        "all"
                    ],
@@ -656,9 +737,14 @@ def main():
     node_features_path = args.node_features or os.path.join(data_dir, "spark_combined_output/spieceasi/node_features.csv")
     asv_counts_path = args.asv_counts or os.path.join(data_dir, "spark_combined_output/ASVs/ASV_final.micro.tsv")
     taxonomy_path = args.taxonomy or os.path.join(data_dir, "spark_combined_output/metadata/taxonomy_updated.tsv")
-    venn_path = args.venn or os.path.join(data_dir, "spark_combined_output/metadata/Three_types_venn_presence_table.tsv")
-    type_summary_path = args.type_summary or os.path.join(data_dir, "spark_combined_output/indicspecies/type_group_indicator_species_summary.tsv")
-    status_summary_path = args.status_summary or os.path.join(data_dir, "spark_combined_output/indicspecies/status_indicator_species_summary.tsv")
+    group1_summary_path = args.group1_summary or os.path.join(data_dir, "spark_combined_output/indicspecies/type_group_indicator_species_summary.tsv")
+    group2_summary_path = args.group2_summary or os.path.join(data_dir, "spark_combined_output/indicspecies/status_indicator_species_summary.tsv")
+    group1_name = args.group1_name or infer_group_name(group1_summary_path, "group1")
+    group2_name = args.group2_name or infer_group_name(group2_summary_path, "group2")
+    group1_slug = re.sub(r"[^0-9A-Za-z._-]", "_", group1_name)
+    group2_slug = re.sub(r"[^0-9A-Za-z._-]", "_", group2_name)
+    modules_sub_path = args.modules_sub
+    modules_all_path = args.modules_all
 
     # Load inputs
     nf = load_table(node_features_path, sep=',', index_col=0)  # index = GraphML_ID
@@ -686,59 +772,43 @@ def main():
     tdf = pd.DataFrame([split_taxa_string(x) for x in tax['Taxon']])
     tax = pd.concat([tax[['ASV_ID']], tdf], axis=1).set_index('ASV_ID', drop=True)
 
-    venn = load_table(venn_path, sep='\t')
-    ensure_cols(venn, ['ASV_ID', 'grouping'], "venn_presence_table")
-    venn = venn.set_index('ASV_ID')
+    # ISA summaries (generalized)
+    group1_sum = load_table(group1_summary_path, sep='\t')
+    group2_sum = load_table(group2_summary_path, sep='\t')
+    if "ASV" not in group1_sum.columns and "ASV_ID" not in group1_sum.columns:
+        die(f"Group1 summary missing ASV/ASV_ID column: {group1_summary_path}")
+    if "ASV" not in group2_sum.columns and "ASV_ID" not in group2_sum.columns:
+        die(f"Group2 summary missing ASV/ASV_ID column: {group2_summary_path}")
+    ensure_cols(group1_sum, ['index'], "group1_summary")
+    ensure_cols(group2_sum, ['index'], "group2_summary")
 
-    # ISA summaries (A,B, AxB)
-    # maps from integer index to group labels:
-    status_index = {1: 'Cancer', 2: 'Non-Cancer', 3: 'Cancer+Non-Cancer'}
-    type_index = {
-        1: 'BAL', 2: 'Lung Brush', 3: 'Oral Rinse',
-        4: 'BAL+Lung Brush', 5: 'BAL+Oral Rinse', 6: 'Lung Brush+Oral Rinse',
-        7: 'BAL+Lung Brush+Oral Rinse'
-    }
-    type_palette = build_type_palette()
-    status_palette = build_status_palette()
-
-    type_sum = load_table(type_summary_path, sep='\t')
-    status_sum = load_table(status_summary_path, sep='\t')
-
-    ensure_cols(type_sum, ['ASV', 'index'], "type_summary")
-    ensure_cols(status_sum, ['ASV', 'index'], "status_summary")
-
-    type_long = long_AB_for_group(type_sum.copy(), type_index)
-    status_long = long_AB_for_group(status_sum.copy(), status_index)
+    group1_long = long_AB_for_group(group1_sum.copy())
+    group2_long = long_AB_for_group(group2_sum.copy())
+    group1_palette = auto_palette(group1_long["Group"].dropna().unique().tolist())
+    group2_palette = auto_palette(group2_long["Group"].dropna().unique().tolist())
 
     # ----- Build augmented node attribute tables -----
-    # nfeat_type_df: join nf (GraphML_ID index) with type ISA via Taxon (ASV)
-    nfeat_type = nf.reset_index().merge(
-        type_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
+    # Group1 ISA table
+    nfeat_group1 = nf.reset_index().merge(
+        group1_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
+    nfeat_group1 = nfeat_group1.rename(
+        columns={"Group": "group1_label", "A": "A_group1", "B": "B_group1", "AxB": "AxB_group1"}
+    )
+    nfeat_group1["group1_color"] = nfeat_group1["group1_label"].map(group1_palette).fillna("lightgray")
+    nfeat_group1 = nfeat_group1.reset_index().merge(
+        tax.reset_index(), left_on="Taxon", right_on="ASV_ID", how="left"
+    ).set_index("GraphML_ID")
 
-    # color per type group index
-    nfeat_type['type_name'] = nfeat_type['index'].map(type_index)
-    nfeat_type['type_color'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
-
-    # venn color
-    venn_map = venn_type_map()
-    tmp = nf.reset_index().merge(venn, left_on='Taxon', right_index=True, how='left')
-    tmp['venn_color'] = tmp['grouping'].map(lambda g: type_palette.get(venn_map.get(g, ""), 'lightgray'))
-    nfeat_type['venn_color'] = tmp.set_index('GraphML_ID')['venn_color']
-
-    # add taxonomy columns to type table
-    nfeat_type = nfeat_type.reset_index().merge(
-        tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
+    # Group2 ISA table
+    nfeat_group2 = nf.reset_index().merge(
+        group2_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
-
-    # nfeat_status_df: join nf with status ISA via Taxon (ASV)
-    nfeat_status = nf.reset_index().merge(
-        status_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
-    ).set_index('GraphML_ID')
-    nfeat_status['status_name'] = nfeat_status['index'].map(status_index)
-    nfeat_status['status_color'] = nfeat_status['status_name'].map(status_palette).fillna('lightgray')
-    # add taxonomy to status table (for consistency)
-    nfeat_status = nfeat_status.reset_index().merge(
+    nfeat_group2 = nfeat_group2.rename(
+        columns={"Group": "group2_label", "A": "A_group2", "B": "B_group2", "AxB": "AxB_group2"}
+    )
+    nfeat_group2["group2_color"] = nfeat_group2["group2_label"].map(group2_palette).fillna("lightgray")
+    nfeat_group2 = nfeat_group2.reset_index().merge(
         tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
     ).set_index('GraphML_ID')
 
@@ -748,13 +818,34 @@ def main():
         tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
     ).set_index('GraphML_ID')
 
-    # Build Phylum palette from type table (prefer real categories)
-    phyla = pd.concat([nfeat_type['Phylum'], nfeat_abund['Phylum']]).dropna().unique().tolist()
+    # modules tables (optional)
+    modules_sub = load_modules_table(modules_sub_path, "sub")
+    modules_all = load_modules_table(modules_all_path, "all")
+    module_palette = build_module_palette(
+        pd.concat([modules_sub.get("module_label", pd.Series(dtype=str)),
+                   modules_all.get("module_label", pd.Series(dtype=str))], ignore_index=True).dropna().tolist()
+    )
+    if not modules_sub.empty:
+        modules_sub["module_color"] = modules_sub["module_label"].map(module_palette).fillna("lightgray")
+    if not modules_all.empty:
+        modules_all["module_color"] = modules_all["module_label"].map(module_palette).fillna("lightgray")
+    nfeat_modules_sub = nf.reset_index().merge(
+        modules_sub.set_index("Taxon"), left_on="Taxon", right_index=True, how="left"
+    ).set_index("GraphML_ID")
+    nfeat_modules_all = nf.reset_index().merge(
+        modules_all.set_index("Taxon"), left_on="Taxon", right_index=True, how="left"
+    ).set_index("GraphML_ID")
+
+    # Build Phylum palette from available tables.
+    phyla = pd.concat([nfeat_group1['Phylum'], nfeat_group2['Phylum'], nfeat_abund['Phylum']]).dropna().unique().tolist()
     phylum_palette = {p: c for p, c in zip(phyla, sns.color_palette('tab20', len(phyla)))}
 
     keep_cols = [
         'Taxon', 'Degree', 'Betweenness', 'Closeness', 'EigenCentral',
-        'A', 'B', 'AxB', 'type_color', 'status_color', 'venn_color', 'Phylum', 'mean'
+        'A_group1', 'B_group1', 'AxB_group1', 'group1_label', 'group1_color',
+        'A_group2', 'B_group2', 'AxB_group2', 'group2_label', 'group2_color',
+        'module_id', 'module_label', 'module_color', 'node_stability',
+        'Phylum', 'mean'
     ]
 
     # -------------------- Load graphs + positions -----------------------------
@@ -769,13 +860,15 @@ def main():
     G_sub = load_graph(graph_sub)
 
     # Attach attributes (each plot function can use what it needs)
-    add_node_attrs_from_df(G_all, nfeat_type, keep_cols)
-    add_node_attrs_from_df(G_all, nfeat_status, keep_cols)
+    add_node_attrs_from_df(G_all, nfeat_group1, keep_cols)
+    add_node_attrs_from_df(G_all, nfeat_group2, keep_cols)
     add_node_attrs_from_df(G_all, nfeat_abund, keep_cols)
+    add_node_attrs_from_df(G_all, nfeat_modules_all, keep_cols)
 
-    add_node_attrs_from_df(G_sub, nfeat_type, keep_cols)
-    add_node_attrs_from_df(G_sub, nfeat_status, keep_cols)
+    add_node_attrs_from_df(G_sub, nfeat_group1, keep_cols)
+    add_node_attrs_from_df(G_sub, nfeat_group2, keep_cols)
     add_node_attrs_from_df(G_sub, nfeat_abund, keep_cols)
+    add_node_attrs_from_df(G_sub, nfeat_modules_sub, keep_cols)
 
     # Positions (cached)
     pos_all = spring_layout_cached(G_all, seed=args.layout_seed,
@@ -791,18 +884,24 @@ def main():
         modes = {
             "degree_all", "degree_sub",
             "abundance_sub",
-            "type_isa", "type_isa_labeled",
-            "type_venn", "type_venn_labeled",
-            "status_isa", "status_isa_labeled",
+            "group1_isa", "group1_isa_labeled",
+            "group2_isa", "group2_isa_labeled",
+            "module_sub", "module_sub_labeled",
+            "module_all",
             "phylum_abund", "phylum_isa"
         }
 
-    # Example for the Venn plot on the thresholded graph
-    preflight_node_attr_report(
-        G_sub, name="pre-venn-sub",
-        color_attr="venn_color", size_attr="AxB",
-        palette_values=set(type_palette.values())
-    )
+    # Backward-compatible aliases.
+    if "type_isa" in modes:
+        modes.add("group1_isa")
+    if "type_isa_labeled" in modes:
+        modes.add("group1_isa_labeled")
+    if "status_isa" in modes:
+        modes.add("group2_isa")
+    if "status_isa_labeled" in modes:
+        modes.add("group2_isa_labeled")
+    if "type_venn" in modes or "type_venn_labeled" in modes:
+        print("[WARN] Venn network modes are deprecated and ignored.")
 
     # Degree (all edges; weighted widths)
     if "degree_all" in modes:
@@ -821,29 +920,95 @@ def main():
         out = os.path.join(args.outdir, "network_abundance.svg")
         plot_abundance(G_sub, pos_sub, out)
 
-    # Type ISA (color by type ISA, size by AxB)
-    if "type_isa" in modes:
-        out = os.path.join(args.outdir, "network_type_ISA.svg")
-        plot_type_isa(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=False)
-    if "type_isa_labeled" in modes:
-        out = os.path.join(args.outdir, "network_type_ISA_LABELED.svg")
-        plot_type_isa(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True)
+    # Group1 ISA
+    if "group1_isa" in modes:
+        out = os.path.join(args.outdir, f"network_{group1_slug}_ISA.svg")
+        plot_group_isa(
+            G_sub, pos_sub, out, group1_palette,
+            color_attr="group1_color", size_attr="AxB_group1",
+            isa_scale=args.isa_scale, label=False,
+            title=f"SPIEC-EASI Network\nNode color: {group1_name} ISA | Node size: Indicator Species Strength",
+            legend_title=f"{group1_name} ISA"
+        )
+    if "group1_isa_labeled" in modes:
+        out = os.path.join(args.outdir, f"network_{group1_slug}_ISA_LABELED.svg")
+        plot_group_isa(
+            G_sub, pos_sub, out, group1_palette,
+            color_attr="group1_color", size_attr="AxB_group1",
+            isa_scale=args.isa_scale, label=True,
+            title=f"SPIEC-EASI Network\nNode color: {group1_name} ISA | Node size: Indicator Species Strength (Labeled)",
+            legend_title=f"{group1_name} ISA"
+        )
 
-    # Type Venn
-    if "type_venn" in modes:
-        out = os.path.join(args.outdir, "network_type_VENN.svg")
-        plot_type_venn(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=False)
-    if "type_venn_labeled" in modes:
-        out = os.path.join(args.outdir, "network_type_VENN_LABELED.svg")
-        plot_type_venn(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True)
+    # Group2 ISA
+    if "group2_isa" in modes:
+        out = os.path.join(args.outdir, f"network_{group2_slug}_ISA.svg")
+        plot_group_isa(
+            G_sub, pos_sub, out, group2_palette,
+            color_attr="group2_color", size_attr="AxB_group2",
+            isa_scale=args.isa_scale, label=False,
+            title=f"SPIEC-EASI Network\nNode color: {group2_name} ISA | Node size: Indicator Species Strength",
+            legend_title=f"{group2_name} ISA"
+        )
+    if "group2_isa_labeled" in modes:
+        out = os.path.join(args.outdir, f"network_{group2_slug}_ISA_LABELED.svg")
+        plot_group_isa(
+            G_sub, pos_sub, out, group2_palette,
+            color_attr="group2_color", size_attr="AxB_group2",
+            isa_scale=args.isa_scale, label=True,
+            title=f"SPIEC-EASI Network\nNode color: {group2_name} ISA | Node size: Indicator Species Strength (Labeled)",
+            legend_title=f"{group2_name} ISA"
+        )
 
-    # Status ISA
-    if "status_isa" in modes:
-        out = os.path.join(args.outdir, "network_status_ISA.svg")
-        plot_status_isa(G_sub, pos_sub, out, status_palette, isa_scale=args.isa_scale, label=False)
-    if "status_isa_labeled" in modes:
-        out = os.path.join(args.outdir, "network_status_ISA_LABELED.svg")
-        plot_status_isa(G_sub, pos_sub, out, status_palette, isa_scale=args.isa_scale, label=True)
+    # Module overlays
+    if "module_sub" in modes:
+        if modules_sub.empty:
+            print("[WARN] module_sub requested, but no module assignments were loaded.")
+        else:
+            out = os.path.join(args.outdir, "network_modules_POS_SUB.svg")
+            plot_modules(
+                G_sub, pos_sub, out,
+                color_attr="module_color", label_attr="module_label",
+                degree_scale=args.degree_scale,
+                label=False,
+                title="SPIEC-EASI Network (POS_SUB)\nNode color: Modules | Node size: Degree"
+            )
+    if "module_sub_labeled" in modes:
+        if modules_sub.empty:
+            print("[WARN] module_sub_labeled requested, but no module assignments were loaded.")
+        else:
+            out = os.path.join(args.outdir, "network_modules_POS_SUB_LABELED.svg")
+            plot_modules(
+                G_sub, pos_sub, out,
+                color_attr="module_color", label_attr="module_label",
+                degree_scale=args.degree_scale,
+                label=True,
+                title="SPIEC-EASI Network (POS_SUB)\nNode color: Modules | Node size: Degree (Labeled)"
+            )
+    if "module_all" in modes:
+        if modules_all.empty:
+            print("[WARN] module_all requested, but no module assignments were loaded.")
+        else:
+            out = os.path.join(args.outdir, "network_modules_POS_ALL.svg")
+            plot_modules(
+                G_all, pos_all, out,
+                color_attr="module_color", label_attr="module_label",
+                degree_scale=args.degree_scale,
+                label=False,
+                title="SPIEC-EASI Network (POS_ALL)\nNode color: Modules | Node size: Degree"
+            )
+    if "module_all_labeled" in modes:
+        if modules_all.empty:
+            print("[WARN] module_all_labeled requested, but no module assignments were loaded.")
+        else:
+            out = os.path.join(args.outdir, "network_modules_POS_ALL_LABELED.svg")
+            plot_modules(
+                G_all, pos_all, out,
+                color_attr="module_color", label_attr="module_label",
+                degree_scale=args.degree_scale,
+                label=True,
+                title="SPIEC-EASI Network (POS_ALL)\nNode color: Modules | Node size: Degree (Labeled)"
+            )
 
     # Phylum × {abundance, ISA}
     if "phylum_abund" in modes:
@@ -852,7 +1017,7 @@ def main():
 
     if "phylum_isa" in modes:
         out = os.path.join(args.outdir, "network_phylum_ISA.svg")
-        plot_phylum(G_sub, pos_sub, out, phylum_palette, size_attr='AxB', size_label='ISA', size_scale=args.isa_scale)
+        plot_phylum(G_sub, pos_sub, out, phylum_palette, size_attr='AxB_group1', size_label='ISA', size_scale=args.isa_scale)
 
     ok("All done.")
 

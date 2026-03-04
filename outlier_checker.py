@@ -55,9 +55,15 @@ import hdbscan
 from hdbscan import approximate_predict
 
 # Optional compositional transforms (CLR)
-from skbio.stats.composition import clr, multiplicative_replacement
+from skbio.stats.composition import clr
+try:
+    # skbio <=0.6
+    from skbio.stats.composition import multiplicative_replacement
+except ImportError:
+    # skbio >=0.7 renamed this helper
+    from skbio.stats.composition import multi_replace as multiplicative_replacement
 
-SAMPLE_ID_COL = 'sampleid'
+SAMPLE_ID_COL = 'sampleID'
 
 
 # -----------------------------

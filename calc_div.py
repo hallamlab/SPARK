@@ -227,19 +227,25 @@ def main():
         )
 
     if args.mito_table:
-        run_for_table(
-            "mito",
-            args.mito_table,
-            mito_dir if mito_dir is not None else args.outdir,
-            args.samples_on,
-            index_col,
-            do_alpha,
-            do_bray,
-            do_jacc,
-            args.presence_threshold,
-            args.keep_empty_samples,
-            args.keep_empty_features,
-        )
+        try:
+            run_for_table(
+                "mito",
+                args.mito_table,
+                mito_dir if mito_dir is not None else args.outdir,
+                args.samples_on,
+                index_col,
+                do_alpha,
+                do_bray,
+                do_jacc,
+                args.presence_threshold,
+                args.keep_empty_samples,
+                args.keep_empty_features,
+            )
+        except ValueError as exc:
+            if "After filtering, table is empty" in str(exc):
+                print(f"[mito] WARNING: {exc}. Skipping mito diversity.", file=sys.stderr)
+            else:
+                raise
 
 
 if __name__ == "__main__":

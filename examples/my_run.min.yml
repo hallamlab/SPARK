@@ -1,0 +1,52 @@
+# Minimal template: core ASV + taxonomy only.
+# Copy to SPARK/my_run.yml and edit all /abs/path placeholders.
+
+paths:
+  input_dir: /abs/path/to/fastq_dir
+  output_dir: /abs/path/to/output_dir
+  manifest: /abs/path/to/ref_db/sample_manifest.tsv
+  work_dir: /abs/path/to/nf_work
+  conda_cache_dir: /abs/path/to/conda_cache
+
+resources:
+  threads: 8
+  single_end: false
+
+mito:
+  enabled: false
+
+filter_counts:
+  enabled: false
+
+general_stats:
+  enabled: true
+
+sankey:
+  enabled: false
+
+metadata_plots:
+  enabled: false
+
+batch_correction:
+  enabled: false
+
+outlier_detection:
+  enabled: false
+
+collectors_curve:
+  enabled: false
+
+diversity:
+  enabled: false
+
+indicspecies:
+  enabled: false
+
+clustermaps:
+  enabled: false
+
+spieceasi:
+  enabled: false
+
+biochem_pre_asv:
+  enabled: false

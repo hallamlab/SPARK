@@ -322,10 +322,12 @@ class Config:
     matrix_cleaned: str
     eigenvectors: str
     assignments: str
+    o2_assignments: Optional[str]
     outdir: str
     sep_matrix: str
     sep_eig: str
     sep_assign: str
+    sep_o2_assign: str
 
     # keying
     id_col: str
@@ -340,6 +342,7 @@ class Config:
     date_col: str
     oxygen_col: str
     cruise_col: str
+    o2_compartment_col: str
 
     # O2 thresholds uM
     o2_oxic_gt: float
@@ -384,10 +387,16 @@ def parse_args() -> Config:
     ap.add_argument("--matrix-cleaned", required=True, help="Path to matrix_cleaned.csv")
     ap.add_argument("--eigenvectors", required=True, help="Path to eigenvectors_scores.csv")
     ap.add_argument("--assignments", required=True, help="Path to compartments_assignments_smoothed.csv")
+    ap.add_argument(
+        "--o2-assignments",
+        default=None,
+        help="Optional path to o2_compartments_assignments_{base|smoothed}.csv. If provided, uses these O2 labels instead of thresholding Oxygen.",
+    )
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--sep-matrix", default=",")
     ap.add_argument("--sep-eig", default=",")
     ap.add_argument("--sep-assign", default=",")
+    ap.add_argument("--sep-o2-assign", default=",")
 
     ap.add_argument("--id-col", default="cruise_year_month_depth", help="Legacy ID column (only used if --key-mode id).")
 
@@ -410,6 +419,11 @@ def parse_args() -> Config:
     ap.add_argument("--date-col", default="date")
     ap.add_argument("--oxygen-col", default="Oxygen")
     ap.add_argument("--cruise-col", default="Cruise")
+    ap.add_argument(
+        "--o2-compartment-col",
+        default="compartment_name",
+        help="Column in --o2-assignments containing O2 compartment labels (default compartment_name).",
+    )
 
     ap.add_argument("--o2-oxic-gt", type=float, default=90.0)
     ap.add_argument("--o2-dysoxic-hi", type=float, default=90.0)
@@ -469,10 +483,12 @@ def parse_args() -> Config:
         matrix_cleaned=ns.matrix_cleaned,
         eigenvectors=ns.eigenvectors,
         assignments=ns.assignments,
+        o2_assignments=ns.o2_assignments,
         outdir=ns.outdir,
         sep_matrix=ns.sep_matrix,
         sep_eig=ns.sep_eig,
         sep_assign=ns.sep_assign,
+        sep_o2_assign=ns.sep_o2_assign,
 
         id_col=ns.id_col,
         key_mode=ns.key_mode,
@@ -485,6 +501,7 @@ def parse_args() -> Config:
         date_col=ns.date_col,
         oxygen_col=ns.oxygen_col,
         cruise_col=ns.cruise_col,
+        o2_compartment_col=ns.o2_compartment_col,
 
         o2_oxic_gt=ns.o2_oxic_gt,
         o2_dysoxic_hi=ns.o2_dysoxic_hi,
@@ -587,6 +604,53 @@ def label_o2_compartment(o2_uM: pd.Series, cfg: Config) -> pd.Series:
     out[(x < cfg.o2_suboxic_hi) & (x >= cfg.o2_suboxic_lo)] = "suboxic"
     out[x < cfg.o2_suboxic_lo] = "anoxic"
     return out
+
+
+def normalize_o2_labels(raw: pd.Series) -> pd.Series:
+    """
+    Normalize O2 compartment labels to canonical names:
+      oxic, dysoxic, suboxic, anoxic
+    Also supports numeric-coded labels 0..3.
+    """
+    s = raw.copy()
+    out = pd.Series(["NA"] * len(s), index=s.index, dtype="object")
+
+    # numeric mapping (0..3)
+    num = pd.to_numeric(s, errors="coerce")
+    num_map = {0: "oxic", 1: "dysoxic", 2: "suboxic", 3: "anoxic"}
+    for k, v in num_map.items():
+        out[num == float(k)] = v
+
+    # text mapping
+    txt = s.astype("object").fillna("NA").astype(str).str.strip().str.lower()
+    txt_map = {
+        "oxic": "oxic",
+        "dysoxic": "dysoxic",
+        "suboxic": "suboxic",
+        "anoxic": "anoxic",
+    }
+    mapped_txt = txt.map(txt_map)
+    out[mapped_txt.notna()] = mapped_txt[mapped_txt.notna()]
+    return out
+
+
+def o2_labels_from_assignments(df_o2: pd.DataFrame, cfg: Config) -> pd.Series:
+    """
+    Extract and normalize O2 labels from an O2 assignment table.
+    Fallback order:
+      1) cfg.o2_compartment_col
+      2) compartment_name
+      3) o2_compartment
+      4) component
+    """
+    candidates = [cfg.o2_compartment_col, "compartment_name", "o2_compartment", "component"]
+    col = next((c for c in candidates if c in df_o2.columns), None)
+    if col is None:
+        raise ValueError(
+            "Could not find an O2 compartment column in --o2-assignments. "
+            f"Tried: {candidates}"
+        )
+    return normalize_o2_labels(df_o2[col])
 
 
 # ----------------------------
@@ -1279,16 +1343,25 @@ def main() -> None:
     df_matrix = read_table_dedup_cols(cfg.matrix_cleaned, cfg.sep_matrix)
     df_eig = read_table_dedup_cols(cfg.eigenvectors, cfg.sep_eig)
     df_assign = read_table_dedup_cols(cfg.assignments, cfg.sep_assign)
+    df_o2_assign = (
+        read_table_dedup_cols(cfg.o2_assignments, cfg.sep_o2_assign)
+        if cfg.o2_assignments
+        else None
+    )
 
     # Datetimes
     df_matrix = coerce_datetime(df_matrix, cfg.date_col)
     df_eig = coerce_datetime(df_eig, cfg.date_col)
     df_assign = coerce_datetime(df_assign, cfg.date_col)
+    if df_o2_assign is not None:
+        df_o2_assign = coerce_datetime(df_o2_assign, cfg.date_col)
 
     # Build merge keys
     df_matrix = build_merge_key(df_matrix, cfg)
     df_eig = build_merge_key(df_eig, cfg)
     df_assign = build_merge_key(df_assign, cfg)
+    if df_o2_assign is not None:
+        df_o2_assign = build_merge_key(df_o2_assign, cfg)
 
     # Detect PC columns
     if cfg.pc_cols:
@@ -1316,7 +1389,7 @@ def main() -> None:
     biochem_all_cols = [c for c in df_matrix.columns if c not in exclude]
     biochem_cols = [c for c in biochem_all_cols if pd.to_numeric(df_matrix[c], errors="coerce").notna().all()]
 
-    if cfg.oxygen_col not in df_matrix.columns:
+    if (df_o2_assign is None) and (cfg.oxygen_col not in df_matrix.columns):
         raise ValueError(f"matrix_cleaned missing oxygen col: {cfg.oxygen_col}")
     if cfg.depth_anchored_col not in df_matrix.columns:
         raise ValueError(f"matrix_cleaned missing anchored depth col: {cfg.depth_anchored_col}")
@@ -1331,10 +1404,19 @@ def main() -> None:
 
     m_sp = df_assign.merge(df_matrix[keep_sparce], on=cfg.derived_key_col, how="left", suffixes=("", "_matrix"))
 
-    # Label O2
-    m["o2_compartment"] = label_o2_compartment(m[cfg.oxygen_col], cfg)
+    # Label O2 (prefer external soft/smoothed assignments when provided)
+    if df_o2_assign is not None:
+        o2_tbl = df_o2_assign[[cfg.derived_key_col]].copy()
+        o2_tbl["o2_compartment"] = o2_labels_from_assignments(df_o2_assign, cfg)
+        o2_tbl = o2_tbl.dropna(subset=[cfg.derived_key_col]).drop_duplicates(subset=[cfg.derived_key_col], keep="first")
+        o2_lookup = o2_tbl.set_index(cfg.derived_key_col)["o2_compartment"]
+        m["o2_compartment"] = m[cfg.derived_key_col].map(o2_lookup).fillna("NA").astype("object")
+        m_sp["o2_compartment"] = m_sp[cfg.derived_key_col].map(o2_lookup).fillna("NA").astype("object")
+    else:
+        m["o2_compartment"] = label_o2_compartment(m[cfg.oxygen_col], cfg)
+        m_sp["o2_compartment"] = label_o2_compartment(m_sp[cfg.oxygen_col], cfg)
+
     m[cfg.depth_anchored_col] = pd.to_numeric(m[cfg.depth_anchored_col], errors="coerce")
-    m_sp["o2_compartment"] = label_o2_compartment(m_sp[cfg.oxygen_col], cfg)
     m_sp[cfg.depth_anchored_col] = pd.to_numeric(m_sp[cfg.depth_anchored_col], errors="coerce")
 
     # Save merged table

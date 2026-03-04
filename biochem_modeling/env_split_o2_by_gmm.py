@@ -95,10 +95,12 @@ class Config:
     eigenvectors: str
     umap_embedding: str
     assignments: str
+    o2_assignments: Optional[str]
     outdir: str
     sep_matrix: str
     sep_eig: str
     sep_assign: str
+    sep_o2_assign: str
 
     # keying
     id_col: str
@@ -109,6 +111,7 @@ class Config:
 
     # core cols
     oxygen_col: str
+    o2_compartment_col: str
     cruise_col: str
     depth_col: str
     depth_anchored_col: str
@@ -160,11 +163,17 @@ def parse_args() -> Config:
     ap.add_argument("--eigenvectors", required=True)
     ap.add_argument("--umap-embedding", required=True)
     ap.add_argument("--assignments", required=True)
+    ap.add_argument(
+        "--o2-assignments",
+        default=None,
+        help="Optional path to o2_compartments_assignments_{base|smoothed}.csv. If provided, uses these O2 labels instead of thresholding Oxygen.",
+    )
     ap.add_argument("--outdir", required=True)
 
     ap.add_argument("--sep-matrix", default=",")
     ap.add_argument("--sep-eig", default=",")
     ap.add_argument("--sep-assign", default=",")
+    ap.add_argument("--sep-o2-assign", default=",")
 
     ap.add_argument("--id-col", default="cruise_year_month_depth")
     ap.add_argument("--key-mode", choices=["composite", "id"], default="composite")
@@ -172,6 +181,11 @@ def parse_args() -> Config:
     ap.add_argument("--key-sep", default="|")
 
     ap.add_argument("--oxygen-col", default="Oxygen")
+    ap.add_argument(
+        "--o2-compartment-col",
+        default="compartment_name",
+        help="Column in --o2-assignments containing O2 compartment labels (default compartment_name).",
+    )
     ap.add_argument("--cruise-col", default="Cruise")
     ap.add_argument("--depth-col", default="Depth")
     ap.add_argument("--depth-anchored-col", default="Depth_anchored")
@@ -223,17 +237,20 @@ def parse_args() -> Config:
         matrix_cleaned=ns.matrix_cleaned,
         eigenvectors=ns.eigenvectors,
         assignments=ns.assignments,
+        o2_assignments=ns.o2_assignments,
         umap_embedding=ns.umap_embedding,
         outdir=ns.outdir,
         sep_matrix=ns.sep_matrix,
         sep_eig=ns.sep_eig,
         sep_assign=ns.sep_assign,
+        sep_o2_assign=ns.sep_o2_assign,
         id_col=ns.id_col,
         key_mode=ns.key_mode,
         key_cols=key_cols,
         key_sep=ns.key_sep,
         derived_key_col="__merge_key__",
         oxygen_col=ns.oxygen_col,
+        o2_compartment_col=ns.o2_compartment_col,
         cruise_col=ns.cruise_col,
         depth_col=ns.depth_col,
         depth_anchored_col=ns.depth_anchored_col,
@@ -399,6 +416,39 @@ def label_o2_compartment(o2_uM: pd.Series, cfg: Config) -> pd.Series:
     out[(x < cfg.o2_suboxic_hi) & (x >= cfg.o2_suboxic_lo)] = "suboxic"
     out[x < cfg.o2_suboxic_lo] = "anoxic"
     return out
+
+
+def normalize_o2_labels(raw: pd.Series) -> pd.Series:
+    out = pd.Series(["NA"] * len(raw), index=raw.index, dtype="object")
+
+    # numeric map
+    num = pd.to_numeric(raw, errors="coerce")
+    num_map = {0: "oxic", 1: "dysoxic", 2: "suboxic", 3: "anoxic"}
+    for k, v in num_map.items():
+        out[num == float(k)] = v
+
+    # text map
+    txt = raw.astype("object").fillna("NA").astype(str).str.strip().str.lower()
+    txt_map = {
+        "oxic": "oxic",
+        "dysoxic": "dysoxic",
+        "suboxic": "suboxic",
+        "anoxic": "anoxic",
+    }
+    mapped_txt = txt.map(txt_map)
+    out[mapped_txt.notna()] = mapped_txt[mapped_txt.notna()]
+    return out
+
+
+def o2_labels_from_assignments(df_o2: pd.DataFrame, cfg: Config) -> pd.Series:
+    candidates = [cfg.o2_compartment_col, "compartment_name", "o2_compartment", "component"]
+    col = next((c for c in candidates if c in df_o2.columns), None)
+    if col is None:
+        raise ValueError(
+            "Could not find an O2 compartment column in --o2-assignments. "
+            f"Tried: {candidates}"
+        )
+    return normalize_o2_labels(df_o2[col])
 
 
 def confusion_tables(y_true: pd.Series, y_pred: pd.Series) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -1407,12 +1457,19 @@ def main() -> None:
     df_matrix = read_table_dedup_cols(cfg.matrix_cleaned, cfg.sep_matrix)
     df_eig = read_table_dedup_cols(cfg.eigenvectors, cfg.sep_eig)
     df_assign = read_table_dedup_cols(cfg.assignments, cfg.sep_assign)
+    df_o2_assign = (
+        read_table_dedup_cols(cfg.o2_assignments, cfg.sep_o2_assign)
+        if cfg.o2_assignments
+        else None
+    )
 
     df_matrix = build_merge_key(df_matrix, cfg)
     df_eig = build_merge_key(df_eig, cfg)
     df_assign = build_merge_key(df_assign, cfg)
+    if df_o2_assign is not None:
+        df_o2_assign = build_merge_key(df_o2_assign, cfg)
 
-    if cfg.oxygen_col not in df_matrix.columns:
+    if (df_o2_assign is None) and (cfg.oxygen_col not in df_matrix.columns):
         raise ValueError(f"matrix_cleaned missing oxygen col: {cfg.oxygen_col}")
     if cfg.gmm_component_col not in df_assign.columns:
         raise ValueError(f"assignments missing GMM component col: {cfg.gmm_component_col}")
@@ -1435,8 +1492,15 @@ def main() -> None:
     m = m.merge(df_eig[keep_eig_cols], on=cfg.derived_key_col, how="left")
     m = coalesce_merge_suffix_columns(m, prefer="x")
 
-    # o2 compartments
-    m["o2_compartment"] = label_o2_compartment(m[cfg.oxygen_col], cfg)
+    # O2 compartments (prefer external soft/smoothed assignments when provided)
+    if df_o2_assign is not None:
+        o2_tbl = df_o2_assign[[cfg.derived_key_col]].copy()
+        o2_tbl["o2_compartment"] = o2_labels_from_assignments(df_o2_assign, cfg)
+        o2_tbl = o2_tbl.dropna(subset=[cfg.derived_key_col]).drop_duplicates(subset=[cfg.derived_key_col], keep="first")
+        o2_lookup = o2_tbl.set_index(cfg.derived_key_col)["o2_compartment"]
+        m["o2_compartment"] = m[cfg.derived_key_col].map(o2_lookup).fillna("NA").astype("object")
+    else:
+        m["o2_compartment"] = label_o2_compartment(m[cfg.oxygen_col], cfg)
     m["gmm_component"] = m[cfg.gmm_component_col].astype("object").fillna("NA").astype(str)
 
     # intersection label

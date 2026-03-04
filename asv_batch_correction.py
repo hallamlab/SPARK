@@ -3,7 +3,7 @@
 asv_batch_correction.py
 
 Batch effect correction for 16S amplicon data with before/after visualization.
-Uses CLR transformation + ComBat-style correction with UMAP/HDBSCAN and swarm plots.
+Uses ConQuR count-table correction + CLR diagnostics with UMAP/HDBSCAN and swarm plots.
 
 Now includes joint UMAP+HDBSCAN parameter optimization with cluster count constraints!
 
@@ -24,6 +24,10 @@ Quickstart:
 """
 from __future__ import annotations
 import argparse
+import shutil
+import subprocess
+import tempfile
+import textwrap
 import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
@@ -31,13 +35,20 @@ from typing import List, Optional, Tuple, Dict
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
 
 # Compositional data transforms
-from skbio.stats.composition import clr, multiplicative_replacement
+from skbio.stats.composition import clr
+try:
+    # skbio <=0.6
+    from skbio.stats.composition import multiplicative_replacement
+except ImportError:
+    # skbio >=0.7 renamed this helper
+    from skbio.stats.composition import multi_replace as multiplicative_replacement
 
 # Dimensionality reduction & clustering
 import umap
@@ -54,105 +65,342 @@ plt.rcParams.update({
 })
 sns.set_style("white")
 
-SAMPLE_ID_COL = 'sampleid'
+SAMPLE_ID_COL = 'sampleID'
+
+
+def _sorted_non_null_unique(series: pd.Series) -> List:
+    """Return non-null unique values sorted robustly across mixed types."""
+    vals = [v for v in pd.unique(series) if not pd.isna(v)]
+    return sorted(vals, key=lambda x: str(x))
+
+
+def _safe_color(value, fallback: str = '#808080') -> str:
+    """Return a valid matplotlib color string, falling back when invalid/missing."""
+    if pd.isna(value):
+        return fallback
+    color = str(value).strip()
+    if not color or color.lower() == 'nan':
+        return fallback
+    return color if mcolors.is_color_like(color) else fallback
 
 
 # ============================================================================
 # Batch Correction Functions
 # ============================================================================
 
-def simple_combat_correction(
-    data: np.ndarray,
-    batch: np.ndarray,
+def _correction_guard_stats(
+    data_before: np.ndarray,
+    data_after: np.ndarray,
+) -> Tuple[float, float, float]:
+    """Return (median_spread_ratio, max_abs_after, p95_abs_delta)."""
+    before = np.asarray(data_before, dtype=float)
+    after = np.asarray(data_after, dtype=float)
+    spread_before = np.nanmax(before, axis=0) - np.nanmin(before, axis=0)
+    spread_after = np.nanmax(after, axis=0) - np.nanmin(after, axis=0)
+    ratio = np.nanmedian((spread_after + 1e-9) / (spread_before + 1e-9))
+    max_abs_after = float(np.nanmax(np.abs(after)))
+    p95_abs_delta = float(np.nanpercentile(np.abs(after - before), 95))
+    return float(ratio), max_abs_after, p95_abs_delta
+
+
+def _is_pathological_correction(
+    data_before: np.ndarray,
+    data_after: np.ndarray,
+    spread_ratio_max: float = 4.0,
+    max_abs_max: float = 40.0,
+) -> bool:
+    """Flag numerically pathological corrections in CLR space."""
+    before = np.asarray(data_before, dtype=float)
+    after = np.asarray(data_after, dtype=float)
+    if before.shape != after.shape:
+        return True
+    if not np.isfinite(after).all():
+        return True
+    ratio, max_abs_after, _ = _correction_guard_stats(before, after)
+    if not np.isfinite(ratio):
+        return True
+    return (ratio > spread_ratio_max) or (max_abs_after > max_abs_max)
+
+
+def _run_conqur_r(
+    counts: pd.DataFrame,
+    metadata: pd.DataFrame,
+    batch_col: str,
+    covariate_cols: List[str],
+    num_core: int = 2,
+    use_libsize: bool = True,
+    batch_ref: str = "",
+    logistic_lasso: bool = False,
+    quantile_type: str = "standard",
+    simple_match: bool = False,
+    lambda_quantile: str = "2p/n",
+    interplt: bool = False,
+    delta: float = 0.4999,
+    auto_install: bool = False,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """
+    Run ConQuR in R and return corrected count table (samples x features).
+    """
+    rscript_bin = shutil.which("Rscript")
+    if not rscript_bin:
+        raise RuntimeError(
+            "Rscript not found in PATH. Install R in the batch-correction environment."
+        )
+
+    with tempfile.TemporaryDirectory(prefix="conqur_") as td:
+        td_path = Path(td)
+        counts_path = td_path / "counts.tsv"
+        meta_path = td_path / "metadata.tsv"
+        out_path = td_path / "corrected.tsv"
+        r_path = td_path / "run_conqur_tmp.R"
+
+        counts.to_csv(counts_path, sep="\t")
+        metadata.to_csv(meta_path, sep="\t")
+
+        r_code = textwrap.dedent(
+            """
+            args <- commandArgs(trailingOnly = TRUE)
+            if (length(args) < 16) stop("Expected 16 arguments")
+
+            counts_path      <- args[[1]]
+            meta_path        <- args[[2]]
+            batch_col        <- args[[3]]
+            cov_csv          <- args[[4]]
+            out_path         <- args[[5]]
+            num_core         <- as.integer(args[[6]])
+            use_libsize      <- as.integer(args[[7]]) == 1
+            batch_ref        <- args[[8]]
+            logistic_lasso   <- as.integer(args[[9]]) == 1
+            quantile_type    <- args[[10]]
+            simple_match     <- as.integer(args[[11]]) == 1
+            lambda_quantile  <- args[[12]]
+            interplt         <- as.integer(args[[13]]) == 1
+            delta            <- as.numeric(args[[14]])
+            auto_install     <- as.integer(args[[15]]) == 1
+            seed             <- as.integer(args[[16]])
+
+            if (auto_install) {
+              repos <- "https://cloud.r-project.org"
+              if (!requireNamespace("remotes", quietly = TRUE)) {
+                install.packages("remotes", repos = repos)
+              }
+              if (!requireNamespace("foreach", quietly = TRUE)) {
+                install.packages("foreach", repos = repos)
+              }
+              if (!requireNamespace("ConQuR", quietly = TRUE)) {
+                remotes::install_github("wdl2459/ConQuR", dependencies = TRUE, upgrade = "never")
+              }
+            }
+
+            if (!requireNamespace("foreach", quietly = TRUE)) {
+              stop("R package 'foreach' is required for ConQuR (%do% operator missing).")
+            }
+
+            if (!requireNamespace("ConQuR", quietly = TRUE)) {
+              stop("ConQuR package not installed. Install with: remotes::install_github('wdl2459/ConQuR')")
+            }
+
+            suppressPackageStartupMessages(library(foreach))
+            suppressPackageStartupMessages(library(ConQuR))
+
+            counts_df <- read.table(
+              counts_path, sep = "\\t", header = TRUE, row.names = 1,
+              check.names = FALSE, quote = "", comment.char = "", stringsAsFactors = FALSE
+            )
+            meta_df <- read.table(
+              meta_path, sep = "\\t", header = TRUE, row.names = 1,
+              check.names = FALSE, quote = "", comment.char = "", stringsAsFactors = FALSE
+            )
+
+            common <- intersect(rownames(counts_df), rownames(meta_df))
+            if (length(common) == 0) stop("No overlapping samples between counts and metadata")
+            counts_df <- counts_df[common, , drop = FALSE]
+            meta_df <- meta_df[common, , drop = FALSE]
+
+            if (!(batch_col %in% colnames(meta_df))) {
+              stop(paste0("Batch column not found in metadata: ", batch_col))
+            }
+
+            counts_mat <- as.matrix(counts_df)
+            storage.mode(counts_mat) <- "numeric"
+            counts_mat[!is.finite(counts_mat)] <- 0
+            counts_mat[counts_mat < 0] <- 0
+
+            batchid <- as.factor(meta_df[[batch_col]])
+            if (length(levels(batchid)) < 2) {
+              write.table(counts_mat, file = out_path, sep = "\\t", quote = FALSE, col.names = NA)
+              quit(status = 0)
+            }
+
+            covariates <- data.frame(row.names = rownames(meta_df))
+            if (nchar(cov_csv) > 0) {
+              cov_cols <- strsplit(cov_csv, ",", fixed = TRUE)[[1]]
+              cov_cols <- cov_cols[cov_cols != ""]
+              missing_cols <- setdiff(cov_cols, colnames(meta_df))
+              if (length(missing_cols) > 0) {
+                stop(paste0("Missing covariates in metadata: ", paste(missing_cols, collapse = ",")))
+              }
+              covariates <- meta_df[, cov_cols, drop = FALSE]
+            }
+
+            if (ncol(covariates) == 0) {
+              covariates <- data.frame(dummy = rep("all", nrow(meta_df)), row.names = rownames(meta_df))
+            }
+            for (nm in colnames(covariates)) {
+              if (is.character(covariates[[nm]])) covariates[[nm]] <- as.factor(covariates[[nm]])
+            }
+
+            if (batch_ref == "") {
+              tb <- sort(table(batchid), decreasing = TRUE)
+              batch_ref <- names(tb)[1]
+            }
+            if (!(batch_ref %in% levels(batchid))) {
+              batch_ref <- levels(batchid)[1]
+            }
+
+            if (is.na(num_core) || num_core < 1) num_core <- 1
+            set.seed(seed)
+
+            corrected <- if (use_libsize) {
+              ConQuR::ConQuR_libsize(
+                tax_tab = counts_mat,
+                batchid = batchid,
+                covariates = covariates,
+                batch_ref = batch_ref,
+                logistic_lasso = logistic_lasso,
+                quantile_type = quantile_type,
+                simple_match = simple_match,
+                lambda_quantile = lambda_quantile,
+                interplt = interplt,
+                delta = delta,
+                num_core = num_core
+              )
+            } else {
+              ConQuR::ConQuR(
+                tax_tab = counts_mat,
+                batchid = batchid,
+                covariates = covariates,
+                batch_ref = batch_ref,
+                logistic_lasso = logistic_lasso,
+                quantile_type = quantile_type,
+                simple_match = simple_match,
+                lambda_quantile = lambda_quantile,
+                interplt = interplt,
+                delta = delta,
+                num_core = num_core
+              )
+            }
+
+            corr <- as.matrix(corrected)
+            storage.mode(corr) <- "numeric"
+            corr[!is.finite(corr)] <- 0
+            corr[corr < 0] <- 0
+
+            write.table(corr, file = out_path, sep = "\\t", quote = FALSE, col.names = NA)
+            """
+        ).strip() + "\n"
+        r_path.write_text(r_code)
+
+        cmd = [
+            rscript_bin,
+            str(r_path),
+            str(counts_path),
+            str(meta_path),
+            batch_col,
+            ",".join(covariate_cols),
+            str(out_path),
+            str(max(1, int(num_core))),
+            "1" if use_libsize else "0",
+            batch_ref or "",
+            "1" if logistic_lasso else "0",
+            quantile_type,
+            "1" if simple_match else "0",
+            lambda_quantile,
+            "1" if interplt else "0",
+            str(float(delta)),
+            "1" if auto_install else "0",
+            str(int(random_state)),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "ConQuR correction failed.\n"
+                f"STDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
+            )
+
+        corrected = pd.read_csv(out_path, sep="\t", index_col=0)
+        corrected = corrected.apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+        return corrected
+
+
+def conqur_correction_wrapper(
+    asv_counts: pd.DataFrame,
+    metadata: pd.DataFrame,
+    batch_col: str,
     biological_covariates: Optional[pd.DataFrame] = None,
-) -> np.ndarray:
+    num_core: int = 2,
+    use_libsize: bool = True,
+    batch_ref: str = "",
+    logistic_lasso: bool = False,
+    quantile_type: str = "standard",
+    simple_match: bool = False,
+    lambda_quantile: str = "2p/n",
+    interplt: bool = False,
+    delta: float = 0.4999,
+    auto_install: bool = False,
+    random_state: int = 42,
+) -> pd.DataFrame:
     """
-    Simplified ComBat-style batch correction for continuous data.
-    
-    This function CORRECTS SAMPLES by removing batch-specific shifts in their
-    feature profiles (ASV abundances).
-    
-    Parameters
-    ----------
-    data : array (n_features, n_samples)
-        Data matrix where each column is a sample to be corrected
-    batch : array (n_samples,)
-        Batch labels for each sample
-    biological_covariates : DataFrame, optional
-        Biological variables to preserve (not implemented in simple version)
-    
-    Returns
-    -------
-    corrected : array (n_features, n_samples)
-        Batch-corrected data matrix (same dimensions as input)
+    Correct raw ASV counts with ConQuR and return counts (samples x features).
     """
-    print(f"  [i] Input data shape for correction: {data.shape} (features x samples)")
-    print(f"  [i] Correcting {data.shape[1]} samples across {data.shape[0]} features")
-    
-    # Get unique batches
-    unique_batches = np.unique(batch)
-    
-    if len(unique_batches) == 1:
-        print("[!] Only one batch detected, no correction needed")
-        return data
-    
-    print(f"  [i] Removing batch effects from {len(unique_batches)} batches: {unique_batches}")
-    
-    # Compute overall mean across all samples for each feature
-    overall_mean = data.mean(axis=1, keepdims=True)
-    
-    # Compute batch-specific adjustments
-    batch_effects = np.zeros_like(data)
-    
-    for b in unique_batches:
-        batch_mask = batch == b
-        n_samples = batch_mask.sum()
-        
-        # Mean feature profile for this batch
-        batch_mean = data[:, batch_mask].mean(axis=1, keepdims=True)
-        
-        # Deviation of batch mean from overall mean
-        batch_shift = batch_mean - overall_mean
-        
-        # Apply this correction to all samples in this batch
-        batch_effects[:, batch_mask] = batch_shift
-        
-        print(f"    Batch {b}: {n_samples} samples, avg shift magnitude: {np.abs(batch_shift).mean():.3f}")
-    
-    # Remove batch effects from all samples
-    corrected = data - batch_effects
-    
+    if batch_col not in metadata.columns:
+        raise ValueError(f"Batch column '{batch_col}' not found in metadata")
+
+    counts = asv_counts.copy()
+    counts = counts.apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+    meta = metadata.copy()
+    shared = counts.index.intersection(meta.index)
+    if len(shared) == 0:
+        raise ValueError("No shared samples between counts and metadata for ConQuR")
+    counts = counts.loc[shared]
+    meta = meta.loc[shared]
+
+    cov_cols: List[str] = []
+    if biological_covariates is not None and biological_covariates.shape[1] > 0:
+        cov = biological_covariates.copy()
+        cov = cov.reindex(shared)
+        cov = cov.loc[:, cov.notna().any(axis=0)]
+        if cov.shape[1] > 0:
+            cov = cov.fillna("MISSING").astype(str)
+            non_constant = cov.nunique(dropna=False) > 1
+            cov = cov.loc[:, non_constant]
+            if cov.shape[1] > 0:
+                for c in cov.columns:
+                    meta[c] = cov[c].values
+                cov_cols = list(cov.columns)
+
+    corrected = _run_conqur_r(
+        counts=counts,
+        metadata=meta,
+        batch_col=batch_col,
+        covariate_cols=cov_cols,
+        num_core=num_core,
+        use_libsize=use_libsize,
+        batch_ref=batch_ref,
+        logistic_lasso=logistic_lasso,
+        quantile_type=quantile_type,
+        simple_match=simple_match,
+        lambda_quantile=lambda_quantile,
+        interplt=interplt,
+        delta=delta,
+        auto_install=auto_install,
+        random_state=random_state,
+    )
+
+    corrected = corrected.reindex(index=counts.index, columns=counts.columns)
+    corrected = corrected.apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
     return corrected
-
-
-def combat_correction_wrapper(
-    data: np.ndarray,
-    batch: np.ndarray,
-    biological_covariates: Optional[pd.DataFrame] = None,
-) -> np.ndarray:
-    """
-    Wrapper to use pycombat if available, otherwise fall back to simple version.
-    
-    Both methods correct SAMPLES by adjusting their feature profiles to remove
-    batch-to-batch technical variation.
-    """
-    try:
-        from combat.pycombat import pycombat
-        
-        print("  [i] Using pycombat for batch correction")
-        # pycombat expects features x samples
-        df_input = pd.DataFrame(data)
-        
-        if biological_covariates is not None:
-            corrected = pycombat(df_input, batch, mod=biological_covariates)
-        else:
-            corrected = pycombat(df_input, batch)
-        
-        return corrected.values
-    
-    except ImportError:
-        print("  [i] pycombat not available, using simplified correction")
-        return simple_combat_correction(data, batch, biological_covariates)
 
 
 # ============================================================================
@@ -274,6 +522,114 @@ def apply_clr_transform(asv_counts: pd.DataFrame) -> pd.DataFrame:
         clr_arr,
         index=asv_counts.index,
         columns=asv_counts.columns
+    )
+
+
+def _largest_remainder_integerize_rows(
+    values: np.ndarray,
+    target_totals: np.ndarray,
+) -> np.ndarray:
+    """
+    Integerize each sample row while preserving sample totals via largest remainder.
+    """
+    n_rows, n_cols = values.shape
+    out = np.zeros((n_rows, n_cols), dtype=np.int64)
+    target_totals = np.asarray(np.rint(target_totals), dtype=np.int64).reshape(-1)
+    if target_totals.shape[0] != n_rows:
+        raise ValueError("target_totals length does not match values rows")
+
+    for i in range(n_rows):
+        row = values[i]
+        tgt = int(max(target_totals[i], 0))
+
+        flo = np.floor(row).astype(np.int64)
+        frac = row - flo
+        cur = int(flo.sum())
+        rem = tgt - cur
+
+        if rem > 0:
+            order = np.argsort(-frac, kind="mergesort")
+            idx = order[:min(rem, n_cols)]
+            flo[idx] += 1
+        elif rem < 0:
+            order = np.argsort(frac, kind="mergesort")
+            to_remove = -rem
+            for j in order:
+                if to_remove <= 0:
+                    break
+                if flo[j] > 0:
+                    flo[j] -= 1
+                    to_remove -= 1
+
+        out[i] = flo
+
+    return out
+
+
+def export_corrected_abundance_table(
+    corrected_counts: pd.DataFrame,
+    asv_raw_counts: pd.DataFrame,
+    out_dir: Path,
+) -> Tuple[Path, Path, Path, Path]:
+    """
+    Export ConQuR-corrected counts and integer pseudo-count companion tables.
+
+    Writes:
+      1) samples x features
+      2) features x samples (drop-in orientation for calc_div.py default)
+      3) integer pseudo-count samples x features (sum-preserving per sample totals)
+      4) integer pseudo-count features x samples
+    """
+    if corrected_counts.shape != asv_raw_counts.shape:
+        raise ValueError(
+            "Corrected data and raw counts must have matching shape "
+            f"(got {corrected_counts.shape} vs {asv_raw_counts.shape})"
+        )
+
+    corrected_samples = corrected_counts.copy()
+    corrected_samples = corrected_samples.apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+    corrected = corrected_samples.to_numpy(dtype=float)
+
+    # Integerize to count-like values while preserving corrected sample totals.
+    lib_size = corrected.sum(axis=1, keepdims=True)
+    raw_lib_size = asv_raw_counts.to_numpy(dtype=float).sum(axis=1, keepdims=True)
+    lib_size = np.where(lib_size <= 0, raw_lib_size, lib_size)
+    lib_size[lib_size <= 0] = 1.0
+
+    comp = corrected / lib_size
+    comp_sum = comp.sum(axis=1, keepdims=True)
+    bad_rows = comp_sum.ravel() <= 0
+    if np.any(bad_rows):
+        raw_arr = asv_raw_counts.to_numpy(dtype=float)
+        raw_comp = raw_arr / np.maximum(raw_arr.sum(axis=1, keepdims=True), 1.0)
+        comp[bad_rows, :] = raw_comp[bad_rows, :]
+        comp_sum = comp.sum(axis=1, keepdims=True)
+    comp = comp / comp_sum
+
+    reconstructed = comp * lib_size
+    corrected_pseudocount = _largest_remainder_integerize_rows(
+        reconstructed,
+        lib_size.reshape(-1),
+    )
+    corrected_pseudocount_df = pd.DataFrame(
+        corrected_pseudocount,
+        index=corrected_samples.index,
+        columns=corrected_samples.columns,
+    )
+
+    samples_rows_path = out_dir / "asv_corrected_abundance.samples_rows.tsv"
+    features_rows_path = out_dir / "asv_corrected_abundance.features_rows.tsv"
+    pseudocount_samples_rows_path = out_dir / "asv_corrected_pseudocount.samples_rows.tsv"
+    pseudocount_features_rows_path = out_dir / "asv_corrected_pseudocount.features_rows.tsv"
+    corrected_samples.to_csv(samples_rows_path, sep="\t")
+    corrected_samples.T.to_csv(features_rows_path, sep="\t")
+    corrected_pseudocount_df.to_csv(pseudocount_samples_rows_path, sep="\t")
+    corrected_pseudocount_df.T.to_csv(pseudocount_features_rows_path, sep="\t")
+    return (
+        samples_rows_path,
+        features_rows_path,
+        pseudocount_samples_rows_path,
+        pseudocount_features_rows_path,
     )
 
 
@@ -853,12 +1209,15 @@ def plot_umap_comparison(
     if biological_data:
         for row_idx, (bio_series, bio_palette, bio_name) in enumerate(biological_data):
             current_row = 2 + row_idx
+            bio_values_sorted = _sorted_non_null_unique(bio_series)
+            if not bio_values_sorted:
+                continue
             
             # Before - biological
             ax = axes[current_row, 0]
-            for bio_val in sorted(bio_series.unique()):
+            for bio_val in bio_values_sorted:
                 mask = bio_series == bio_val
-                color = bio_palette.get(bio_val, '#808080')  # fallback to gray
+                color = _safe_color(bio_palette.get(bio_val, '#808080'))
                 ax.scatter(
                     embedding_before[mask, 0],
                     embedding_before[mask, 1],
@@ -878,9 +1237,9 @@ def plot_umap_comparison(
             
             # After - biological
             ax = axes[current_row, 1]
-            for bio_val in sorted(bio_series.unique()):
+            for bio_val in bio_values_sorted:
                 mask = bio_series == bio_val
-                color = bio_palette.get(bio_val, '#808080')
+                color = _safe_color(bio_palette.get(bio_val, '#808080'))
                 ax.scatter(
                     embedding_after[mask, 0],
                     embedding_after[mask, 1],
@@ -1636,13 +1995,13 @@ def diagnose_batch_correction(
     
     if np.mean(between_after) < 1e-10:
         print("    ⚠️  WARNING: Between-batch variance is essentially ZERO after correction!")
-        print("    This means you're using mean-centering which removes all batch mean differences.")
-        print("    Consider using pycombat instead, which preserves biological covariates.")
+        print("    This indicates very strong correction and possible over-adjustment.")
+        print("    Re-check batch/covariate specification and ConQuR settings.")
     
-    # Check 4: Are we using the simple correction?
+    # Check 4: Method note
     print("\n[4] Checking correction method...")
-    print("    If you see 'Using pycombat' in the logs above: You're using the proper method ✓")
-    print("    If you see 'simplified correction': You're using mean-centering (too aggressive!) ⚠️")
+    print("    Correction method: ConQuR (count-space batch correction)")
+    print("    Verify covariates are biologically meaningful and sufficiently complete.")
     
     # Recommendations
     print("\n" + "="*70)
@@ -1650,18 +2009,15 @@ def diagnose_batch_correction(
     print("="*70)
     
     if np.mean(between_after) < 1e-10:
-        print("❌ Your current correction method (simple mean-centering) is too aggressive!")
+        print("❌ Correction appears too aggressive for this dataset.")
         print("\nWhat's happening:")
-        print("  - The correction centers each batch to the same mean")
-        print("  - This removes ALL between-batch variance (η² = 0 by construction)")
+        print("  - Between-batch variance is effectively collapsed to zero")
         print("  - But it also removes real biological differences between batches")
         print("\nSolutions:")
-        print("  1. BEST: Install and use pycombat:")
-        print("     pip install combat")
-        print("     This preserves biological covariates while removing batch effects")
-        print("\n  2. Use biological covariates:")
+        print("  1. Use biological covariates with clear biological meaning")
         print("     Add --biological-covariates to your command")
-        print("     (Currently you have: --biological-covariates type_group,status)")
+        print("\n  2. Tune ConQuR settings:")
+        print("     --conqur-mode, --conqur-quantile-type, --conqur-simple-match, --conqur-delta")
         print("\n  3. Accept the limitation:")
         print("     If batches are confounded with biology, no correction method can")
         print("     perfectly separate them. The η² = 0 is expected in this case.")
@@ -1804,13 +2160,248 @@ def compute_batch_statistics(
     return df_stats
 
 
+def _safe_spearman(x: np.ndarray, y: np.ndarray) -> float:
+    """Spearman correlation with guardrails for constant/invalid vectors."""
+    from scipy.stats import spearmanr
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if mask.sum() < 3:
+        return np.nan
+    x = x[mask]
+    y = y[mask]
+    if np.std(x) < 1e-12 or np.std(y) < 1e-12:
+        return np.nan
+    rho = spearmanr(x, y).correlation
+    return float(rho) if np.isfinite(rho) else np.nan
+
+
+def _eta_squared_1way(values: np.ndarray, groups: pd.Series) -> float:
+    """One-way ANOVA effect size eta-squared."""
+    vals = np.asarray(values, dtype=float).reshape(-1)
+    grp = pd.Series(groups).astype(str).values
+    mask = np.isfinite(vals)
+    vals = vals[mask]
+    grp = grp[mask]
+    if len(vals) < 3:
+        return np.nan
+    uniq = pd.unique(grp)
+    if len(uniq) < 2:
+        return np.nan
+    grand = np.mean(vals)
+    ss_total = np.sum((vals - grand) ** 2)
+    if ss_total <= 1e-12:
+        return np.nan
+    ss_between = 0.0
+    for g in uniq:
+        group_vals = vals[grp == g]
+        if len(group_vals) == 0:
+            continue
+        ss_between += len(group_vals) * (np.mean(group_vals) - grand) ** 2
+    return float(ss_between / ss_total)
+
+
+def plot_countspace_preservation(
+    raw_counts: pd.DataFrame,
+    corrected_counts_float: pd.DataFrame,
+    corrected_counts_pseudo: pd.DataFrame,
+    batch: pd.Series,
+    output_prefix: Path,
+    biological_series: Optional[pd.Series] = None,
+    biological_name: str = "Biological",
+) -> pd.DataFrame:
+    """
+    Compare raw counts vs corrected tables to quantify relationship preservation.
+
+    Outputs:
+      - {output_prefix}_countspace_preservation.png/.svg
+      - {output_prefix}_countspace_preservation_metrics.tsv
+    """
+    from scipy.spatial.distance import pdist
+
+    common_samples = raw_counts.index.intersection(corrected_counts_float.index).intersection(corrected_counts_pseudo.index)
+    common_features = raw_counts.columns.intersection(corrected_counts_float.columns).intersection(corrected_counts_pseudo.columns)
+    if len(common_samples) == 0 or len(common_features) == 0:
+        raise ValueError("No overlap across raw/float/pseudocount tables for preservation diagnostics.")
+
+    raw = raw_counts.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    cor_f = corrected_counts_float.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    cor_p = corrected_counts_pseudo.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+    batch = batch.reindex(common_samples).astype(str)
+    bio = None
+    if biological_series is not None:
+        bio = biological_series.reindex(common_samples).astype(str).fillna("MISSING")
+
+    # Sample-wise and feature-wise rank concordance.
+    sample_rho_float = np.array([_safe_spearman(raw.loc[s].values, cor_f.loc[s].values) for s in common_samples], dtype=float)
+    sample_rho_pseudo = np.array([_safe_spearman(raw.loc[s].values, cor_p.loc[s].values) for s in common_samples], dtype=float)
+    feature_rho_float = np.array([_safe_spearman(raw[c].values, cor_f[c].values) for c in common_features], dtype=float)
+    feature_rho_pseudo = np.array([_safe_spearman(raw[c].values, cor_p[c].values) for c in common_features], dtype=float)
+
+    # Bray-Curtis distance preservation (sample-to-sample geometry).
+    raw_rel = raw.div(raw.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
+    cor_f_rel = cor_f.div(cor_f.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
+    cor_p_rel = cor_p.div(cor_p.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
+    d_raw = pdist(raw_rel.values, metric="braycurtis")
+    d_f = pdist(cor_f_rel.values, metric="braycurtis")
+    d_p = pdist(cor_p_rel.values, metric="braycurtis")
+
+    def _safe_pearson(a: np.ndarray, b: np.ndarray) -> float:
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() < 3:
+            return np.nan
+        a = a[mask]
+        b = b[mask]
+        if np.std(a) < 1e-12 or np.std(b) < 1e-12:
+            return np.nan
+        return float(np.corrcoef(a, b)[0, 1])
+
+    bray_pearson_float = _safe_pearson(d_raw, d_f)
+    bray_pearson_pseudo = _safe_pearson(d_raw, d_p)
+    bray_spearman_float = _safe_spearman(d_raw, d_f)
+    bray_spearman_pseudo = _safe_spearman(d_raw, d_p)
+
+    # PC1 effect sizes in CLR space: batch should drop, biology should be retained.
+    def _clr_pc1(df: pd.DataFrame) -> np.ndarray:
+        arr = multiplicative_replacement(df.to_numpy(dtype=float))
+        clr_arr = clr(arr)
+        return PCA(n_components=1).fit_transform(clr_arr).ravel()
+
+    pc1_raw = _clr_pc1(raw)
+    pc1_f = _clr_pc1(cor_f)
+    pc1_p = _clr_pc1(cor_p)
+
+    eta_batch_raw = _eta_squared_1way(pc1_raw, batch)
+    eta_batch_float = _eta_squared_1way(pc1_f, batch)
+    eta_batch_pseudo = _eta_squared_1way(pc1_p, batch)
+
+    eta_bio_raw = np.nan
+    eta_bio_float = np.nan
+    eta_bio_pseudo = np.nan
+    if bio is not None:
+        eta_bio_raw = _eta_squared_1way(pc1_raw, bio)
+        eta_bio_float = _eta_squared_1way(pc1_f, bio)
+        eta_bio_pseudo = _eta_squared_1way(pc1_p, bio)
+
+    metrics = pd.DataFrame({
+        "metric": [
+            "sample_spearman_median_raw_vs_float",
+            "sample_spearman_median_raw_vs_pseudo",
+            "feature_spearman_median_raw_vs_float",
+            "feature_spearman_median_raw_vs_pseudo",
+            "bray_distance_pearson_raw_vs_float",
+            "bray_distance_pearson_raw_vs_pseudo",
+            "bray_distance_spearman_raw_vs_float",
+            "bray_distance_spearman_raw_vs_pseudo",
+            "eta_batch_pc1_raw",
+            "eta_batch_pc1_corrected_float",
+            "eta_batch_pc1_corrected_pseudo",
+            f"eta_{biological_name}_pc1_raw",
+            f"eta_{biological_name}_pc1_corrected_float",
+            f"eta_{biological_name}_pc1_corrected_pseudo",
+        ],
+        "value": [
+            float(np.nanmedian(sample_rho_float)),
+            float(np.nanmedian(sample_rho_pseudo)),
+            float(np.nanmedian(feature_rho_float)),
+            float(np.nanmedian(feature_rho_pseudo)),
+            bray_pearson_float,
+            bray_pearson_pseudo,
+            bray_spearman_float,
+            bray_spearman_pseudo,
+            eta_batch_raw,
+            eta_batch_float,
+            eta_batch_pseudo,
+            eta_bio_raw,
+            eta_bio_float,
+            eta_bio_pseudo,
+        ],
+    })
+    metrics.to_csv(f"{output_prefix}_countspace_preservation_metrics.tsv", sep="\t", index=False)
+
+    # Figure panels.
+    fig, axes = plt.subplots(2, 2, figsize=(15, 11))
+
+    # (1) Sample-wise correlation distribution.
+    sample_plot_df = pd.DataFrame({
+        "comparison": (["raw vs corrected(float)"] * len(sample_rho_float)) + (["raw vs corrected(pseudo)"] * len(sample_rho_pseudo)),
+        "rho": np.concatenate([sample_rho_float, sample_rho_pseudo]),
+    }).dropna(subset=["rho"])
+    sns.boxplot(data=sample_plot_df, x="comparison", y="rho", ax=axes[0, 0], color="#c6dbef")
+    sns.stripplot(data=sample_plot_df, x="comparison", y="rho", ax=axes[0, 0], color="#08519c", alpha=0.35, size=3)
+    axes[0, 0].set_title("Per-Sample Spearman (feature profile preservation)")
+    axes[0, 0].set_ylabel("Spearman rho")
+    axes[0, 0].set_xlabel("")
+    axes[0, 0].grid(axis="y", alpha=0.3)
+
+    # (2) Feature-wise correlation distribution.
+    feature_plot_df = pd.DataFrame({
+        "comparison": (["raw vs corrected(float)"] * len(feature_rho_float)) + (["raw vs corrected(pseudo)"] * len(feature_rho_pseudo)),
+        "rho": np.concatenate([feature_rho_float, feature_rho_pseudo]),
+    }).dropna(subset=["rho"])
+    sns.boxplot(data=feature_plot_df, x="comparison", y="rho", ax=axes[0, 1], color="#fee0d2")
+    sns.stripplot(data=feature_plot_df, x="comparison", y="rho", ax=axes[0, 1], color="#a50f15", alpha=0.25, size=2)
+    axes[0, 1].set_title("Per-Feature Spearman (across-sample preservation)")
+    axes[0, 1].set_ylabel("Spearman rho")
+    axes[0, 1].set_xlabel("")
+    axes[0, 1].grid(axis="y", alpha=0.3)
+
+    # (3) Mean abundance relationship.
+    mean_raw = np.log10(raw.mean(axis=0).to_numpy(dtype=float) + 1.0)
+    mean_f = np.log10(cor_f.mean(axis=0).to_numpy(dtype=float) + 1.0)
+    mean_p = np.log10(cor_p.mean(axis=0).to_numpy(dtype=float) + 1.0)
+    axes[1, 0].scatter(mean_raw, mean_f, s=16, alpha=0.45, c="#3182bd", label="corrected(float)")
+    axes[1, 0].scatter(mean_raw, mean_p, s=16, alpha=0.45, c="#e6550d", label="corrected(pseudo)")
+    min_lim = float(np.nanmin([mean_raw.min(), mean_f.min(), mean_p.min()]))
+    max_lim = float(np.nanmax([mean_raw.max(), mean_f.max(), mean_p.max()]))
+    axes[1, 0].plot([min_lim, max_lim], [min_lim, max_lim], "k--", linewidth=1)
+    axes[1, 0].set_title("Feature Mean Abundance: raw vs corrected")
+    axes[1, 0].set_xlabel("log10(mean raw count + 1)")
+    axes[1, 0].set_ylabel("log10(mean corrected count + 1)")
+    axes[1, 0].legend(frameon=True)
+    axes[1, 0].grid(alpha=0.25)
+
+    # (4) Effect sizes summary.
+    states = ["Raw", "Corrected(float)", "Corrected(pseudo)"]
+    x = np.arange(len(states))
+    width = 0.35
+    batch_vals = [eta_batch_raw, eta_batch_float, eta_batch_pseudo]
+    if np.all(np.isfinite([eta_bio_raw, eta_bio_float, eta_bio_pseudo])):
+        bio_vals = [eta_bio_raw, eta_bio_float, eta_bio_pseudo]
+        axes[1, 1].bar(x - width / 2, batch_vals, width=width, color="#31a354", label="Batch eta^2 (lower better)")
+        axes[1, 1].bar(x + width / 2, bio_vals, width=width, color="#756bb1", label=f"{biological_name} eta^2 (retain signal)")
+    else:
+        axes[1, 1].bar(x, batch_vals, width=0.6, color="#31a354", label="Batch eta^2 (lower better)")
+    axes[1, 1].set_xticks(x)
+    axes[1, 1].set_xticklabels(states)
+    axes[1, 1].set_ylim(bottom=0)
+    axes[1, 1].set_ylabel("Eta-squared (PC1, CLR space)")
+    axes[1, 1].set_title("Batch-effect attenuation and biological retention")
+    axes[1, 1].legend(frameon=True)
+    axes[1, 1].grid(axis="y", alpha=0.3)
+
+    fig.suptitle("Count-Space Preservation Diagnostics", fontsize=15, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(f"{output_prefix}_countspace_preservation.png", bbox_inches="tight", dpi=300)
+    plt.savefig(f"{output_prefix}_countspace_preservation.svg", bbox_inches="tight")
+    plt.close()
+
+    print(f"[✓] Saved count-space preservation plot: {output_prefix}_countspace_preservation.png")
+    print(f"[✓] Saved count-space preservation metrics: {output_prefix}_countspace_preservation_metrics.tsv")
+    return metrics
+
+
 # ============================================================================
 # Main Pipeline
 # ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch effect correction for 16S amplicon data with visualization",
+        description="Batch effect correction for 16S amplicon data using ConQuR + visualization",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
@@ -1836,6 +2427,28 @@ def main():
     # Biological covariates to preserve
     parser.add_argument("--biological-covariates", default="",
                         help="Comma-separated biological variables to preserve (e.g., 'type_group,status')")
+
+    # ConQuR options
+    parser.add_argument("--conqur-mode", choices=["libsize", "standard"], default="libsize",
+                        help="ConQuR variant: libsize-aware (ConQuR_libsize) or standard (ConQuR)")
+    parser.add_argument("--conqur-num-core", type=int, default=2,
+                        help="Number of cores for ConQuR")
+    parser.add_argument("--conqur-batch-ref", default="",
+                        help="Reference batch label for ConQuR (default: largest batch)")
+    parser.add_argument("--conqur-logistic-lasso", action="store_true",
+                        help="Use logistic lasso in ConQuR")
+    parser.add_argument("--conqur-quantile-type", choices=["standard", "lasso"], default="standard",
+                        help="Quantile regression mode for ConQuR")
+    parser.add_argument("--conqur-simple-match", action="store_true",
+                        help="Use simple zero/non-zero matching in ConQuR")
+    parser.add_argument("--conqur-lambda-quantile", choices=["2p/n", "2p/logn"], default="2p/n",
+                        help="ConQuR penalty heuristic for quantile model")
+    parser.add_argument("--conqur-interplt", action="store_true",
+                        help="Enable ConQuR interpolation for the CDF")
+    parser.add_argument("--conqur-delta", type=float, default=0.4999,
+                        help="ConQuR delta parameter")
+    parser.add_argument("--conqur-auto-install", action="store_true",
+                        help="Auto-install ConQuR in R env if missing (requires internet)")
     
     # UMAP parameters (manual)
     parser.add_argument("--umap-neighbors", type=int, default=15,
@@ -1895,12 +2508,19 @@ def main():
     if args.verbose:
         print("\n" + "="*70)
         print("BATCH EFFECT CORRECTION PIPELINE")
-        print("Correcting SAMPLES to remove technical batch effects")
+        print("Correcting SAMPLES to remove technical batch effects (ConQuR)")
         print("="*70)
         print(f"ASV table: {asv_path}")
         print(f"Metadata: {meta_path}")
         print(f"Batch column: {args.batch_col}")
         print(f"Output: {out_dir}")
+        print(
+            "ConQuR: "
+            f"mode={args.conqur_mode}, "
+            f"quantile_type={args.conqur_quantile_type}, "
+            f"num_core={args.conqur_num_core}, "
+            f"batch_ref={(args.conqur_batch_ref if args.conqur_batch_ref else 'largest batch')}"
+        )
         if args.optimize_clustering:
             print(f"Clustering: AUTO-OPTIMIZING (target: {target_clusters_min}-{target_clusters_max} clusters)")
         else:
@@ -1910,7 +2530,7 @@ def main():
         print("="*70 + "\n")
     
     # Load data
-    print("[1/8] Loading data...")
+    print("[1/9] Loading data...")
     asv_raw = load_asv_table(asv_path, args.asv_orientation)
     meta_index_col = SAMPLE_ID_COL
     metadata = load_metadata(meta_path, meta_index_col)
@@ -1918,7 +2538,7 @@ def main():
     asv_meta = pd.read_csv(asv_meta_path, sep="\t", header=0)
 
     # Align
-    print("[2/8] Aligning samples...")
+    print("[2/9] Aligning samples...")
     asv_raw, metadata = align_data(asv_raw, metadata)
     print(f"  Final aligned shape: {asv_raw.shape} (samples x features)")
     print(f"  This means we will correct {asv_raw.shape[0]} samples")
@@ -1954,19 +2574,27 @@ def main():
                 continue
             
             bio_series = metadata[bio_col]
+            bio_values_sorted = _sorted_non_null_unique(bio_series)
+            if not bio_values_sorted:
+                print(f"    [!] Warning: Column '{bio_col}' has no non-null values, skipping")
+                continue
             
             # Check if we have a palette column for this biological column
             if idx < len(palette_cols) and palette_cols[idx] in metadata.columns:
                 # Use specified palette from metadata
                 palette_col = palette_cols[idx]
-                bio_palette = dict(zip(
-                    metadata[bio_col],
-                    metadata[palette_col]
-                ))
+                palette_df = metadata[[bio_col, palette_col]].dropna(subset=[bio_col]).drop_duplicates(subset=[bio_col], keep='first')
+                bio_palette = {row[bio_col]: _safe_color(row[palette_col]) for _, row in palette_df.iterrows()}
+                # Fill categories missing in palette column with generated colors
+                missing_vals = [v for v in bio_values_sorted if v not in bio_palette]
+                if missing_vals:
+                    fallback_colors = sns.color_palette("husl", len(missing_vals))
+                    for val, c in zip(missing_vals, fallback_colors):
+                        bio_palette[val] = plt.matplotlib.colors.rgb2hex(c)
                 print(f"    ✓ {bio_col}: using colors from '{palette_col}' column")
             else:
                 # Auto-generate palette
-                n_categories = len(bio_series.unique())
+                n_categories = len(bio_values_sorted)
                 if n_categories <= 10:
                     palette = sns.color_palette("tab10", n_categories)
                 elif n_categories <= 20:
@@ -1974,32 +2602,51 @@ def main():
                 else:
                     palette = sns.color_palette("husl", n_categories)
                 
-                bio_palette = dict(zip(sorted(bio_series.unique()), 
+                bio_palette = dict(zip(bio_values_sorted,
                                      [plt.matplotlib.colors.rgb2hex(c) for c in palette]))
                 print(f"    ✓ {bio_col}: auto-generated palette ({n_categories} categories)")
             
             bio_color_data.append((bio_series, bio_palette, bio_col))
     
     # CLR transformation
-    print("[3/8] Applying CLR transformation to samples...")
+    print("[3/9] Applying CLR transformation to samples...")
     asv_clr_before = apply_clr_transform(asv_raw)
     
-    # Batch correction
-    print("[4/8] Performing batch correction on samples...")
-    print("  [i] This removes technical batch effects from each sample's microbial profile")
-    
-    # For ComBat-style correction: transpose to features x samples
-    data_t = asv_clr_before.T.values
-    batch_array = batch_series.values
-    
-    corrected_t = combat_correction_wrapper(data_t, batch_array, bio_cov)
-    
-    # Transpose back to samples x features
-    asv_clr_after = pd.DataFrame(
-        corrected_t.T,
-        index=asv_clr_before.index,
-        columns=asv_clr_before.columns
+    # Batch correction (ConQuR on raw counts)
+    print("[4/9] Performing batch correction on samples with ConQuR...")
+    print("  [i] This corrects technical batch effects in raw count space.")
+    corrected_counts = conqur_correction_wrapper(
+        asv_counts=asv_raw,
+        metadata=metadata,
+        batch_col=args.batch_col,
+        biological_covariates=bio_cov,
+        num_core=args.conqur_num_core,
+        use_libsize=(args.conqur_mode == "libsize"),
+        batch_ref=args.conqur_batch_ref,
+        logistic_lasso=args.conqur_logistic_lasso,
+        quantile_type=args.conqur_quantile_type,
+        simple_match=args.conqur_simple_match,
+        lambda_quantile=args.conqur_lambda_quantile,
+        interplt=args.conqur_interplt,
+        delta=args.conqur_delta,
+        auto_install=args.conqur_auto_install,
+        random_state=args.random_state,
     )
+    corrected_counts.to_csv(out_dir / "asv_corrected_counts.samples_rows.tsv", sep="\t")
+
+    # CLR views for diagnostics/outlier steps.
+    asv_clr_after = apply_clr_transform(corrected_counts)
+
+    # Safety guard for clearly pathological corrected compositions.
+    before_fxs = asv_clr_before.T.to_numpy(dtype=float)
+    after_fxs = asv_clr_after.T.to_numpy(dtype=float)
+    if _is_pathological_correction(before_fxs, after_fxs, spread_ratio_max=8.0, max_abs_max=80.0):
+        ratio, max_abs_after, p95_abs_delta = _correction_guard_stats(before_fxs, after_fxs)
+        raise RuntimeError(
+            "ConQuR output looks pathological in CLR space "
+            f"(spread_ratio={ratio:.2f}, max_abs={max_abs_after:.2f}, p95|delta|={p95_abs_delta:.2f}). "
+            "Check batch/covariate specification."
+        )
     
     print(f"  [✓] Correction complete: {asv_clr_after.shape} (samples x features)")
     
@@ -2014,8 +2661,34 @@ def main():
     asv_clr_after_stack.to_csv(out_dir / "asv_clr_after_correction_with_metadata.tsv", sep="\t", index=False)
     print(f"  [✓] Saved CLR-transformed data with ASV metadata")
 
+    corrected_samples_path, corrected_features_path, corrected_int_samples_path, corrected_int_features_path = export_corrected_abundance_table(
+        corrected_counts=corrected_counts,
+        asv_raw_counts=asv_raw,
+        out_dir=out_dir,
+    )
+    print(f"  [✓] Saved diversity-compatible corrected abundance tables")
+    print(f"      - {corrected_samples_path}")
+    print(f"      - {corrected_features_path}")
+    print(f"      - {corrected_int_samples_path}")
+    print(f"      - {corrected_int_features_path}")
+
+    corrected_counts_float = pd.read_csv(corrected_samples_path, sep="\t", index_col=0)
+    corrected_counts_pseudo = pd.read_csv(corrected_int_samples_path, sep="\t", index_col=0)
+    primary_bio_series = bio_color_data[0][0] if bio_color_data else None
+    primary_bio_name = bio_color_data[0][2] if bio_color_data else "Biological"
+    print("[5/9] Generating count-space preservation diagnostics...")
+    plot_countspace_preservation(
+        raw_counts=asv_raw,
+        corrected_counts_float=corrected_counts_float,
+        corrected_counts_pseudo=corrected_counts_pseudo,
+        batch=batch_series,
+        output_prefix=out_dir / "batch_correction",
+        biological_series=primary_bio_series,
+        biological_name=primary_bio_name,
+    )
+
     # UMAP + HDBSCAN
-    print("[5/8] Computing UMAP embeddings and HDBSCAN clusters for samples...")
+    print("[6/9] Computing UMAP embeddings and HDBSCAN clusters for samples...")
     
     # Before correction
     umap_before, clusters_before, opt_results_before = compute_umap_hdbscan(
@@ -2078,7 +2751,7 @@ def main():
     print(f"  [✓] Saved UMAP/HDBSCAN results")
     
     # Plot UMAP comparison
-    print("[6/8] Generating UMAP comparison plots...")
+    print("[7/9] Generating UMAP comparison plots...")
     plot_umap_comparison(
         umap_before,
         umap_after,
@@ -2090,7 +2763,7 @@ def main():
     )
     
     # Plot swarm comparison
-    print("[7/8] Generating swarmplot comparisons...")
+    print("[8/9] Generating swarmplot comparisons...")
     plot_batch_swarm_comparison(
         asv_clr_before,
         asv_clr_after,
@@ -2101,7 +2774,7 @@ def main():
     )
     
     # Compute statistics
-    print("[8/8] Computing batch effect statistics...")
+    print("[9/9] Computing batch effect statistics...")
     stats_df = compute_batch_statistics(
         asv_clr_before,
         asv_clr_after,
@@ -2117,6 +2790,12 @@ def main():
     print(f"\nKey files:")
     print(f"  - asv_clr_before_correction.tsv (samples x features)")
     print(f"  - asv_clr_after_correction.tsv (samples x features, batch-corrected)")
+    print(f"  - asv_corrected_abundance.samples_rows.tsv (samples x features, non-negative)")
+    print(f"  - asv_corrected_abundance.features_rows.tsv (features x samples, calc_div-compatible)")
+    print(f"  - asv_corrected_pseudocount.samples_rows.tsv (samples x features, integer pseudo-counts)")
+    print(f"  - asv_corrected_pseudocount.features_rows.tsv (features x samples, integer pseudo-counts)")
+    print(f"  - batch_correction_countspace_preservation.png/svg")
+    print(f"  - batch_correction_countspace_preservation_metrics.tsv")
     print(f"  - umap_hdbscan_results.tsv")
     print(f"  - batch_correction_umap_comparison.png/svg")
     print(f"  - batch_correction_batch_swarm_PC1.png/svg")

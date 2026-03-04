@@ -169,6 +169,62 @@ def build_palette_from_table(df: pd.DataFrame, label_col: str, color_col: str) -
     return mapping
 
 
+def infer_index_map_from_sign_table(df: pd.DataFrame, idx_col: str, p_col: str, stat_col: str) -> dict:
+    """Infer index -> label mapping from group membership columns in a sign table.
+
+    For indicspecies-style tables with columns `s.<group>` and a numeric `index`,
+    decode `index` as a bitmask over the `s.<group>` column order, yielding labels
+    like `0`, `1`, `0+1`, `0+2+4`, etc.
+    """
+    reserved = {
+        "asv", "asv_id", "feature", "otu",
+        "index", "stat", "p.value", "p_value", "q.value", "significant",
+        str(idx_col).strip().lower(), str(p_col).strip().lower(), str(stat_col).strip().lower(),
+    }
+    s_cols = [str(c).strip() for c in df.columns if str(c).strip().startswith("s.")]
+    if s_cols:
+        groups = [c.split("s.", 1)[1].strip() for c in s_cols]
+        groups = [g for g in groups if g]
+        if groups:
+            mapping: dict = {}
+            n = len(groups)
+            for i in range(1, (1 << n)):
+                members = [groups[b] for b in range(n) if (i >> b) & 1]
+                if members:
+                    label = " + ".join(members) if len(members) > 1 else members[0]
+                    mapping[str(i)] = label
+                    mapping[i] = label
+            return mapping
+
+    membership_cols = []
+    for col in df.columns:
+        name = str(col).strip()
+        if not name:
+            continue
+        if name.lower() in reserved:
+            continue
+        membership_cols.append(name)
+    return {str(i + 1): label for i, label in enumerate(membership_cols)}
+
+
+def auto_palette_for_labels(labels: list[str]) -> dict:
+    uniq = [str(x).strip() for x in labels if str(x).strip() and str(x).strip() != "not_indicator"]
+    uniq = sorted(set(uniq))
+    if not uniq:
+        return {}
+    colors = sns.color_palette("tab20", n_colors=max(len(uniq), 3))
+    return {label: mcolors.to_hex(colors[i % len(colors)]) for i, label in enumerate(uniq)}
+
+
+def auto_markers_for_labels(labels: list[str]) -> dict:
+    uniq = [str(x).strip() for x in labels if str(x).strip() and str(x).strip() != "not_indicator"]
+    uniq = sorted(set(uniq))
+    if not uniq:
+        return {}
+    default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
+    return {label: default_markers[i % len(default_markers)] for i, label in enumerate(uniq)}
+
+
 def sanitize_stub(name: str, fallback: str) -> str:
     if not name:
         return fallback
@@ -376,19 +432,34 @@ def plot_p_vs_stat_no_overlap(
     dd["_x_"] = pos[:, 0] * (xmax - xmin) + xmin
     dd["_y_"] = pos[:, 1] * (ymax - ymin) + ymin
 
+    # Normalize category columns to string so palette/marker dict keys are stable.
+    if hue_col is not None and hue_col in dd.columns:
+        dd[hue_col] = dd[hue_col].astype(str)
+    if style_col is not None and style_col in dd.columns:
+        dd[style_col] = dd[style_col].astype(str)
+
     # Resolve hue palette
     palette = None
     if hue_col is not None:
         if color_palette:
-            # Use given mapping, but only for categories present
+            # Use given mapping, but only for categories present. Match keys as strings.
+            palette_src = {str(k): v for k, v in color_palette.items()}
             present = dd[hue_col].dropna().unique().tolist()
             palette = {}
+            missing = []
             for k in present:
-                if k in color_palette:
-                    palette[k] = color_palette[k]
+                k_str = str(k)
+                if k_str in palette_src:
+                    palette[k] = palette_src[k_str]
                 else:
-                    palette[k] = color_palette.get("not_indicator", "lightgray")
-                    warnings.warn(f"Palette missing key '{k}', using fallback color.")
+                    palette[k] = palette_src.get("not_indicator", "lightgray")
+                    if k_str != "not_indicator":
+                        missing.append(k_str)
+            if missing:
+                warnings.warn(
+                    f"Palette missing {len(missing)} key(s) ({', '.join(missing[:8])}"
+                    f"{'...' if len(missing) > 8 else ''}), using fallback color."
+                )
         else:
             palette = None  # default seaborn
 
@@ -396,10 +467,20 @@ def plot_p_vs_stat_no_overlap(
     markers = None
     if style_col is not None:
         cats = dd[style_col].dropna().unique().tolist()
+        default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
         if marker_dict:
-            markers = marker_dict
+            markers = {str(k): v for k, v in marker_dict.items()}
+            # Seaborn requires marker values for all present style levels.
+            missing_cats = [str(c) for c in cats if str(c) not in markers]
+            if missing_cats:
+                for i, c in enumerate(missing_cats):
+                    markers[c] = default_markers[i % len(default_markers)]
+                warnings.warn(
+                    f"Marker map missing {len(missing_cats)} level(s) "
+                    f"({', '.join(missing_cats[:8])}{'...' if len(missing_cats) > 8 else ''}); "
+                    "auto-filled with default markers."
+                )
         else:
-            default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
             markers = {c: default_markers[i % len(default_markers)] for i, c in enumerate(cats)}
 
     # Legend handles
@@ -643,6 +724,10 @@ def main():
             build_index_map_from_table(g1_df, args.idx_col, args.group1_label_col)
         )
     if not group1_index_map:
+        group1_index_map.update(
+            infer_index_map_from_sign_table(g1_df, args.idx_col, args.p_col, args.stat_col)
+        )
+    if not group1_index_map:
         raise ValueError("Provide group1 index mapping via --group1-index or metadata columns.")
     group1_index_map = extend_digit_keys(group1_index_map)
 
@@ -661,6 +746,10 @@ def main():
     if not group2_index_map and args.group2_label_col:
         group2_index_map.update(
             build_index_map_from_table(g2_df, args.idx_col, args.group2_label_col)
+        )
+    if not group2_index_map:
+        group2_index_map.update(
+            infer_index_map_from_sign_table(g2_df, args.idx_col, args.p_col, args.stat_col)
         )
     if not group2_index_map:
         raise ValueError("Provide group2 index mapping via --group2-index or metadata columns.")
@@ -682,7 +771,7 @@ def main():
             build_palette_from_table(g1_df, args.group1_label_col, args.group1_color_col)
         )
     if not group1_palette:
-        raise ValueError("Provide group1 palette via --group1-palette or metadata columns.")
+        group1_palette.update(auto_palette_for_labels(list(group1_index_map.values())))
 
     group2_palette: dict = {}
     if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_color_col:
@@ -700,7 +789,7 @@ def main():
             build_palette_from_table(g2_df, args.group2_label_col, args.group2_color_col)
         )
     if not group2_palette:
-        raise ValueError("Provide group2 palette via --group2-palette or metadata columns.")
+        group2_palette.update(auto_palette_for_labels(list(group2_index_map.values())))
 
     group2_markers: dict = {}
     if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_marker_col:
@@ -719,6 +808,8 @@ def main():
         group2_markers.update(
             build_palette_from_table(g2_df, args.group2_label_col, args.group2_marker_col)
         )
+    if not group2_markers:
+        group2_markers.update(auto_markers_for_labels(list(group2_palette.keys())))
 
     # ---- Build significance tables ----
     group1_sig = compute_sig_table(

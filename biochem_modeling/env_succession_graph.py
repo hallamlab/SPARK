@@ -16,9 +16,11 @@
 #       succession_matrix_prob_<name>.csv
 #       succession_edges_soft_<name>.csv
 #       succession_top_successors_soft_<name>.csv
+#       succession_transition_uncertainty_<name>.csv
 #     plots/
-#       succession_heatmap_prob_<name>.png
-#       succession_network_topN_<name>.png
+#       succession_top_successor_bars_<name>.png
+#       succession_composition_timeseries_<name>.png
+#       succession_transition_uncertainty_<name>.png
 #
 # Notes:
 #   - Soft transitions use: M_ij = sum_t P_t(i) * P_{t+1}(j)
@@ -73,7 +75,7 @@ class Config:
     # plotting
     cmap: str
     make_plots: bool
-    network_max_edges: int          # cap edges drawn in network plot (after filtering)
+    timeseries_top_k: int           # keep top-K mean-abundance states in stackplot; remainder grouped as other_states
 
 
 def parse_args() -> Config:
@@ -107,10 +109,14 @@ def parse_args() -> Config:
                     help="If set, do NOT force-keep self-loops (default keep self-loops).")
 
     ap.add_argument("--make-plots", action="store_true",
-                    help="Write heatmap + simple network plot (default off).")
+                    help="Write successor bars + composition timeseries + transition uncertainty plots (default off).")
     ap.add_argument("--cmap", default="turbo", help="Matplotlib colormap (default turbo).")
-    ap.add_argument("--network-max-edges", type=int, default=200,
-                    help="Cap number of edges drawn in network plot (default 200).")
+    ap.add_argument(
+        "--timeseries-top-k",
+        type=int,
+        default=10,
+        help="In composition timeseries, keep top-K states by mean abundance and sum the rest as other_states (default 10).",
+    )
 
     ns = ap.parse_args()
 
@@ -134,7 +140,7 @@ def parse_args() -> Config:
         keep_self=(not bool(ns.no_keep_self)),
         cmap=ns.cmap,
         make_plots=bool(ns.make_plots),
-        network_max_edges=int(ns.network_max_edges),
+        timeseries_top_k=int(ns.timeseries_top_k),
     )
 
 
@@ -327,82 +333,207 @@ def top_successors_table(edges: pd.DataFrame, top_n: int) -> pd.DataFrame:
 # Plotting (optional)
 # -----------------------------
 
-def plot_heatmap(T: np.ndarray, title: str, outpath: str, cmap: str) -> None:
-    plt.figure(figsize=(6.4, 5.4))
-    im = plt.imshow(T, aspect="auto", interpolation="nearest", cmap=cmap)
-    plt.colorbar(im, fraction=0.046, pad=0.04, label="P(next | current)")
-    plt.xlabel("to_state")
-    plt.ylabel("from_state")
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(outpath, dpi=200)
-    plt.close()
+def _select_successors_for_plot(
+    row_probs: np.ndarray,
+    i: int,
+    top_n: int,
+    min_prob: float,
+) -> List[int]:
+    keep: List[int] = [int(i)]
+    order = np.argsort(-row_probs)
+    added = 0
+    for j in order:
+        jj = int(j)
+        if jj == int(i):
+            continue
+        if float(row_probs[jj]) < float(min_prob):
+            continue
+        keep.append(jj)
+        added += 1
+        if added >= max(0, int(top_n)):
+            break
+    return keep
 
 
-def plot_network_simple(
-    edges: pd.DataFrame,
-    K: int,
+def _short_label(s: str, max_len: int = 24) -> str:
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
+def plot_top_successor_bars(
+    T: np.ndarray,
+    state_names: List[str],
+    cfg: Config,
     title: str,
     outpath: str,
-    max_edges: int = 200,
 ) -> None:
-    """
-    Minimal network plot with a circular layout (no external deps).
-    - Node positions on a circle
-    - Edge width scales with probability
-    - Only draws up to max_edges edges (highest prob first)
-    """
-    if edges.shape[0] == 0:
+    K = int(T.shape[0])
+    if K == 0:
         return
 
-    # take top edges globally by prob (already filtered, but hybrid can still be large)
-    e = edges.sort_values("p_next_given_current", ascending=False).head(int(max_edges)).copy()
+    ncols = 4 if K > 12 else 3
+    nrows = int(np.ceil(K / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5.0 * ncols, 2.8 * nrows),
+        squeeze=False,
+    )
+    axes_flat = axes.flatten()
 
-    # circular layout
-    theta = np.linspace(0, 2 * np.pi, K, endpoint=False)
-    xs = np.cos(theta)
-    ys = np.sin(theta)
-
-    plt.figure(figsize=(7.2, 7.2))
-    ax = plt.gca()
-    ax.set_aspect("equal")
-    ax.axis("off")
-
-    # nodes
-    ax.scatter(xs, ys, s=120, alpha=0.9)
     for i in range(K):
-        ax.text(xs[i] * 1.07, ys[i] * 1.07, str(i), ha="center", va="center", fontsize=10)
+        ax = axes_flat[i]
+        keep = _select_successors_for_plot(T[i, :], i=i, top_n=cfg.top_n, min_prob=cfg.min_prob)
+        labels = [_short_label(state_names[j]) for j in keep]
+        vals = [float(T[i, j]) for j in keep]
+        y = np.arange(len(keep))
+        colors = ["#2a9d8f" if j == i else "#577590" for j in keep]
 
-    # edges
-    # scale widths
-    w = e["p_next_given_current"].to_numpy(dtype=float)
-    w = np.clip(w, 0.0, 1.0)
-    widths = 0.6 + 6.0 * w
+        ax.barh(y, vals, color=colors, alpha=0.92)
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlim(0.0, 1.0)
+        ax.grid(axis="x", alpha=0.25, linewidth=0.6)
+        ax.set_title(f"from {i}: {_short_label(state_names[i], max_len=18)}", fontsize=9)
 
-    for (idx, r), lw in zip(e.iterrows(), widths):
-        i = int(r["from_state"])
-        j = int(r["to_state"])
-        if i == j:
-            # self-loop as small arc
-            x, y = xs[i], ys[i]
-            ax.annotate(
-                "",
-                xy=(x + 0.10, y + 0.10),
-                xytext=(x + 0.02, y + 0.18),
-                arrowprops=dict(arrowstyle="->", linewidth=lw * 0.35, alpha=0.6),
-            )
-        else:
-            ax.annotate(
-                "",
-                xy=(xs[j], ys[j]),
-                xytext=(xs[i], ys[i]),
-                arrowprops=dict(arrowstyle="->", linewidth=lw * 0.25, alpha=0.55),
-            )
+    for j in range(K, len(axes_flat)):
+        axes_flat[j].axis("off")
 
+    fig.suptitle(title, fontsize=12)
+    fig.supxlabel("P(next state | current state)")
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
+
+
+def plot_composition_timeseries(
+    df2: pd.DataFrame,
+    state_cols: List[str],
+    cfg: Config,
+    title: str,
+    outpath: str,
+) -> None:
+    if len(state_cols) == 0 or df2.shape[0] == 0:
+        return
+
+    # Reduce over-dense legends: keep top-K states by mean abundance, pool remainder.
+    mean_abund = df2[state_cols].mean(axis=0).sort_values(ascending=False)
+    if cfg.timeseries_top_k > 0 and len(state_cols) > cfg.timeseries_top_k:
+        keep = list(mean_abund.index[: cfg.timeseries_top_k])
+        plot_df = df2[keep].copy()
+        remainder = (1.0 - plot_df.sum(axis=1)).clip(lower=0.0)
+        plot_df["other_states"] = remainder
+    else:
+        plot_df = df2[state_cols].copy()
+
+    if cfg.time_col in df2.columns and pd.to_datetime(df2[cfg.time_col], errors="coerce").notna().sum() >= 2:
+        x = pd.to_datetime(df2[cfg.time_col], errors="coerce")
+        x_label = cfg.time_col
+    else:
+        x = np.arange(df2.shape[0], dtype=int)
+        x_label = "ordered_cruise_index"
+
+    fig, ax = plt.subplots(figsize=(13.2, 5.0))
+    cmap = plt.get_cmap(cfg.cmap)
+    colors = cmap(np.linspace(0.08, 0.92, plot_df.shape[1]))
+    layers = [plot_df[c].to_numpy(dtype=float) for c in plot_df.columns]
+    ax.stackplot(x, layers, labels=list(plot_df.columns), colors=colors, alpha=0.95)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Cruise composition fraction")
     ax.set_title(title)
-    plt.tight_layout()
-    plt.savefig(outpath, dpi=200)
-    plt.close()
+    ax.grid(axis="y", alpha=0.2, linewidth=0.6)
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def transition_uncertainty_table(
+    T: np.ndarray,
+    state_names: List[str],
+) -> pd.DataFrame:
+    K = int(T.shape[0])
+    if K == 0:
+        return pd.DataFrame(
+            columns=[
+                "from_state",
+                "from_name",
+                "p_self",
+                "entropy",
+                "entropy_norm",
+                "effective_next_states",
+                "dominant_next_state",
+                "dominant_next_name",
+                "p_dominant_next",
+            ]
+        )
+
+    eps = 1e-12
+    T_clip = np.clip(T, eps, 1.0)
+    H = -np.sum(T * np.log(T_clip), axis=1)
+    H_norm = H / np.log(float(K)) if K > 1 else np.zeros(K, dtype=float)
+    eff = np.exp(H)
+    dom_idx = np.argmax(T, axis=1)
+    dom_p = T[np.arange(K), dom_idx]
+    p_self = np.diag(T)
+
+    return pd.DataFrame(
+        {
+            "from_state": np.arange(K, dtype=int),
+            "from_name": state_names,
+            "p_self": p_self.astype(float),
+            "entropy": H.astype(float),
+            "entropy_norm": H_norm.astype(float),
+            "effective_next_states": eff.astype(float),
+            "dominant_next_state": dom_idx.astype(int),
+            "dominant_next_name": [state_names[int(j)] for j in dom_idx],
+            "p_dominant_next": dom_p.astype(float),
+        }
+    )
+
+
+def plot_transition_uncertainty(
+    summary: pd.DataFrame,
+    title: str,
+    outpath: str,
+) -> None:
+    if summary.shape[0] == 0:
+        return
+
+    s = summary.sort_values("entropy_norm", ascending=False).reset_index(drop=True)
+    y = np.arange(s.shape[0])
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(13.5, max(4.0, 0.42 * s.shape[0])),
+        sharey=True,
+    )
+
+    axes[0].barh(y, s["entropy_norm"].to_numpy(dtype=float), color="#577590", alpha=0.9)
+    axes[0].set_xlabel("Outgoing transition entropy (normalized)")
+    axes[0].set_xlim(0.0, 1.0)
+    axes[0].grid(axis="x", alpha=0.25, linewidth=0.6)
+
+    axes[1].barh(y, s["p_self"].to_numpy(dtype=float), color="#2a9d8f", alpha=0.9)
+    axes[1].set_xlabel("Self-transition probability")
+    axes[1].set_xlim(0.0, 1.0)
+    axes[1].grid(axis="x", alpha=0.25, linewidth=0.6)
+
+    axes[0].set_yticks(y)
+    axes[0].set_yticklabels([_short_label(v, max_len=28) for v in s["from_name"].astype(str)], fontsize=8)
+    axes[0].invert_yaxis()
+    axes[0].set_ylabel("State")
+    axes[0].set_title("Uncertainty")
+    axes[1].set_title("Persistence")
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=220)
+    plt.close(fig)
 
 
 # -----------------------------
@@ -440,20 +571,29 @@ def run_one(
     top = top_successors_table(edges, top_n=cfg.top_n)
     top.to_csv(os.path.join(tables_dir, f"succession_top_successors_soft_{name}.csv"), index=False)
 
+    uncertainty = transition_uncertainty_table(T=T, state_names=state_names)
+    uncertainty.to_csv(os.path.join(tables_dir, f"succession_transition_uncertainty_{name}.csv"), index=False)
+
     # plots (optional)
     if cfg.make_plots:
-        plot_heatmap(
-            T,
-            title=f"{name.upper()} soft succession (P[next|current])",
-            outpath=os.path.join(plots_dir, f"succession_heatmap_prob_{name}.png"),
-            cmap=cfg.cmap,
+        plot_top_successor_bars(
+            T=T,
+            state_names=state_names,
+            cfg=cfg,
+            title=f"{name.upper()} top successors by source state",
+            outpath=os.path.join(plots_dir, f"succession_top_successor_bars_{name}.png"),
         )
-        plot_network_simple(
-            edges=edges,
-            K=T.shape[0],
-            title=f"{name.upper()} succession graph (top edges)",
-            outpath=os.path.join(plots_dir, f"succession_network_topN_{name}.png"),
-            max_edges=cfg.network_max_edges,
+        plot_composition_timeseries(
+            df2=df2,
+            state_cols=state_cols,
+            cfg=cfg,
+            title=f"{name.upper()} cruise composition timeseries",
+            outpath=os.path.join(plots_dir, f"succession_composition_timeseries_{name}.png"),
+        )
+        plot_transition_uncertainty(
+            summary=uncertainty,
+            title=f"{name.upper()} transition uncertainty and persistence",
+            outpath=os.path.join(plots_dir, f"succession_transition_uncertainty_{name}.png"),
         )
 
     print(f"[OK] {name}: K={P.shape[1]} states, cruises={P.shape[0]}")

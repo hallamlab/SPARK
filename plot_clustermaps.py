@@ -2,74 +2,50 @@
 """
 clustermaps_cli.py
 Build log-scaled abundance clustermaps (rows = taxa/ranks or ASVs, cols = samples)
-with column color bars (type_group, status, optional kit), using palettes you provide.
+with configurable column color bars (group1, group2, optional group3).
 
-Features
---------
-- Robust CLI (no hard-coded paths).
-- Ranks: Phylum/Class/Order/Family/Genus/Species/ASV_ID (configurable).
-- Per-rank selection = union of:
-  * top N by total abundance within each type_group (configurable per rank), and
-  * any ASVs significant in an ISA table (optional; threshold configurable).
-- Two heatmaps per rank:
-  * `_code`   : column order preserved (no column clustering).
-  * `_clustered`: columns clustered.
-- Outputs: SVG + PDF figures, and the underlying pivot table (TSV).
-- Optional mitochondrial ASV clustermaps.
+This script is intentionally data-agnostic:
+- configurable sample / feature / grouping column names
+- configurable palette and ordering for grouping bars
+- optional ISA significance gate with auto-detection of significance/stat columns
+- optional mitochondrial ASV clustermaps with configurable sample-name harmonization
 
-Example
--------
-python clustermaps_cli.py \
-  --asv-meta /path/metadata/ASV_meta.tsv \
-  --metadata /path/metadata/metadata_updated.tsv \
-  --isa /path/indicspecies/Type_status_ISA_results.tsv \
-  --outdir /path/diversity \
-  --type-order "Oral Rinse,BAL,Lung Brush" \
-  --exclude-types "Skin Brush,Scope Flush" \
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" \
-  --status-palette "Non-Cancer=#FFFFFF,Cancer=#A50026,methods=#D3D3D3" \
-  --topN "Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000" \
-  --isa-min-stat 0.6 \
-  --tick-values "5,50,500,5000,50000" \
-  --vmax 50000
-
-# Add mitochondrial run:
-  --mito-asv /path/mito/ASVs/ASV_final.mito.tsv \
-  --mito-outdir /path/mito/diversity
+Backward-compatible aliases are provided for project-specific flags:
+- `--type-*` maps to `--group1-*`
+- `--status-palette` maps to `--group2-palette`
+- `--kit-*` maps to `--group3-*`
 """
 
 from __future__ import annotations
-import argparse
-from pathlib import Path
-import warnings
 
+import argparse
+import warnings
+from pathlib import Path
+
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.patches import Patch
 
 # ----------------------- Matplotlib/Seaborn defaults ------------------------
-mpl.rcParams['pdf.fonttype'] = 42      # Keep text as text in PDF
-mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
-mpl.rcParams['savefig.dpi'] = 600
-plt.rcParams.update({'font.size': 12})
-plt.rcParams['font.family'] = 'Source Sans Pro'
+mpl.rcParams["pdf.fonttype"] = 42      # Keep text as text in PDF
+mpl.rcParams["svg.fonttype"] = "none"  # Keep text as text in SVG
+mpl.rcParams["savefig.dpi"] = 600
+plt.rcParams.update({"font.size": 12})
+plt.rcParams["font.family"] = "Source Sans Pro"
 sns.set_theme()
 sns.set_style("white")
 
 
 # ------------------------------- Utilities ----------------------------------
-def parse_kv_csv(s: str) -> dict:
-    """
-    Parse "A=#fff,B:#123,C=steelblue" or "Phylum=30,Class=30" into dict[str,str].
-    Returns {} if s is falsy/empty.
-    """
+def parse_kv_csv(s: str) -> dict[str, str]:
+    """Parse `A=#fff,B:#123` into a dict. Returns {} for empty input."""
     if not s:
         return {}
-    out = {}
+    out: dict[str, str] = {}
     for item in s.split(","):
         item = item.strip()
         if not item:
@@ -85,81 +61,217 @@ def parse_kv_csv(s: str) -> dict:
     return out
 
 
+def parse_csv_list(s: str) -> list[str]:
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
 def ensure_cols(df: pd.DataFrame, required: list[str], where: str):
-    missing = [c for c in required if c not in df.columns]
+    missing = [c for c in required if c and c not in df.columns]
     if missing:
         raise ValueError(f"Missing columns in {where}: {missing}")
 
 
-def log10_transform(df: pd.DataFrame) -> pd.DataFrame:
-    """Return log10(x+1)."""
-    return np.log10(df + 1.0)
+def normalize_label(v) -> str:
+    if pd.isna(v):
+        return "Other"
+    text = str(v).strip()
+    return text if text else "Other"
 
 
 def dynamic_height(n_rows: int, per_row: float = 0.4, min_h: float = 8.0, max_h: float = 6000.0) -> float:
     return float(np.clip(per_row * max(n_rows, 1), min_h, max_h))
 
 
+def auto_palette(values: list[str]) -> dict[str, str]:
+    vals = [normalize_label(v) for v in values if normalize_label(v) not in {"", "Other"}]
+    vals = list(dict.fromkeys(vals))
+    if not vals:
+        return {}
+    colors = sns.color_palette("tab20", n_colors=max(len(vals), 3))
+    return {v: mcolors.to_hex(colors[i % len(colors)]) for i, v in enumerate(vals)}
+
+
+def bool_series(series: pd.Series) -> pd.Series:
+    if series.dtype == bool:
+        return series.fillna(False)
+    if pd.api.types.is_numeric_dtype(series):
+        return series.fillna(0) != 0
+    s = series.astype(str).str.strip().str.lower()
+    true_set = {"true", "t", "1", "yes", "y"}
+    return s.isin(true_set)
+
+
+def to_numeric_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").fillna(0.0)
+
+
+def read_isa_sig_asvs(
+    isa_path: Path | None,
+    min_stat: float,
+    asv_id_col: str,
+    significance_cols: list[str] | None = None,
+    stat_cols: list[str] | None = None,
+) -> set[str]:
+    """
+    Return ASV IDs that pass:
+      ANY(significance cols is true) AND ANY(stat cols >= min_stat)
+    """
+    if not isa_path:
+        return set()
+    df = pd.read_csv(isa_path, sep="\t", header=0)
+    if asv_id_col not in df.columns:
+        df.rename(columns={df.columns[0]: asv_id_col}, inplace=True)
+    if asv_id_col not in df.columns:
+        warnings.warn(f"ISA table missing ASV identifier column {asv_id_col!r}; skipping ISA gate.")
+        return set()
+
+    sig_cols = [c for c in (significance_cols or []) if c in df.columns]
+    stat_cols_found = [c for c in (stat_cols or []) if c in df.columns]
+
+    if not sig_cols:
+        sig_cols = [c for c in df.columns if c.lower().endswith("_significance") or c.lower() in {"significant"}]
+    if not stat_cols_found:
+        stat_cols_found = [c for c in df.columns if c.lower().endswith("_stat") or c.lower() in {"stat"}]
+
+    if not sig_cols or not stat_cols_found:
+        warnings.warn("ISA table lacks usable significance/stat columns; falling back to top-N selection only.")
+        return set()
+
+    sig_any = pd.Series(False, index=df.index)
+    for c in sig_cols:
+        sig_any |= bool_series(df[c])
+
+    stat_any = pd.Series(False, index=df.index)
+    for c in stat_cols_found:
+        stat_any |= to_numeric_series(df[c]) >= float(min_stat)
+
+    mask = sig_any & stat_any
+    return set(df.loc[mask, asv_id_col].astype(str))
+
+
 def build_rank_universe(
     asv_meta: pd.DataFrame,
     ranks: list[str],
-    type_order: list[str],
-    exclude_types: set[str],
+    group1_col: str,
+    group1_order: list[str],
+    exclude_group1: set[str],
     sig_asvs: set[str],
-    topN_map: dict[str, int],
+    topn_map: dict[str, int],
     count_col: str,
+    asv_id_col: str,
 ) -> dict[str, list[str]]:
     """
-    For each rank, compute union across type_groups:
-      top N (within group) + significant ASVs' taxa for that rank.
-    Returns rank -> allowed label list.
+    For each rank, compute union across group1:
+      top N taxa within each group1 + taxa from ISA-significant ASVs.
     """
-    keep = asv_meta[~asv_meta["type_group"].isin(exclude_types)].copy()
+    keep = asv_meta.copy()
+    keep[group1_col] = keep[group1_col].astype(str)
+    keep = keep[~keep[group1_col].isin(exclude_group1)]
+
+    groups = group1_order[:] if group1_order else keep[group1_col].dropna().astype(str).unique().tolist()
     universe: dict[str, list[str]] = {}
+
     for rank in ranks:
-        # aggregate per group
-        grp = keep.groupby(["type_group", rank], dropna=False)[count_col].sum().reset_index()
-        all_labels = set()
-        for g in type_order:
-            gdf = grp[grp["type_group"] == g]
+        if rank not in keep.columns:
+            warnings.warn(f"Rank column {rank!r} not found in ASV table; skipping.")
+            continue
+        grp = keep.groupby([group1_col, rank], dropna=False)[count_col].sum().reset_index()
+        labels: set[str] = set()
+        for g in groups:
+            gdf = grp[grp[group1_col].astype(str) == str(g)]
             if gdf.empty:
                 continue
-            topN = int(topN_map.get(rank, 30))
-            top_labels = gdf.sort_values(count_col, ascending=False)[rank].head(topN).tolist()
-            all_labels.update(top_labels)
-        # add any significant ASVs (map ASV -> this rank)
-        if "ASV_ID" in keep.columns and sig_asvs:
-            sig_rank = keep[keep["ASV_ID"].isin(sig_asvs)][rank].unique().tolist()
-            all_labels.update(sig_rank)
-        # finalize
-        universe[rank] = sorted({("Other" if (x is None or (isinstance(x, float) and np.isnan(x))) else x) for x in all_labels})
+            topn = int(topn_map.get(rank, 30))
+            top_labels = gdf.sort_values(count_col, ascending=False)[rank].head(topn).tolist()
+            labels.update(normalize_label(x) for x in top_labels)
+
+        if sig_asvs and asv_id_col in keep.columns:
+            sig_rank = keep[keep[asv_id_col].astype(str).isin(sig_asvs)][rank].tolist()
+            labels.update(normalize_label(x) for x in sig_rank)
+
+        labels.discard("")
+        if not labels:
+            labels = {"Other"}
+        universe[rank] = sorted(labels)
     return universe
 
 
-def assign_plot_labels(asv_meta: pd.DataFrame, rank: str, allowed: list[str]) -> pd.Series:
+def assign_plot_labels(series: pd.Series, allowed: list[str]) -> pd.Series:
     allowed_set = set(allowed)
-    col = f"{rank}_plot"
-    return asv_meta[rank].apply(lambda x: x if (x in allowed_set) else "Other")
+    return series.map(lambda x: normalize_label(x) if normalize_label(x) in allowed_set else "Other")
+
+
+def prepare_sample_meta(
+    meta: pd.DataFrame,
+    asv_meta: pd.DataFrame,
+    sample_col: str,
+    sample_code_col: str,
+    group1_col: str,
+    group2_col: str,
+    group3_col: str,
+) -> pd.DataFrame:
+    """
+    Build a deduplicated sample metadata table that includes sample_code + grouping columns.
+    Missing grouping columns in metadata are filled from ASV meta when available.
+    """
+    ensure_cols(meta, [sample_col], "metadata")
+    ensure_cols(asv_meta, [sample_col, sample_code_col, group1_col, group2_col], "ASV meta")
+
+    sample_cols = [sample_col, sample_code_col, group1_col, group2_col]
+    if group3_col:
+        sample_cols.append(group3_col)
+
+    base = meta.copy()
+    for col in sample_cols:
+        if col not in base.columns and col in asv_meta.columns:
+            fill = asv_meta[[sample_col, col]].dropna().drop_duplicates(subset=[sample_col])
+            base = base.merge(fill, on=sample_col, how="left")
+
+    ensure_cols(base, [sample_col, sample_code_col, group1_col, group2_col], "merged sample metadata")
+    keep_cols = [c for c in sample_cols if c in base.columns]
+    out = base[keep_cols].drop_duplicates(subset=[sample_col]).copy()
+    out[sample_col] = out[sample_col].astype(str)
+    out[sample_code_col] = out[sample_code_col].astype(str)
+    return out
 
 
 def col_colors_from_meta(
     samples: list[str],
-    sample_meta: pd.DataFrame,
-    type_palette: dict[str, str],
-    status_palette: dict[str, str],
-    kit_palette: dict[str, str] | None = None,
+    sample_meta_by_code: pd.DataFrame,
+    color_specs: list[tuple[str, dict[str, str]]],
 ) -> pd.DataFrame:
     """
-    Return a DataFrame with index = samples (columns of heatmap),
-    columns = color bars (type_group, status, optionally kit), containing hex colors.
+    Build clustermap color bars from metadata.
+    `color_specs` = [(column_name, palette_dict), ...]
     """
-    sub = sample_meta.loc[samples, ["type_group", "status"]].copy()
-    sub["type_group"] = sub["type_group"].map(lambda k: type_palette.get(str(k), "#D3D3D3"))
-    sub["status"] = sub["status"].map(lambda k: status_palette.get(str(k), "#D3D3D3"))
-    out = pd.DataFrame({"type_group": sub["type_group"], "status": sub["status"]})
-    if kit_palette is not None and "kit" in sample_meta.columns:
-        out["kit"] = sample_meta.loc[samples, "kit"].map(lambda k: kit_palette.get(str(k), "#D3D3D3"))
-    return out
+    sub = sample_meta_by_code.reindex(samples).copy()
+    bars: dict[str, pd.Series] = {}
+    for col, palette in color_specs:
+        if col not in sub.columns:
+            continue
+        bars[col] = sub[col].map(lambda v: palette.get(str(v), "#D3D3D3")).fillna("#D3D3D3")
+    if not bars:
+        return pd.DataFrame(index=samples)
+    return pd.DataFrame(bars, index=samples)
+
+
+def choose_mito_sample_names(raw_cols: list[str], valid_samples: set[str], mode: str) -> tuple[list[str], str]:
+    raw = [str(x) for x in raw_cols]
+    stripped = [c.rsplit("_", 1)[0] if "_" in c else c for c in raw]
+
+    if mode == "none":
+        return raw, "none"
+    if mode == "strip_last_token":
+        return stripped, "strip_last_token"
+
+    # auto
+    raw_hits = len(set(raw) & valid_samples)
+    stripped_hits = len(set(stripped) & valid_samples)
+    if stripped_hits > raw_hits:
+        return stripped, "strip_last_token"
+    return raw, "none"
 
 
 def draw_clustermap(
@@ -174,40 +286,35 @@ def draw_clustermap(
     max_fig_h: float,
     method: str = "ward",
     metric: str = "euclidean",
-    dendrogram_ratio=(.05, .2),
+    dendrogram_ratio=(0.05, 0.2),
     colors_ratio=0.02,
     cbar_pos=(1.02, 0.2, 0.03, 0.4),
     alpha: float = 0.75,
 ):
-    """
-    Make two plots:
-      - *_code   : column order preserved (col_cluster=False)
-      - *_clustered : default clustermap with column clustering (col_cluster=True)
-    """
-    # Order columns for colors
-    col_colors_df = col_colors_df.loc[pivot.columns]
+    """Write two plots: `_code` (fixed columns) and `_clustered` (clustered columns)."""
+    if pivot.empty:
+        warnings.warn(f"Skipping empty pivot: {outfile_prefix}")
+        return
 
-    # Log10 transform
-    pivot_log = log10_transform(pivot)
+    # Order colors by heatmap columns
+    if not col_colors_df.empty:
+        col_colors_df = col_colors_df.loc[pivot.columns]
 
-    # Greyscale cmap
-    cmap = LinearSegmentedColormap.from_list("light_greyscale", ['#ffffff', '#d9d9d9', '#000000'], N=256)
-
-    # Colorbar ticks
+    pivot_log = np.log10(pivot + 1.0)
+    cmap = LinearSegmentedColormap.from_list("light_greyscale", ["#ffffff", "#d9d9d9", "#000000"], N=256)
     tick_vals_log = [np.log10(v + 1) for v in tick_vals_orig]
     vmax_log = np.log10(vmax_display + 1)
+    height = dynamic_height(pivot.shape[0], per_row=row_height, min_h=min_fig_h, max_h=max_fig_h)
 
-    n_rows = pivot.shape[0]
-    height = dynamic_height(n_rows, per_row=row_height, min_h=min_fig_h, max_h=max_fig_h)
-
-    # 1) No column clustering (code)
+    # 1) fixed sample-code order
     g = sns.clustermap(
         pivot_log,
         method=method,
         metric=metric,
-        col_colors=col_colors_df,
+        col_colors=col_colors_df if not col_colors_df.empty else None,
         cmap=cmap,
-        vmin=0, vmax=vmax_log,
+        vmin=0,
+        vmax=vmax_log,
         linewidths=0.5,
         xticklabels=True,
         yticklabels=True,
@@ -216,32 +323,31 @@ def draw_clustermap(
         figsize=(figsize_w, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
-        col_cluster=False
+        col_cluster=False,
     )
-    # colorbar
     cbar = g.ax_heatmap.collections[0].colorbar
     cbar.set_ticks(tick_vals_log)
     cbar.set_ticklabels([f"{v:,}" for v in tick_vals_orig])
     cbar.set_label("ASV Count", rotation=270, labelpad=15)
-    # force x tick labels visible and match columns
     g.ax_heatmap.set_xticks(g.ax_heatmap.get_xticks())
-    g.ax_heatmap.set_xticklabels(pivot_log.columns, rotation=90, ha='center')
-    g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True, length=5)
+    g.ax_heatmap.set_xticklabels(pivot_log.columns, rotation=90, ha="center")
+    g.ax_heatmap.tick_params(axis="x", bottom=True, labelbottom=True, length=5)
 
     out_svg = outfile_prefix.with_suffix(".svg")
     out_pdf = outfile_prefix.with_suffix(".pdf")
-    plt.savefig(out_svg, bbox_inches='tight')
-    plt.savefig(out_pdf, bbox_inches='tight')
+    plt.savefig(out_svg, bbox_inches="tight")
+    plt.savefig(out_pdf, bbox_inches="tight")
     plt.close()
 
-    # 2) With column clustering
+    # 2) clustered columns
     g = sns.clustermap(
         pivot_log,
         method=method,
         metric=metric,
-        col_colors=col_colors_df,
+        col_colors=col_colors_df if not col_colors_df.empty else None,
         cmap=cmap,
-        vmin=0, vmax=vmax_log,
+        vmin=0,
+        vmax=vmax_log,
         linewidths=0.5,
         xticklabels=True,
         yticklabels=True,
@@ -250,177 +356,193 @@ def draw_clustermap(
         figsize=(figsize_w, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
-        col_cluster=True
+        col_cluster=True,
     )
     cbar = g.ax_heatmap.collections[0].colorbar
     cbar.set_ticks(tick_vals_log)
     cbar.set_ticklabels([f"{v:,}" for v in tick_vals_orig])
     cbar.set_label("ASV Count", rotation=270, labelpad=15)
-    g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True, length=5)
+    g.ax_heatmap.tick_params(axis="x", bottom=True, labelbottom=True, length=5)
 
     out2_svg = outfile_prefix.with_name(outfile_prefix.stem.replace("_code", "_clustered")).with_suffix(".svg")
     out2_pdf = out2_svg.with_suffix(".pdf")
-    plt.savefig(out2_svg, bbox_inches='tight')
-    plt.savefig(out2_pdf, bbox_inches='tight')
+    plt.savefig(out2_svg, bbox_inches="tight")
+    plt.savefig(out2_pdf, bbox_inches="tight")
     plt.close()
-
-
-def read_isa_sig_asvs(isa_path: Path, min_stat: float) -> set[str]:
-    """
-    Read the combined ISA results and return ASV_IDs considered 'significant' for inclusion:
-      (type_significance == True OR status_significance == True)
-      AND (type_stat >= min_stat OR status_stat >= min_stat)
-    """
-    if not isa_path:
-        return set()
-    df = pd.read_csv(isa_path, sep="\t", header=0)
-    if "ASV_ID" not in df.columns:
-        df.rename(columns={df.columns[0]: "ASV_ID"}, inplace=True)
-    # guard missing columns
-    for c in ["type_significance", "status_significance", "type_stat", "status_stat"]:
-        if c not in df.columns:
-            warnings.warn(f"ISA table missing column {c!r}; falling back to top-N selection only.")
-            return set()
-    m = ((df["type_significance"] == True) | (df["status_significance"] == True)) & \
-        ((df["type_stat"].fillna(0) >= min_stat) | (df["status_stat"].fillna(0) >= min_stat))
-    return set(df.loc[m, "ASV_ID"].astype(str))
 
 
 # ------------------------------- Main ---------------------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="Clustermap pipeline (ranks/ASV + mitochondrial optional) with robust CLI."
+        description="Generalized clustermap pipeline (ranks/ASV + optional mitochondrial mode)."
     )
+
     # Core inputs
-    ap.add_argument("--asv-meta", type=Path, required=True,
-                    help="ASV_meta.tsv (must contain: ASV_ID, sample_code, sample, type_group, status, [kit], ranks, and count column).")
-    ap.add_argument("--metadata", type=Path, required=True,
-                    help="metadata_updated.tsv (must contain 'sample', 'sample_code', 'type_group', 'status', [kit]).")
-    ap.add_argument("--isa", type=Path, default=None,
-                    help="Optional Type_status_ISA_results.tsv to include significant ASVs into rank selection.")
-    ap.add_argument("--outdir", type=Path, required=True,
-                    help="Output directory for figures and pivot tables.")
+    ap.add_argument("--asv-meta", type=Path, required=True, help="ASV metadata/count table (TSV).")
+    ap.add_argument("--metadata", type=Path, required=True, help="Sample metadata table (TSV).")
+    ap.add_argument("--isa", type=Path, default=None, help="Optional ISA results table (TSV).")
+    ap.add_argument("--outdir", type=Path, required=True, help="Output directory.")
 
-    # Palettes & orders
-    ap.add_argument("--type-order", type=str, default="Oral Rinse,BAL,Lung Brush",
-                    help="Comma-separated ordering of type_group.")
-    ap.add_argument("--exclude-types", type=str, default="Skin Brush,Scope Flush",
-                    help="Comma-separated type_group values to exclude.")
-    ap.add_argument("--type-palette", type=str, required=True,
-                    help='e.g. "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73"')
-    ap.add_argument("--status-palette", type=str, required=True,
-                    help='e.g. "Non-Cancer=#FFFFFF,Cancer=#A50026,methods=#D3D3D3"')
-    ap.add_argument("--kit-palette", type=str, default="",
-                    help='Optional: "HostZERO-DEP=#000000,HostZERO-NODEP=#808080,SPARK-ZYMO=#87CEEB"')
+    # Column mapping
+    ap.add_argument("--asv-id-col", type=str, default="ASV_ID", help="ASV identifier column.")
+    ap.add_argument("--sample-col", type=str, default="sample", help="Sample ID column.")
+    ap.add_argument("--sample-code-col", type=str, default="sample_code", help="Sample code column used for heatmap x-axis.")
+    ap.add_argument("--group1-col", type=str, default="type_group", help="Primary grouping column for top-N selection + bar 1.")
+    ap.add_argument("--group2-col", type=str, default="status", help="Secondary grouping column for bar 2.")
+    ap.add_argument("--group3-col", type=str, default="kit", help="Optional third grouping column for bar 3 (empty to disable).")
 
-    # Ranks & selection
+    # Group ordering/exclusion + palettes (with backward-compatible aliases)
+    ap.add_argument("--group1-order", "--type-order", dest="group1_order", type=str, default="",
+                    help="Comma-separated order for group1 categories.")
+    ap.add_argument("--exclude-group1", "--exclude-types", dest="exclude_group1", type=str, default="",
+                    help="Comma-separated group1 categories to exclude.")
+    ap.add_argument("--group1-palette", "--type-palette", dest="group1_palette", type=str, default="",
+                    help='Palette mapping for group1, e.g. "A=#111,B=#222". Empty => auto.')
+    ap.add_argument("--group2-palette", "--status-palette", dest="group2_palette", type=str, default="",
+                    help='Palette mapping for group2, e.g. "X=#111,Y=#222". Empty => auto.')
+    ap.add_argument("--group3-palette", "--kit-palette", dest="group3_palette", type=str, default="",
+                    help='Palette mapping for group3, e.g. "K1=#111,K2=#222". Empty => auto if group3 exists.')
+
+    # Rank selection
     ap.add_argument("--ranks", type=str, default="Phylum,Class,Order,Family,Genus,Species,ASV_ID",
-                    help="Comma-separated ranks to plot.")
+                    help="Comma-separated rank columns to plot.")
     ap.add_argument("--topN", type=str, default="Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000",
-                    help="Per-rank top-N selection, e.g. 'Phylum=30,...,ASV_ID=6000'.")
-    ap.add_argument("--count-col", type=str, default="corr_count",
-                    help="Abundance column in ASV_meta (default: corr_count).")
-    ap.add_argument("--isa-min-stat", type=float, default=0.6,
-                    help="Minimum stat to consider an ASV 'significant' in ISA gate (default: 0.6).")
+                    help="Per-rank top-N mapping, e.g. 'Phylum=30,...,ASV_ID=6000'.")
+    ap.add_argument("--count-col", type=str, default="corr_count", help="Abundance/count column in ASV meta.")
 
-    # Heatmap look
+    # ISA gate
+    ap.add_argument("--isa-min-stat", type=float, default=0.6, help="Minimum ISA stat threshold.")
+    ap.add_argument("--isa-significance-cols", type=str, default="",
+                    help="Comma-separated ISA significance columns. Empty => auto-detect.")
+    ap.add_argument("--isa-stat-cols", type=str, default="",
+                    help="Comma-separated ISA stat columns. Empty => auto-detect.")
+
+    # Heatmap appearance
     ap.add_argument("--tick-values", type=str, default="5,50,500,5000,50000",
-                    help="Comma-separated original scale ticks for colorbar.")
-    ap.add_argument("--vmax", type=int, default=50000, help="Max display value for colorbar (on original scale).")
-    ap.add_argument("--figwidth", type=float, default=32.0, help="Heatmap figure width (inches).")
-    ap.add_argument("--row-height", type=float, default=0.4, help="Height per row (inches).")
-    ap.add_argument("--min-height", type=float, default=8.0, help="Minimum figure height (inches).")
-    ap.add_argument("--max-height", type=float, default=6000.0, help="Maximum figure height (inches).")
+                    help="Colorbar tick values in original count scale.")
+    ap.add_argument("--vmax", type=int, default=50000, help="Colorbar vmax in original count scale.")
+    ap.add_argument("--figwidth", type=float, default=32.0, help="Figure width (in).")
+    ap.add_argument("--row-height", type=float, default=0.4, help="Row height scale (in/row).")
+    ap.add_argument("--min-height", type=float, default=8.0, help="Minimum figure height (in).")
+    ap.add_argument("--max-height", type=float, default=6000.0, help="Maximum figure height (in).")
 
     # Mitochondrial (optional)
-    ap.add_argument("--mito-asv", type=Path, default=None,
-                    help="Optional ASV_final.mito.tsv to build mitochondrial clustermaps.")
-    ap.add_argument("--mito-outdir", type=Path, default=None,
-                    help="Optional output directory for mito figures/pivots (defaults to OUTDIR/'mito').")
-    ap.add_argument("--mito-count-col", type=str, default="count",
-                    help="Mito abundance field after stacking (default: count).")
+    ap.add_argument("--mito-asv", type=Path, default=None, help="Optional mitochondrial ASV table (TSV).")
+    ap.add_argument("--mito-outdir", type=Path, default=None, help="Output directory for mito clustermaps.")
+    ap.add_argument("--mito-count-col", type=str, default="count", help="Mito abundance field after stacking.")
+    ap.add_argument("--mito-sample-mode", choices=["auto", "none", "strip_last_token"], default="auto",
+                    help="How to harmonize mito sample names to metadata sample IDs.")
 
     args = ap.parse_args()
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Palettes
-    type_palette = parse_kv_csv(args.type_palette)
-    status_palette = parse_kv_csv(args.status_palette)
-    kit_palette = parse_kv_csv(args.kit_palette) if args.kit_palette else None
-
-    type_order = [x.strip() for x in args.type_order.split(",") if x.strip()]
-    exclude_types = {x.strip() for x in args.exclude_types.split(",") if x.strip()}
-    ranks = [x.strip() for x in args.ranks.split(",") if x.strip()]
-    topN_map = {k: int(v) for k, v in parse_kv_csv(args.topN).items()}
-
+    ranks = parse_csv_list(args.ranks)
+    group1_order = parse_csv_list(args.group1_order)
+    exclude_group1 = set(parse_csv_list(args.exclude_group1))
+    topn_raw = parse_kv_csv(args.topN)
+    topn_map = {k: int(v) for k, v in topn_raw.items()}
     tick_vals_orig = [int(x.strip()) for x in args.tick_values.split(",") if x.strip()]
     vmax_display = int(args.vmax)
 
-    # Read metadata (for column colors)
     meta = pd.read_csv(args.metadata, sep="\t", header=0)
-    ensure_cols(meta, ["sample", "sample_code", "type_group", "status"], "metadata_updated.tsv")
-    meta = meta.set_index("sample")
-
-    # Read ASV meta (counts per ASV/sample with ranks)
     asv_meta = pd.read_csv(args.asv_meta, sep="\t", header=0)
-    ensure_cols(asv_meta, ["ASV_ID", "sample_code", "sample", "type_group", "status", args.count_col], "ASV_meta.tsv")
+    ensure_cols(asv_meta, [args.asv_id_col, args.sample_col, args.sample_code_col, args.group1_col, args.group2_col, args.count_col], "ASV meta table")
+    ensure_cols(meta, [args.sample_col], "metadata table")
 
-    # ISA gate (optional)
-    sig_asvs = read_isa_sig_asvs(args.isa, args.isa_min_stat) if args.isa else set()
+    sample_meta = prepare_sample_meta(
+        meta=meta,
+        asv_meta=asv_meta,
+        sample_col=args.sample_col,
+        sample_code_col=args.sample_code_col,
+        group1_col=args.group1_col,
+        group2_col=args.group2_col,
+        group3_col=args.group3_col,
+    )
 
-    # Build rank universes
+    # Palettes (auto if omitted)
+    if not group1_order:
+        group1_order = asv_meta[args.group1_col].dropna().astype(str).unique().tolist()
+
+    group1_palette = parse_kv_csv(args.group1_palette)
+    if not group1_palette:
+        group1_palette = auto_palette(group1_order)
+
+    group2_palette = parse_kv_csv(args.group2_palette)
+    if not group2_palette:
+        g2_vals = sample_meta[args.group2_col].dropna().astype(str).unique().tolist()
+        group2_palette = auto_palette(g2_vals)
+
+    group3_col = args.group3_col.strip()
+    group3_palette = parse_kv_csv(args.group3_palette) if group3_col else {}
+    if group3_col and not group3_palette and group3_col in sample_meta.columns:
+        g3_vals = sample_meta[group3_col].dropna().astype(str).unique().tolist()
+        group3_palette = auto_palette(g3_vals)
+
+    sig_cols = parse_csv_list(args.isa_significance_cols) or None
+    stat_cols = parse_csv_list(args.isa_stat_cols) or None
+    sig_asvs = read_isa_sig_asvs(
+        isa_path=args.isa,
+        min_stat=args.isa_min_stat,
+        asv_id_col=args.asv_id_col,
+        significance_cols=sig_cols,
+        stat_cols=stat_cols,
+    ) if args.isa else set()
+
     rank_universe = build_rank_universe(
         asv_meta=asv_meta,
         ranks=ranks,
-        type_order=type_order,
-        exclude_types=exclude_types,
+        group1_col=args.group1_col,
+        group1_order=group1_order,
+        exclude_group1=exclude_group1,
         sig_asvs=sig_asvs,
-        topN_map=topN_map,
+        topn_map=topn_map,
         count_col=args.count_col,
+        asv_id_col=args.asv_id_col,
     )
 
-    # For each rank: add *_plot labels, pivot (rows=taxa_plot, cols=sample_code), plot
     working = asv_meta.copy()
-    working = working[~working["type_group"].isin(exclude_types)]
+    working[args.group1_col] = working[args.group1_col].astype(str)
+    working = working[~working[args.group1_col].isin(exclude_group1)]
 
-    # sample meta (for col_colors) keyed by sample_code
-    smeta = meta.reset_index().drop_duplicates("sample")[["sample", "sample_code", "type_group", "status"]]
-    if kit_palette is not None and "kit" in asv_meta.columns:
-        smeta = pd.merge(smeta, asv_meta[["sample", "kit"]].drop_duplicates("sample"), on="sample", how="left")
-    smeta = smeta.set_index("sample_code")
+    sample_meta_by_code = sample_meta.set_index(args.sample_code_col)
+    color_specs: list[tuple[str, dict[str, str]]] = [
+        (args.group1_col, group1_palette),
+        (args.group2_col, group2_palette),
+    ]
+    if group3_col and group3_col in sample_meta_by_code.columns and group3_palette:
+        color_specs.append((group3_col, group3_palette))
 
     for rank in ranks:
+        if rank not in working.columns:
+            warnings.warn(f"Skipping rank {rank!r}; column not present.")
+            continue
         allowed = rank_universe.get(rank, [])
+        if not allowed:
+            warnings.warn(f"Skipping rank {rank!r}; no labels selected.")
+            continue
+
         colname = f"{rank}_plot"
-        working[colname] = assign_plot_labels(working, rank, allowed)
+        working[colname] = assign_plot_labels(working[rank], allowed)
 
-        # (rows = taxa_plot, cols = sample_code)
-        pivot = (working.groupby(["sample_code", colname])[args.count_col]
-                 .sum().reset_index()
-                 .pivot(index=colname, columns="sample_code", values=args.count_col)
-                 .fillna(0))
+        pivot = (
+            working.groupby([args.sample_code_col, colname])[args.count_col]
+            .sum()
+            .reset_index()
+            .pivot(index=colname, columns=args.sample_code_col, values=args.count_col)
+            .fillna(0)
+        )
+        if pivot.empty:
+            warnings.warn(f"Skipping rank {rank!r}; pivot is empty after filtering.")
+            continue
 
-        # Column colors aligned to columns
         col_colors_df = col_colors_from_meta(
             samples=pivot.columns.tolist(),
-            sample_meta=smeta,
-            type_palette=type_palette,
-            status_palette=status_palette,
-            kit_palette=kit_palette,
+            sample_meta_by_code=sample_meta_by_code,
+            color_specs=color_specs,
         )
 
-        # Legends (drawn on figure as standard legend would overlap); create patches for reference
-        legend_patches = []
-        for g in type_order:
-            if g in type_palette:
-                legend_patches.append(Patch(facecolor=type_palette[g], label=f"Type: {g}", alpha=0.75))
-        for st, col in status_palette.items():
-            legend_patches.append(Patch(facecolor=col, label=f"status: {st}", alpha=0.75))
-        # (We rely on column color bars; patches are not explicitly added; feel free to adapt.)
-
-        # Draw
         prefix = outdir / f"clustermap_{colname}_code"
         draw_clustermap(
             pivot=pivot,
@@ -433,9 +555,7 @@ def main():
             min_fig_h=args.min_height,
             max_fig_h=args.max_height,
         )
-        # Save pivot
-        pivot_out = outdir / f"clustermap_{colname}.tsv"
-        pivot.to_csv(pivot_out, sep="\t")
+        pivot.to_csv(outdir / f"clustermap_{colname}.tsv", sep="\t")
 
     # ------------------------- Mitochondrial (optional) -------------------------
     if args.mito_asv:
@@ -443,51 +563,57 @@ def main():
         mito_outdir.mkdir(parents=True, exist_ok=True)
 
         mito_df = pd.read_csv(args.mito_asv, sep="\t", header=0, index_col=0)
-        # columns look like samples; ensure names match metadata.sample (and we have sample_code)
-        mito_df.columns = [str(c).rsplit("_", 1)[0] for c in mito_df.columns]  # mimic original cleanup
+        valid_samples = set(sample_meta[args.sample_col].astype(str))
+        mito_cols, mode_used = choose_mito_sample_names(mito_df.columns.tolist(), valid_samples, args.mito_sample_mode)
+        if mode_used != "none":
+            print(f"[i] Mito sample harmonization mode: {mode_used}")
+        mito_df.columns = mito_cols
+
         mito_stack = mito_df.stack().reset_index()
-        mito_stack.columns = ["ASV_ID", "sample", args.mito_count_col]
+        mito_stack.columns = [args.asv_id_col, args.sample_col, args.mito_count_col]
         mito_stack = mito_stack[mito_stack[args.mito_count_col] > 0]
+        mito_stack[args.sample_col] = mito_stack[args.sample_col].astype(str)
 
-        # join metadata to get sample_code/type_group/status/kit
-        mito_meta = pd.merge(mito_stack, meta.reset_index(), on="sample", how="left")
-        mito_meta = mito_meta[~mito_meta["type_group"].isin(exclude_types)]
-
-        # Build pivot (rows=ASV_ID, cols=sample_code)
-        pivot = (mito_meta.groupby(["sample_code", "ASV_ID"])[args.mito_count_col]
-                 .sum().reset_index()
-                 .pivot(index="ASV_ID", columns="sample_code", values=args.mito_count_col)
-                 .fillna(0))
-
-        # Column color bars
-        smeta_m = meta.reset_index().drop_duplicates("sample")[["sample", "sample_code", "type_group", "status"]]
-        if kit_palette is not None and "kit" in mito_meta.columns:
-            smeta_m = pd.merge(smeta_m, mito_meta[["sample", "kit"]].drop_duplicates("sample"), on="sample", how="left")
-        smeta_m = smeta_m.set_index("sample_code")
-
-        col_colors_df = col_colors_from_meta(
-            samples=pivot.columns.tolist(),
-            sample_meta=smeta_m,
-            type_palette=type_palette,
-            status_palette=status_palette,
-            kit_palette=kit_palette,
+        mito_meta = pd.merge(
+            mito_stack,
+            sample_meta[[args.sample_col, args.sample_code_col, args.group1_col, args.group2_col] + ([group3_col] if group3_col and group3_col in sample_meta.columns else [])],
+            on=args.sample_col,
+            how="left",
         )
+        mito_meta[args.group1_col] = mito_meta[args.group1_col].astype(str)
+        mito_meta = mito_meta[~mito_meta[args.group1_col].isin(exclude_group1)]
 
-        prefix = mito_outdir / "clustermap_ASV_code_mito"
-        draw_clustermap(
-            pivot=pivot,
-            col_colors_df=col_colors_df,
-            outfile_prefix=prefix,
-            tick_vals_orig=tick_vals_orig,
-            vmax_display=vmax_display,
-            figsize_w=args.figwidth,
-            row_height=args.row_height,
-            min_fig_h=args.min_height,
-            max_fig_h=args.max_height,
+        pivot = (
+            mito_meta.groupby([args.sample_code_col, args.asv_id_col])[args.mito_count_col]
+            .sum()
+            .reset_index()
+            .pivot(index=args.asv_id_col, columns=args.sample_code_col, values=args.mito_count_col)
+            .fillna(0)
         )
-        pivot.to_csv(mito_outdir / "clustermap_ASV_mito.tsv", sep="\t")
+        if not pivot.empty:
+            col_colors_df = col_colors_from_meta(
+                samples=pivot.columns.tolist(),
+                sample_meta_by_code=sample_meta_by_code,
+                color_specs=color_specs,
+            )
+            prefix = mito_outdir / "clustermap_ASV_code_mito"
+            draw_clustermap(
+                pivot=pivot,
+                col_colors_df=col_colors_df,
+                outfile_prefix=prefix,
+                tick_vals_orig=tick_vals_orig,
+                vmax_display=vmax_display,
+                figsize_w=args.figwidth,
+                row_height=args.row_height,
+                min_fig_h=args.min_height,
+                max_fig_h=args.max_height,
+            )
+            pivot.to_csv(mito_outdir / "clustermap_ASV_mito.tsv", sep="\t")
+        else:
+            warnings.warn("Mito pivot is empty after join/filter; skipping mito clustermap.")
 
     print(f"Done. Outputs in: {outdir}")
+
 
 if __name__ == "__main__":
     main()
