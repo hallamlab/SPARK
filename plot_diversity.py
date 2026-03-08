@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
 import umap
 from skbio import DistanceMatrix
@@ -290,7 +291,7 @@ def run_one_pass(name: str,
         fig, ax = plt.subplots(figsize=(9, 6))
         sns.boxplot(
             data=df, x="type_group", y="Shannon",
-            order=order, palette=type_palette, linewidth=1
+            order=order, palette=type_palette, linewidth=0.8
         )
         # also fade lines (whiskers/medians) a bit
         for line in ax.lines:
@@ -304,7 +305,9 @@ def run_one_pass(name: str,
 
         ax.set_xlabel("")
         ax.set_ylabel("Shannon")
-        ax.tick_params(axis='x', rotation=45)
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+        ax.tick_params(axis='x', rotation=0)
+        sns.despine(ax=ax, top=True, right=True)
         fig.tight_layout()
         for ext in ("svg", "pdf"):
             fig.savefig(outdir / f"plots/Alpha_type_boxplot_{name}.{ext}")
@@ -335,7 +338,7 @@ def run_one_pass(name: str,
                     y="Shannon",
                     order=["Cancer", "Non-Cancer"],
                     color=facet_color,        # <-- one color per facet
-                    linewidth=1,
+                    linewidth=0.8,
                     width=0.85,
                     gap=0.15,
                     showfliers=True,
@@ -352,7 +355,8 @@ def run_one_pass(name: str,
                 ax.set_ylim(0, 5)
                 ax.set_xlabel("")
                 ax.set_ylabel("Shannon")
-                ax.tick_params(axis="x", rotation=45)
+                ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+                ax.tick_params(axis="x", rotation=0)
 
             g.figure.set_size_inches(12, 5)
             plt.tight_layout()

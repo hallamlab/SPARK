@@ -18,6 +18,30 @@ from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 
+def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Lung Brush,BAL',
+                                 contralateral_col='lung_status', cancer_site_col='Cancer_Site',
+                                 lung_side_col='lung_code', contralateral_value='Contralateral'):
+    work = df.copy()
+    contra = contralateral_col
+    if contra not in work.columns and {cancer_site_col, lung_side_col}.issubset(work.columns):
+        cancer_side = work[cancer_site_col].astype(str).str[:1].str.upper()
+        lung_side = work[lung_side_col].astype(str).str[:1].str.upper()
+        case_vals = work[case_col].astype(str)
+        work['.derived_lung_status'] = np.where(
+            case_vals.isin(['Control', 'Non-Cancer']),
+            'Healthy',
+            np.where(cancer_side == lung_side, 'TumorSide', 'Contralateral')
+        )
+        contra = '.derived_lung_status'
+    if contra not in work.columns:
+        return work
+    target_types = {x.strip() for x in str(contralateral_sample_types).split(',') if x.strip()}
+    is_cancer = ~work[case_col].astype(str).isin(['Control', 'Non-Cancer'])
+    is_contra = work[contra].astype(str) == str(contralateral_value)
+    in_target = work[type_col].astype(str).isin(target_types)
+    return work.loc[~(is_cancer & is_contra & in_target)].copy()
+
+
 def apply_transform(count_matrix, transform):
     if transform == 'rclr':
         out = np.zeros_like(count_matrix, dtype=float)
@@ -321,10 +345,9 @@ def main():
         description="Taxonomic differential abundance power analysis"
     )
     parser.add_argument("--data-long", required=True, help="Long format data")
-    parser.add_argument("--effect-sizes-dir", required=True, help="Directory with phylum/family effect sizes")
-    parser.add_argument("--sample-sizes", default="6,8,10,15,20,25,30",
+    parser.add_argument("--effect-sizes-dir", required=False, help="Directory with phylum/family effect sizes (required for spike scenarios)")
+    parser.add_argument("--sample-sizes", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100",
                        help="Comma-separated cancer patient sample sizes")
-    parser.add_argument("--n-control", type=int, default=25)
     parser.add_argument("--n-simulations", type=int, default=1000)
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
@@ -334,12 +357,14 @@ def main():
     parser.add_argument("--sample-col", default="lmp_id")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
+    parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
+    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--scenarios", default="observed,null",
+                       help="Comma-separated: observed, null, weak, moderate, strong")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    effect_sizes_dir = Path(args.effect_sizes_dir)
 
     sample_sizes = [int(x) for x in args.sample_sizes.split(",")]
 
@@ -347,20 +372,35 @@ def main():
     print("Taxonomic Differential Abundance Power Analysis")
     print("="*60)
     print(f"Sample sizes (cancer): {sample_sizes}")
-    print(f"Control patients: {args.n_control}")
     print(f"Simulations: {args.n_simulations}")
     print()
 
     # Load data
     print("Loading data...")
     long_df = pd.read_csv(args.data_long, sep='\t')
+    if args.exclude_contralateral_in_cancer:
+        long_df = filter_contralateral_long_df(long_df, case_col=args.case_col, type_col=args.type_col, contralateral_sample_types=args.contralateral_sample_types)
 
-    # Load effect sizes to identify taxa to spike
-    phylum_effects = pd.read_csv(effect_sizes_dir / 'phylum_effect_sizes.tsv', sep='\t')
-    family_effects = pd.read_csv(effect_sizes_dir / 'family_effect_sizes.tsv', sep='\t')
+    # Determine actual number of control patients from the data
+    control_mask = long_df[args.case_col].isin(['Control', 'Non-Cancer'])
+    actual_n_control = long_df.loc[control_mask, args.patient_col].nunique()
+    print(f"Detected {actual_n_control} control patients in data")
 
-    print(f"Phylum effect sizes: {len(phylum_effects)} taxa")
-    print(f"Family effect sizes: {len(family_effects)} taxa")
+    # Parse requested scenarios
+    requested_scenarios = [s.strip().lower() for s in args.scenarios.split(',')]
+    needs_spikes = any(s in requested_scenarios for s in ['weak', 'moderate', 'strong'])
+
+    # Load effect sizes if needed for spike scenarios
+    phylum_effects = None
+    family_effects = None
+    if needs_spikes:
+        if not args.effect_sizes_dir:
+            raise ValueError("--effect-sizes-dir required for spike scenarios (weak, moderate, strong)")
+        effect_sizes_dir = Path(args.effect_sizes_dir)
+        phylum_effects = pd.read_csv(effect_sizes_dir / 'phylum_effect_sizes.tsv', sep='\t')
+        family_effects = pd.read_csv(effect_sizes_dir / 'family_effect_sizes.tsv', sep='\t')
+        print(f"Phylum effect sizes: {len(phylum_effects)} taxa")
+        print(f"Family effect sizes: {len(family_effects)} taxa")
     print()
 
     # Process each taxonomic level and sample type
@@ -399,20 +439,27 @@ def main():
             print(f"  Samples: {count_matrix.shape[0]}, Taxa: {count_matrix.shape[1]}")
             print(f"  Patients: {len(np.unique(patient_ids))}")
 
-            # Define spike scenarios based on observed effect sizes
-            # Select top taxa by |Cohen's d|
-            effects_df_abs = effects_df.copy()
-            effects_df_abs['abs_cohens_d'] = effects_df_abs['Cohens_d'].abs()
-            top_taxa = effects_df_abs.nlargest(5, 'abs_cohens_d')['Taxon'].tolist()
-            spike_taxa_idx = [i for i, t in enumerate(taxa_names) if t in top_taxa]
+            # Build spike scenarios based on user request
+            spike_scenarios = []
+            spike_taxa_idx = []
 
-            spike_scenarios = [
-                {'name': 'True_Null', 'taxa_indices': None, 'fold_change': 1.0, 'use_true_null': True},
-                {'name': 'Observed', 'taxa_indices': None, 'fold_change': 1.0, 'use_true_null': False},
-                {'name': 'Weak', 'taxa_indices': spike_taxa_idx[:2], 'fold_change': 1.5, 'use_true_null': False},
-                {'name': 'Moderate', 'taxa_indices': spike_taxa_idx[:3], 'fold_change': 2.0, 'use_true_null': False},
-                {'name': 'Strong', 'taxa_indices': spike_taxa_idx[:5], 'fold_change': 2.5, 'use_true_null': False}
-            ]
+            if needs_spikes:
+                # Select top taxa by |Cohen's d|
+                effects_df_abs = effects_df.copy()
+                effects_df_abs['abs_cohens_d'] = effects_df_abs['Cohens_d'].abs()
+                top_taxa = effects_df_abs.nlargest(5, 'abs_cohens_d')['Taxon'].tolist()
+                spike_taxa_idx = [i for i, t in enumerate(taxa_names) if t in top_taxa]
+
+            if 'null' in requested_scenarios:
+                spike_scenarios.append({'name': 'True_Null', 'taxa_indices': None, 'fold_change': 1.0, 'use_true_null': True})
+            if 'observed' in requested_scenarios:
+                spike_scenarios.append({'name': 'Observed', 'taxa_indices': None, 'fold_change': 1.0, 'use_true_null': False})
+            if 'weak' in requested_scenarios:
+                spike_scenarios.append({'name': 'Weak', 'taxa_indices': spike_taxa_idx[:2], 'fold_change': 1.5, 'use_true_null': False})
+            if 'moderate' in requested_scenarios:
+                spike_scenarios.append({'name': 'Moderate', 'taxa_indices': spike_taxa_idx[:3], 'fold_change': 2.0, 'use_true_null': False})
+            if 'strong' in requested_scenarios:
+                spike_scenarios.append({'name': 'Strong', 'taxa_indices': spike_taxa_idx[:5], 'fold_change': 2.5, 'use_true_null': False})
 
             for scenario in spike_scenarios:
                 print(f"\n  Scenario: {scenario['name']}")
@@ -422,11 +469,17 @@ def main():
                     print(f"    Taxa: {spiked_names[:3]}...")
 
                 for n_cancer in sample_sizes:
-                    print(f"    n_cancer={n_cancer}", end=' ')
+                    # Hybrid logic: use actual_n_control if n_cancer <= actual_n_control, else balance
+                    if n_cancer <= actual_n_control:
+                        n_control = actual_n_control
+                    else:
+                        n_control = n_cancer
+
+                    print(f"    n_cancer={n_cancer}, n_control={n_control}", end=' ')
 
                     power, sensitivity, fdr = run_power_simulation(
                         count_matrix, patient_ids, case_status, taxa_names,
-                        scenario, n_cancer, args.n_control,
+                        scenario, n_cancer, n_control,
                         n_simulations=args.n_simulations,
                         alpha=args.alpha,
                         seed=args.seed,
@@ -441,12 +494,17 @@ def main():
                         'sample_type': stype,
                         'scenario': scenario['name'],
                         'n_cancer': n_cancer,
-                        'n_control': args.n_control,
+                        'n_control': n_control,
                         'power': power,
                         'sensitivity': sensitivity,
                         'fdr': fdr,
                         'n_simulations': args.n_simulations
                     })
+
+                    # Early stopping: if power >= 0.995, skip remaining sample sizes
+                    if power >= 0.995:
+                        print(f"    → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.")
+                        break
 
     # Save results
     results_df = pd.DataFrame(all_results)

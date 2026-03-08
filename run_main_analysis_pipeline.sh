@@ -16,7 +16,8 @@ Usage:
     [--type-col type_group] \
     [--run-bal-contralateral] \
     [--skip-legacy-diversity] \
-    [--transform none|rclr]
+    [--transform none|rclr] \
+    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Lung Brush,BAL"]
 
 Notes:
 - Networks are intentionally excluded.
@@ -36,6 +37,8 @@ TYPE_COL="type_group"
 RUN_BAL_CONTRA="false"
 RUN_LEGACY_DIVERSITY="true"
 TRANSFORM="none"
+EXCLUDE_CONTRALATERAL="true"
+CONTRALATERAL_SAMPLE_TYPES="Lung Brush,BAL"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +52,8 @@ while [[ $# -gt 0 ]]; do
     --run-bal-contralateral) RUN_BAL_CONTRA="true"; shift ;;
     --skip-legacy-diversity) RUN_LEGACY_DIVERSITY="false"; shift ;;
     --transform) TRANSFORM="$2"; shift 2 ;;
+    --keep-contralateral-in-cancer) EXCLUDE_CONTRALATERAL="false"; shift ;;
+    --contralateral-sample-types) CONTRALATERAL_SAMPLE_TYPES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -129,6 +134,8 @@ Rscript "$SCRIPT_DIR/run_indicspecies.R" \
   --patient-col "$PATIENT_COL" \
   --group-cols "status,type_group" \
   --blocked-cols "type_group" \
+  --status-exclude-contralateral "$EXCLUDE_CONTRALATERAL" \
+  --status-contralateral-sites "$CONTRALATERAL_SAMPLE_TYPES" \
   --outdir "$OUTDIR" \
   --transform "$TRANSFORM"
 
@@ -202,6 +209,8 @@ Rscript "$SCRIPT_DIR/run_bray_permanova_patient_aware.R" \
   --sample-types "Oral Rinse,BAL,Lung Brush" \
   --permutations 999 \
   --seed 42 \
+  --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL" \
+  --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES" \
   --outdir "$BRAY_DIR/tables" \
   --transform "$TRANSFORM"
 
@@ -227,6 +236,8 @@ python3 "$SCRIPT_DIR/run_taxonomic_abundance_analysis.py" \
   --tax-levels "Phylum,Family" \
   --sample-types "BAL,Lung Brush,Oral Rinse" \
   --min-prevalence 0.10 \
+  --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES" \
+  $( [[ "$EXCLUDE_CONTRALATERAL" == "false" ]] && echo "--keep-contralateral-in-cancer" ) \
   --outdir "$TAX_DIR/tables" \
   --transform "$TRANSFORM"
 
@@ -239,6 +250,8 @@ python3 "$SCRIPT_DIR/run_taxonomic_sample_type_analysis.py" \
   --tax-levels "Phylum,Family" \
   --sample-types "BAL,Oral Rinse,Lung Brush" \
   --min-prevalence 0.10 \
+  --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES" \
+  $( [[ "$EXCLUDE_CONTRALATERAL" == "false" ]] && echo "--keep-contralateral-in-cancer" ) \
   --outdir "$TAX_DIR/tables" \
   --transform "$TRANSFORM"
 

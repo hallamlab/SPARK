@@ -24,6 +24,32 @@ import json
 
 warnings.filterwarnings('ignore')
 
+
+def filter_contralateral_long_and_wide(long_df, wide_df, sample_col='lmp_id', case_col='Case', type_col='type_group',
+                                       contralateral_sample_types='Lung Brush,BAL', contralateral_col='lung_status',
+                                       cancer_site_col='Cancer_Site', lung_side_col='lung_code', contralateral_value='Contralateral'):
+    work = long_df.copy()
+    contra = contralateral_col
+    if contra not in work.columns and {cancer_site_col, lung_side_col}.issubset(work.columns):
+        cancer_side = work[cancer_site_col].astype(str).str[:1].str.upper()
+        lung_side = work[lung_side_col].astype(str).str[:1].str.upper()
+        case_vals = work[case_col].astype(str)
+        work['.derived_lung_status'] = np.where(
+            case_vals.isin(['Control', 'Non-Cancer']),
+            'Healthy',
+            np.where(cancer_side == lung_side, 'TumorSide', 'Contralateral')
+        )
+        contra = '.derived_lung_status'
+    if contra in work.columns:
+        target_types = {x.strip() for x in str(contralateral_sample_types).split(',') if x.strip()}
+        is_cancer = ~work[case_col].astype(str).isin(['Control', 'Non-Cancer'])
+        is_contra = work[contra].astype(str) == str(contralateral_value)
+        in_target = work[type_col].astype(str).isin(target_types)
+        work = work.loc[~(is_cancer & is_contra & in_target)].copy()
+    keep_samples = set(work[sample_col].astype(str).unique())
+    keep_cols = [c for c in wide_df.columns if str(c) in keep_samples]
+    return work, wide_df.loc[:, keep_cols].copy()
+
 # ======================== Data Loading ========================
 
 def load_data(long_path, wide_path):
@@ -402,12 +428,19 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
+    parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
+    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     long_df, wide_df = load_data(args.data_long, args.data_wide)
+    if args.exclude_contralateral_in_cancer:
+        long_df, wide_df = filter_contralateral_long_and_wide(
+            long_df, wide_df, sample_col=args.sample_col, case_col=args.case_col, type_col=args.type_col,
+            contralateral_sample_types=args.contralateral_sample_types
+        )
     metadata = get_sample_metadata(long_df, args.sample_col, args.patient_col, args.case_col, args.type_col)
 
     sample_ids = metadata.index.intersection(wide_df.columns)

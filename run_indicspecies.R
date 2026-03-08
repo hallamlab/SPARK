@@ -24,6 +24,10 @@ option_list <- list(
               help="Comma-separated grouping columns requiring blocked permutations [default: %default]"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
               help="For Lung Brush status analysis, add extra run excluding contralateral cancer samples [default: %default]"),
+  make_option("--status-exclude-contralateral", type="logical", default=TRUE,
+              help="Exclude contralateral cancer samples for selected status sample types [default: %default]"),
+  make_option("--status-contralateral-sites", type="character", default="Lung Brush,BAL",
+              help="Comma-separated type_group values where contralateral exclusion applies [default: %default]"),
   make_option("--contralateral-col", type="character", default="lung_status",
               help="Metadata column identifying contralateral samples [default: %default]"),
   make_option("--cancer-site-col", type="character", default="Cancer_Site",
@@ -266,6 +270,7 @@ aggregate_to_patient <- function(X_samples_by_features, patient_ids) {
 # ---------- main loop over grouping columns ----------
 group_cols <- strsplit(opt$`group-cols`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
 blocked_cols <- strsplit(opt$`blocked-cols`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
+status_contralateral_sites <- strsplit(opt$`status-contralateral-sites`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
 
 for (gcol in group_cols) {
   if (!(gcol %in% colnames(meta))) {
@@ -321,6 +326,26 @@ for (gcol in group_cols) {
       site_mask <- as.character(meta_keep$type_group) == site
       X_site <- X[site_mask, , drop = FALSE]
       meta_site <- meta_keep[site_mask, , drop = FALSE]
+
+      if (isTRUE(opt$`status-exclude-contralateral`) && (as.character(site) %in% status_contralateral_sites)) {
+        if (!(effective_contralateral_col %in% colnames(meta_site))) {
+          warning("Cannot exclude contralateral samples for status analysis: column '",
+                  effective_contralateral_col, "' not found.")
+        } else {
+          is_cancer_site <- as.character(meta_site[[gcol]]) == as.character(opt$`cancer-label`)
+          is_contralateral_site <- as.character(meta_site[[effective_contralateral_col]]) ==
+            as.character(opt$`contralateral-value`)
+          keep_site_global <- !(is_cancer_site & is_contralateral_site)
+          n_removed_site <- sum(!keep_site_global, na.rm = TRUE)
+          if (n_removed_site > 0) {
+            message("Status ISA within type_group='", site, "': excluding ", n_removed_site,
+                    " contralateral cancer sample(s).")
+          }
+          X_site <- X_site[keep_site_global, , drop = FALSE]
+          meta_site <- meta_site[keep_site_global, , drop = FALSE]
+        }
+      }
+
       grouping_site <- droplevels(as.factor(meta_site[[gcol]]))
 
       if (length(unique(grouping_site)) < 2) {
@@ -382,7 +407,7 @@ for (gcol in group_cols) {
       pooled_status_full_duleg[[length(pooled_status_full_duleg) + 1]] <- res2_full %>% mutate(type_group = site)
 
       # Extra status analysis for Lung Brush: remove contralateral samples from cancer patients.
-      if (isTRUE(opt$`status-extra-no-contralateral`) &&
+      if (isTRUE(opt$`status-extra-no-contralateral`) && !isTRUE(opt$`status-exclude-contralateral`) &&
           identical(as.character(site), as.character(opt$`lung-brush-label`))) {
         if (!(effective_contralateral_col %in% colnames(meta_site))) {
           warning("Skipping extra Lung Brush no-contralateral analysis: column '",

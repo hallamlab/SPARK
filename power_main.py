@@ -32,12 +32,11 @@ def main():
     )
     parser.add_argument("--data-wide", required=True, help="Wide count matrix TSV")
     parser.add_argument("--data-long", required=True, help="Long format data TSV")
-    parser.add_argument("--effect-sizes-dir", required=True, help="Directory with effect sizes")
-    parser.add_argument("--sample-sizes-cancer", default="6,8,10,15,20,25,30",
+    parser.add_argument("--effect-sizes-dir", required=False, help="Directory with effect sizes (required for spike scenarios)")
+    parser.add_argument("--sample-sizes-cancer", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100",
                        help="Sample sizes for cancer vs control analyses")
-    parser.add_argument("--sample-sizes-stype", default="10,15,20,25,30,40,50",
+    parser.add_argument("--sample-sizes-stype", default="10,15,20,25,30,40,50,60,70,80,90,100",
                        help="Sample sizes for sample type comparisons")
-    parser.add_argument("--n-control", type=int, default=25)
     parser.add_argument("--n-simulations", type=int, default=1000)
     parser.add_argument("--n-perm", type=int, default=199)
     parser.add_argument("--alpha", type=float, default=0.05)
@@ -45,6 +44,10 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none",
                        help="Compositional transform for non-Shannon analyses")
+    parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
+    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--scenarios", default="observed,null",
+                       help="Comma-separated: observed, null, weak, moderate, strong")
 
     # Analysis selection flags
     parser.add_argument("--analyses", default="all",
@@ -61,8 +64,6 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    effect_sizes_dir = Path(args.effect_sizes_dir)
-
     # Determine which analyses to run
     analyses = args.analyses.lower().split(",")
     run_all = "all" in analyses
@@ -72,12 +73,21 @@ def main():
     run_taxonomic = run_all or "taxonomic" in analyses
     run_isa = run_all or "isa" in analyses
 
-    # Check required files exist
-    spike_scenarios = effect_sizes_dir / 'spike_scenario_asvs.json'
-    if not spike_scenarios.exists():
-        print(f"ERROR: Spike scenarios file not found: {spike_scenarios}")
-        print("Please run estimate_effects.py first!")
-        return 1
+    # Check if spike scenarios are needed
+    requested_scenarios = [s.strip().lower() for s in args.scenarios.split(',')]
+    needs_spikes = any(s in requested_scenarios for s in ['weak', 'moderate', 'strong'])
+
+    spike_scenarios = None
+    if needs_spikes:
+        if not args.effect_sizes_dir:
+            print("ERROR: --effect-sizes-dir required for spike scenarios (weak, moderate, strong)")
+            return 1
+        effect_sizes_dir = Path(args.effect_sizes_dir)
+        spike_scenarios = effect_sizes_dir / 'spike_scenario_asvs.json'
+        if not spike_scenarios.exists():
+            print(f"ERROR: Spike scenarios file not found: {spike_scenarios}")
+            print("Please run estimate_effects.py first!")
+            return 1
 
     success = True
     completed = []
@@ -99,16 +109,20 @@ def main():
             'python', 'power_permanova_stratified.py',
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
-            '--spike-scenarios', str(spike_scenarios),
             '--sample-sizes', args.sample_sizes_cancer,
-            '--n-control', str(args.n_control),
             '--n-simulations', str(args.n_simulations),
             '--n-perm', str(args.n_perm),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
-            '--transform', args.transform
+            '--transform', args.transform,
+            '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
+            '--contralateral-sample-types', args.contralateral_sample_types,
+            '--scenarios', args.scenarios
         ]
+
+        if spike_scenarios:
+            cmd.extend(['--spike-scenarios', str(spike_scenarios)])
 
         if run_command(cmd, "1. Cancer vs Control - PERMANOVA (Stratified)"):
             completed.append("cancer_vs_control_permanova")
@@ -121,11 +135,13 @@ def main():
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_cancer,
-            '--n-control', str(args.n_control),
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
+            '--contralateral-sample-types', args.contralateral_sample_types,
+            '--scenarios', args.scenarios
         ]
 
         if run_command(cmd, "2. Cancer vs Control - Shannon t-tests (Stratified)"):
@@ -182,15 +198,19 @@ def main():
         cmd = [
             'python', 'power_taxonomic_abundance.py',
             '--data-long', args.data_long,
-            '--effect-sizes-dir', str(effect_sizes_dir),
             '--sample-sizes', args.sample_sizes_cancer,
-            '--n-control', str(args.n_control),
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
-            '--transform', args.transform
+            '--transform', args.transform,
+            '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
+            '--contralateral-sample-types', args.contralateral_sample_types,
+            '--scenarios', args.scenarios
         ]
+
+        if args.effect_sizes_dir:
+            cmd.extend(['--effect-sizes-dir', str(args.effect_sizes_dir)])
 
         if run_command(cmd, "5a. Taxonomic Abundance - Cancer vs Control (Phylum + Family)"):
             completed.append("taxonomic_abundance_cancer")
@@ -223,16 +243,15 @@ def main():
             'Rscript', 'power_indicspecies.R',
             '--data-long', args.data_long,
             '--data-wide', args.data_wide,
-            '--effect-sizes-dir', str(effect_sizes_dir),
             '--sample-sizes-cancer', args.sample_sizes_cancer,
             '--sample-sizes-stype', args.sample_sizes_stype,
-            '--n-control', str(args.n_control),
             '--n-simulations', str(args.n_simulations),
-            '--n-perm', str(args.n_perm),
+            '--perms', str(args.n_perm),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
-            '--transform', args.transform
+            '--transform', args.transform,
+            '--scenarios', args.scenarios
         ]
 
         if run_command(cmd, "6. Indicator Species Analysis - Cancer vs Control + Sample Type"):

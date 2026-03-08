@@ -18,6 +18,35 @@ from simulate_data import bootstrap_patients, spike_in_fold_change, filter_by_sa
 warnings.filterwarnings('ignore')
 
 
+def filter_contralateral_metadata(meta_df, case_col='Case', type_col='type_group',
+                                  contralateral_sample_types='Lung Brush,BAL',
+                                  contralateral_col='lung_status',
+                                  cancer_site_col='Cancer_Site',
+                                  lung_side_col='lung_code',
+                                  contralateral_value='Contralateral'):
+    m = meta_df.copy()
+    contra = contralateral_col
+    if contra not in m.columns and {cancer_site_col, lung_side_col}.issubset(m.columns):
+        cancer_side = m[cancer_site_col].astype(str).str[:1].str.upper()
+        lung_side = m[lung_side_col].astype(str).str[:1].str.upper()
+        case_vals = m[case_col].astype(str)
+        m['.derived_lung_status'] = np.where(
+            case_vals.isin(['Control', 'Non-Cancer']),
+            'Healthy',
+            np.where(cancer_side == lung_side, 'TumorSide', 'Contralateral')
+        )
+        contra = '.derived_lung_status'
+
+    if contra not in m.columns:
+        return m
+
+    target_types = {x.strip() for x in str(contralateral_sample_types).split(',') if x.strip()}
+    is_cancer = ~m[case_col].astype(str).isin(['Control', 'Non-Cancer'])
+    is_contra = m[contra].astype(str) == str(contralateral_value)
+    in_target = m[type_col].astype(str).isin(target_types)
+    return m.loc[~(is_cancer & is_contra & in_target)].copy()
+
+
 def apply_transform(count_matrix, transform):
     if transform == 'rclr':
         out = np.zeros_like(count_matrix, dtype=float)
@@ -187,15 +216,18 @@ def main():
     parser = argparse.ArgumentParser(description="Stratified PERMANOVA power analysis")
     parser.add_argument("--data-wide", required=True)
     parser.add_argument("--data-long", required=True)
-    parser.add_argument("--spike-scenarios", required=True)
-    parser.add_argument("--sample-sizes", default="6,8,10,15,20,25,30")
-    parser.add_argument("--n-control", type=int, default=25)
+    parser.add_argument("--spike-scenarios", required=False)
+    parser.add_argument("--sample-sizes", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100")
     parser.add_argument("--n-simulations", type=int, default=1000)
     parser.add_argument("--n-perm", type=int, default=199)
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
+    parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
+    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--scenarios", default="observed,null",
+                       help="Comma-separated: observed, null, weak, moderate, strong")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -205,7 +237,16 @@ def main():
     wide_df = pd.read_csv(args.data_wide, sep='\t', index_col=0)
     long_df = pd.read_csv(args.data_long, sep='\t')
 
-    metadata = long_df[['lmp_id', 'Participant_ID', 'Case', 'type_group']].drop_duplicates().set_index('lmp_id')
+    meta_cols = ['lmp_id', 'Participant_ID', 'Case', 'type_group', 'lung_status', 'Cancer_Site', 'lung_code']
+    meta_cols = [c for c in meta_cols if c in long_df.columns]
+    metadata = long_df[meta_cols].drop_duplicates().set_index('lmp_id')
+    if args.exclude_contralateral_in_cancer:
+        metadata = filter_contralateral_metadata(metadata.reset_index(),
+                                                 case_col='Case', type_col='type_group',
+                                                 contralateral_sample_types=args.contralateral_sample_types,
+                                                 contralateral_col='lung_status',
+                                                 cancer_site_col='Cancer_Site',
+                                                 lung_side_col='lung_code').set_index('lmp_id')
     sample_ids = metadata.index.intersection(wide_df.columns)
 
     count_matrix = wide_df[sample_ids].T.values
@@ -214,16 +255,39 @@ def main():
     sample_types = metadata.loc[sample_ids, 'type_group'].values
     asv_names = wide_df.index.tolist()
 
-    with open(args.spike_scenarios, 'r') as f:
-        spike_scenarios = json.load(f)
+    # Determine actual number of control patients from the data
+    control_mask = (case_status == 'Control') | (case_status == 'Non-Cancer')
+    actual_n_control = len(np.unique(patient_ids[control_mask]))
+    print(f"Detected {actual_n_control} control patients in data")
 
-    scenarios = [
-        {'name': 'True_Null', 'asvs': [], 'fold_change': 1.0, 'use_true_null': True},
-        {'name': 'Observed', 'asvs': [], 'fold_change': 1.0, 'use_true_null': False},
-        {'name': 'Weak', 'asvs': spike_scenarios['high_prev_high_abund'][:5], 'fold_change': 1.5, 'use_true_null': False},
-        {'name': 'Moderate', 'asvs': spike_scenarios['high_prev_high_abund'][:10], 'fold_change': 2.0, 'use_true_null': False},
-        {'name': 'Strong', 'asvs': spike_scenarios['high_prev_high_abund'][:10] + spike_scenarios['med_prev_med_abund'][:5], 'fold_change': 2.5, 'use_true_null': False}
-    ]
+    # Build scenario list based on user request
+    spike_scenarios = None
+    if args.spike_scenarios:
+        with open(args.spike_scenarios, 'r') as f:
+            spike_scenarios = json.load(f)
+
+    requested_scenarios = [s.strip().lower() for s in args.scenarios.split(',')]
+    scenarios = []
+
+    if 'null' in requested_scenarios:
+        scenarios.append({'name': 'True_Null', 'asvs': [], 'fold_change': 1.0, 'use_true_null': True})
+    if 'observed' in requested_scenarios:
+        scenarios.append({'name': 'Observed', 'asvs': [], 'fold_change': 1.0, 'use_true_null': False})
+    if 'weak' in requested_scenarios:
+        if not spike_scenarios:
+            raise ValueError("--spike-scenarios required for 'weak' scenario")
+        scenarios.append({'name': 'Weak', 'asvs': spike_scenarios['high_prev_high_abund'][:5], 'fold_change': 1.5, 'use_true_null': False})
+    if 'moderate' in requested_scenarios:
+        if not spike_scenarios:
+            raise ValueError("--spike-scenarios required for 'moderate' scenario")
+        scenarios.append({'name': 'Moderate', 'asvs': spike_scenarios['high_prev_high_abund'][:10], 'fold_change': 2.0, 'use_true_null': False})
+    if 'strong' in requested_scenarios:
+        if not spike_scenarios:
+            raise ValueError("--spike-scenarios required for 'strong' scenario")
+        scenarios.append({'name': 'Strong', 'asvs': spike_scenarios['high_prev_high_abund'][:10] + spike_scenarios['med_prev_med_abund'][:5], 'fold_change': 2.5, 'use_true_null': False})
+
+    if not scenarios:
+        raise ValueError(f"No valid scenarios found in: {args.scenarios}")
 
     cancer_sizes = [int(x) for x in args.sample_sizes.split(',')]
 
@@ -244,12 +308,18 @@ def main():
             print(f"\nScenario: {scenario['name']} ({len(scenario['asvs'])} ASVs @ {scenario['fold_change']}×)")
 
             for n_cancer in cancer_sizes:
-                print(f"  n={n_cancer}...", end=' ', flush=True)
+                # Hybrid logic: use actual_n_control if n_cancer <= actual_n_control, else balance
+                if n_cancer <= actual_n_control:
+                    n_control = actual_n_control
+                else:
+                    n_control = n_cancer
+
+                print(f"  n_cancer={n_cancer}, n_control={n_control}...", end=' ', flush=True)
 
                 power, mean_r2, r2_vals = run_power_simulation(
                     st_counts, st_patients, st_case, asv_names,
                     scenario['asvs'], scenario['fold_change'],
-                    n_cancer, args.n_control,
+                    n_cancer, n_control,
                     args.n_simulations, args.n_perm, args.alpha, args.seed,
                     use_true_null=scenario.get('use_true_null', False),
                     transform=args.transform
@@ -263,12 +333,17 @@ def main():
                     'n_ASVs': len(scenario['asvs']),
                     'Fold_change': scenario['fold_change'],
                     'n_cancer': n_cancer,
-                    'n_control': args.n_control,
+                    'n_control': n_control,
                     'Power': power,
                     'Mean_R2': mean_r2,
                     'R2_CI_lower': np.percentile(r2_vals, 2.5),
                     'R2_CI_upper': np.percentile(r2_vals, 97.5)
                 })
+
+                # Early stopping: if power >= 0.995, skip remaining sample sizes
+                if power >= 0.995:
+                    print(f"  → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.")
+                    break
 
     results_df = pd.DataFrame(all_results)
     results_df.to_csv(outdir / 'permanova_power_stratified.tsv', sep='\t', index=False)

@@ -162,12 +162,13 @@ def compute_sig_table(
     keep_cols = base_cols + [c for c in df.columns if c not in base_cols]
     df = df[keep_cols]
 
-    # compute -log10 p
-    with np.errstate(divide="ignore", invalid="ignore"):
-        df[f"{prefix}_log_p"] = (-np.log10(df[p_col])).replace([np.inf, -np.inf], np.nan).round(3)
-
-    # significance: prefer corrected q-values when available.
+    # Use the same significance metric for plotting and indicator calls:
+    # prefer corrected q-values when available, otherwise fall back to p-values.
     sig_metric = q_col if q_col in df.columns else p_col
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df[f"{prefix}_log_p"] = (-np.log10(df[sig_metric])).replace([np.inf, -np.inf], np.nan).round(3)
+
+    # significance thresholding
     if force_all_sig:
         df[f"{prefix}_significance"] = True
     else:
@@ -449,6 +450,13 @@ def plot_p_vs_stat_no_overlap(
         )
         leg_ax.axis("off")
 
+    # Draw threshold lines behind points.
+    if SIG_LINE_ALPHA is not None and isinstance(SIG_LINE_ALPHA, (int, float)) and SIG_LINE_ALPHA > 0:
+        if y_col.endswith("_log_p"):
+            y_thr = -np.log10(SIG_LINE_ALPHA)
+            ax.axhline(y=y_thr, linestyle="--", linewidth=1.0, color="gray", alpha=0.8, zorder=0)
+    ax.axvline(x=0.25, linestyle="--", linewidth=1.0, color="gray", alpha=0.8, zorder=0)
+
     # Plot points
     sns.scatterplot(
         data=dd,
@@ -464,13 +472,18 @@ def plot_p_vs_stat_no_overlap(
         edgecolor="black",
         legend=False,
         ax=ax,
+        zorder=2,
     )
     ax.set_xlabel(x_col)
-    ax.set_ylabel(y_col)
-    if SIG_LINE_ALPHA is not None and isinstance(SIG_LINE_ALPHA, (int, float)) and SIG_LINE_ALPHA > 0:
-        if y_col.endswith("_log_p"):
-            y_thr = -np.log10(SIG_LINE_ALPHA)
-            ax.axhline(y=y_thr, linestyle="--", linewidth=1.0, color="gray", alpha=0.8)
+    if y_col.endswith("_log_p"):
+        prefix = y_col[: -len("_log_p")]
+        q_value_col = f"{prefix}_q_value"
+        if q_value_col in dd.columns and pd.to_numeric(dd[q_value_col], errors="coerce").notna().any():
+            ax.set_ylabel("-log10(q.value)")
+        else:
+            ax.set_ylabel("-log10(p.value)")
+    else:
+        ax.set_ylabel(y_col)
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
     ax.set_ylim(ymin - 0.05, ymax + 0.05)
     if invert_y:

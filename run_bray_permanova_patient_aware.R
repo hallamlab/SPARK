@@ -17,6 +17,18 @@ option_list <- list(
   make_option("--type-col", type = "character", default = "type_group", help = "Sample type column"),
   make_option("--sample-types", type = "character", default = "Oral Rinse,BAL,Lung Brush",
               help = "Comma-separated sample types to include"),
+  make_option("--exclude-contralateral-in-cancer", type = "logical", default = TRUE,
+              help = "For case/control analyses, exclude contralateral cancer samples [default: %default]"),
+  make_option("--contralateral-col", type = "character", default = "lung_status",
+              help = "Metadata column identifying contralateral samples [default: %default]"),
+  make_option("--cancer-site-col", type = "character", default = "Cancer_Site",
+              help = "Metadata column for cancer side (used if contralateral column missing) [default: %default]"),
+  make_option("--lung-side-col", type = "character", default = "lung_code",
+              help = "Metadata column for sample lung side (used if contralateral column missing) [default: %default]"),
+  make_option("--contralateral-value", type = "character", default = "Contralateral",
+              help = "Value in contralateral column marking contralateral samples [default: %default]"),
+  make_option("--contralateral-sample-types", type = "character", default = "Lung Brush,BAL",
+              help = "Comma-separated sample types where contralateral exclusion applies [default: %default]"),
   make_option("--transform", type = "character", default = "none",
               help = "Distance input transform: none (TSS+Bray) or rclr (Euclidean) [default: %default]"),
   make_option("--permutations", type = "integer", default = 9999, help = "Number of permutations"),
@@ -51,6 +63,12 @@ args$patient_col <- resolve_arg(args, "patient_col")
 args$case_col <- resolve_arg(args, "case_col")
 args$type_col <- resolve_arg(args, "type_col")
 args$sample_types <- resolve_arg(args, "sample_types")
+args$contralateral_value <- resolve_arg(args, "contralateral_value")
+args$contralateral_sample_types <- resolve_arg(args, "contralateral_sample_types")
+args$lung_side_col <- resolve_arg(args, "lung_side_col")
+args$cancer_site_col <- resolve_arg(args, "cancer_site_col")
+args$contralateral_col <- resolve_arg(args, "contralateral_col")
+args$exclude_contralateral_in_cancer <- resolve_arg(args, "exclude_contralateral_in_cancer")
 args$transform <- resolve_arg(args, "transform")
 args$permutations <- resolve_arg(args, "permutations")
 args$seed <- resolve_arg(args, "seed")
@@ -218,8 +236,12 @@ if ("ASV_ID" %in% colnames(wide_df)) {
   wide_df[[1]] <- NULL
 }
 
+meta_cols <- unique(c(args$sample_col, args$patient_col, args$case_col, args$type_col,
+                     args$contralateral_col, args$cancer_site_col, args$lung_side_col))
+meta_cols <- meta_cols[meta_cols %in% colnames(long_df)]
+
 meta <- long_df %>%
-  select(all_of(c(args$sample_col, args$patient_col, args$case_col, args$type_col))) %>%
+  select(all_of(meta_cols)) %>%
   distinct() %>%
   filter(.data[[args$type_col]] %in% sample_types_keep)
 
@@ -246,6 +268,43 @@ meta <- meta %>%
 sample_ids <- intersect(meta$sample_id, colnames(wide_df))
 meta <- meta %>%
   filter(sample_id %in% sample_ids)
+
+contra_types <- trimws(strsplit(args$contralateral_sample_types, ",", fixed = TRUE)[[1]])
+contra_types <- contra_types[contra_types != ""]
+
+if (isTRUE(args$exclude_contralateral_in_cancer)) {
+  contralateral_col_eff <- args$contralateral_col
+  if (!(contralateral_col_eff %in% colnames(meta)) &&
+      all(c(args$cancer_site_col, args$lung_side_col) %in% colnames(meta))) {
+    meta <- meta %>%
+      mutate(
+        .derived_lung_status = case_when(
+          as.character(.data[[args$case_col]]) %in% c("Control", "Non-Cancer") ~ "Healthy",
+          !is.na(.data[[args$cancer_site_col]]) & !is.na(.data[[args$lung_side_col]]) &
+            toupper(substr(as.character(.data[[args$cancer_site_col]]), 1, 1)) ==
+              toupper(substr(as.character(.data[[args$lung_side_col]]), 1, 1)) ~ "TumorSide",
+          TRUE ~ "Contralateral"
+        )
+      )
+    contralateral_col_eff <- ".derived_lung_status"
+  }
+
+  if (contralateral_col_eff %in% colnames(meta)) {
+    is_cancer_row <- !as.character(meta[[args$case_col]]) %in% c("Control", "Non-Cancer")
+    is_contra_row <- as.character(meta[[contralateral_col_eff]]) == as.character(args$contralateral_value)
+    in_target_type <- as.character(meta[[args$type_col]]) %in% contra_types
+    keep_case_rows <- !(is_cancer_row & is_contra_row & in_target_type)
+    removed_n <- sum(!keep_case_rows, na.rm = TRUE)
+    if (removed_n > 0) {
+      cat(sprintf("Excluding %d contralateral cancer sample(s) for case/control analyses.\n", removed_n))
+    }
+    meta <- meta[keep_case_rows, , drop = FALSE]
+    sample_ids <- intersect(meta$sample_id, colnames(wide_df))
+    meta <- meta %>% filter(sample_id %in% sample_ids)
+  } else {
+    warning("Contralateral exclusion requested but no contralateral metadata available.")
+  }
+}
 
 count_matrix <- t(as.matrix(wide_df[, sample_ids, drop = FALSE]))
 storage.mode(count_matrix) <- "numeric"

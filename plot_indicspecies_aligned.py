@@ -316,20 +316,84 @@ def save_power_summaries(df: pd.DataFrame, outdir: Path, target_power: float) ->
             return np.nan
         return float(ok["n_size"].min())
 
+    def current_power_at_n(sub: pd.DataFrame, n: int = 8) -> float:
+        """Get power at current sample size (default n=8)."""
+        match = sub[sub["n_size"] == n]
+        if match.empty:
+            return np.nan
+        return float(match["power"].iloc[0])
+
+    def max_n_tested(sub: pd.DataFrame) -> float:
+        """Get maximum sample size tested."""
+        if sub["n_size"].isna().all():
+            return np.nan
+        return float(sub["n_size"].max())
+
     summary = (
         df.groupby(["analysis_label", "duleg", "scenario"], as_index=False)
         .apply(
             lambda x: pd.Series(
                 {
+                    "current_n": 8,
+                    "current_power": current_power_at_n(x, 8),
+                    "n_for_target_power": n_for_target(x),
+                    "max_n_tested": max_n_tested(x),
                     "max_power": x["power"].max(),
                     "n_at_max_power": x.loc[x["power"].idxmax(), "n_size"] if not x["power"].isna().all() else np.nan,
-                    "n_for_target_power": n_for_target(x),
                 }
             )
         )
         .reset_index(drop=True)
     )
     summary.to_csv(outdir / "power_target_summary.tsv", sep="\t", index=False)
+
+    # Create simple summary table matching PERMANOVA/Shannon format
+    simple_summary_rows = []
+
+    # Filter for Observed scenario only, status grouping (cancer vs control)
+    df_observed = df[(df["scenario"] == "Observed") & (df["grouping_col"] == "status")].copy()
+
+    if not df_observed.empty:
+        # Process both duleg=FALSE and duleg=TRUE
+        for duleg_val in [False, True]:
+            df_duleg = df_observed[df_observed["duleg"] == duleg_val].copy()
+
+            for analysis in df_duleg["analysis_label"].unique():
+                df_subset = df_duleg[df_duleg["analysis_label"] == analysis].sort_values("n_size")
+
+                # Extract Sample_Type from analysis_label (e.g., "status | BAL" -> "BAL")
+                sample_type = analysis.split(" | ")[1] if " | " in analysis else "All"
+
+                # Current power at n=8
+                current = df_subset[df_subset["n_size"] == 8]
+                current_power = float(current["power"].iloc[0]) if not current.empty else np.nan
+
+                # n for 80% power
+                ok = df_subset[df_subset["power"] >= target_power]
+                n_for_80 = int(ok["n_size"].min()) if not ok.empty else None
+
+                # Max n tested
+                max_n = int(df_subset["n_size"].max())
+
+                simple_summary_rows.append({
+                    'Sample_Type': sample_type,
+                    'Analysis': 'ISA',
+                    'duleg': 'TRUE' if duleg_val else 'FALSE',
+                    'Current_n': 8,
+                    'Current_Power': f'{current_power:.3f}' if not np.isnan(current_power) else 'N/A',
+                    'n_for_80%_Power': str(n_for_80) if n_for_80 else f'>{max_n}',
+                    'Status': 'Adequate' if current_power >= target_power else 'Underpowered'
+                })
+
+    if simple_summary_rows:
+        simple_df = pd.DataFrame(simple_summary_rows)
+        simple_df.to_csv(outdir / "power_summary_simple.tsv", sep="\t", index=False)
+
+        print("\n" + "="*60)
+        print("Power Summary: ISA Cancer vs Control (Observed Effect)")
+        print("="*60)
+        print(simple_df.to_string(index=False))
+        print(f"\n✓ Saved: power_summary_simple.tsv")
 
 
 def plot_power(df: pd.DataFrame, outdir: Path, target_power: float) -> None:
@@ -340,35 +404,12 @@ def plot_power(df: pd.DataFrame, outdir: Path, target_power: float) -> None:
     if df.empty:
         return
 
-    g = sns.relplot(
-        data=df,
-        x="n_size",
-        y="power",
-        hue="scenario",
-        style="duleg_label",
-        col="analysis_label",
-        col_wrap=2,
-        kind="line",
-        marker="o",
-        facet_kws={"sharey": True},
-        height=3.2,
-        aspect=1.3,
-    )
-    g.set_axis_labels("Sample size parameter", "Power")
-    for ax in g.axes.flatten():
-        ax.axhline(target_power, ls="--", lw=1, color="gray", alpha=0.6)
-        ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
-        ax.grid(alpha=0.25)
-        ax.set_ylim(-0.02, 1.02)
-    for ext in ("svg", "pdf"):
-        g.figure.savefig(plot_dir / f"indicspecies_power_curves.{ext}", bbox_inches="tight")
-    plt.close(g.figure)
+    def _plot_for_subset(sub: pd.DataFrame, suffix: str) -> None:
+        if sub.empty:
+            return
 
-    # Simplified version: Null + Observed only (matches other power workflow style)
-    simple = df[df["scenario"].isin(["Null", "Observed"])].copy()
-    if not simple.empty:
-        g_simple = sns.relplot(
-            data=simple,
+        g = sns.relplot(
+            data=sub,
             x="n_size",
             y="power",
             hue="scenario",
@@ -380,73 +421,53 @@ def plot_power(df: pd.DataFrame, outdir: Path, target_power: float) -> None:
             facet_kws={"sharey": True},
             height=3.2,
             aspect=1.3,
-            palette={"Null": "#999999", "Observed": "#000000"},
         )
-        g_simple.set_axis_labels("Sample size parameter", "Power")
-        for ax in g_simple.axes.flatten():
+        g.set_axis_labels("Sample size parameter", "Power")
+        for ax in g.axes.flatten():
             ax.axhline(target_power, ls="--", lw=1, color="gray", alpha=0.6)
             ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
             ax.grid(alpha=0.25)
             ax.set_ylim(-0.02, 1.02)
         for ext in ("svg", "pdf"):
-            g_simple.figure.savefig(plot_dir / f"indicspecies_power_curves_simple.{ext}", bbox_inches="tight")
-        plt.close(g_simple.figure)
+            g.figure.savefig(plot_dir / f"indicspecies_power_curves_{suffix}.{ext}", bbox_inches="tight")
+        plt.close(g.figure)
 
-    nonnull = df[~df["scenario"].isin(["Null", "Observed"])].copy()
-    if nonnull.empty:
-        return
+        # Simplified version: Null + Observed only (matches other power workflow style)
+        simple = sub[sub["scenario"].isin(["Null", "Observed"])].copy()
+        if not simple.empty:
+            g_simple = sns.relplot(
+                data=simple,
+                x="n_size",
+                y="power",
+                hue="scenario",
+                style="duleg_label",
+                col="analysis_label",
+                col_wrap=2,
+                kind="line",
+                marker="o",
+                facet_kws={"sharey": True},
+                height=3.2,
+                aspect=1.3,
+                palette={"Null": "#999999", "Observed": "#000000"},
+            )
+            g_simple.set_axis_labels("Sample size parameter", "Power")
+            for ax in g_simple.axes.flatten():
+                ax.axhline(target_power, ls="--", lw=1, color="gray", alpha=0.6)
+                ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
+                ax.grid(alpha=0.25)
+                ax.set_ylim(-0.02, 1.02)
+            for ext in ("svg", "pdf"):
+                g_simple.figure.savefig(plot_dir / f"indicspecies_power_curves_simple_{suffix}.{ext}", bbox_inches="tight")
+            plt.close(g_simple.figure)
 
-    g2 = sns.relplot(
-        data=nonnull,
-        x="n_size",
-        y="sensitivity",
-        hue="scenario",
-        style="duleg_label",
-        col="analysis_label",
-        col_wrap=2,
-        kind="line",
-        marker="o",
-        facet_kws={"sharey": True},
-        height=3.2,
-        aspect=1.3,
-    )
-    g2.set_axis_labels("Sample size parameter", "Sensitivity")
-    for ax in g2.axes.flatten():
-        ax.grid(alpha=0.25)
-        ax.set_ylim(-0.02, 1.02)
-    for ext in ("svg", "pdf"):
-        g2.figure.savefig(plot_dir / f"indicspecies_sensitivity_curves.{ext}", bbox_inches="tight")
-    plt.close(g2.figure)
+        nonnull = sub[~sub["scenario"].isin(["Null", "Observed"])].copy()
+        if nonnull.empty:
+            return
 
-    g3 = sns.relplot(
-        data=nonnull,
-        x="n_size",
-        y="fdr",
-        hue="scenario",
-        style="duleg_label",
-        col="analysis_label",
-        col_wrap=2,
-        kind="line",
-        marker="o",
-        facet_kws={"sharey": True},
-        height=3.2,
-        aspect=1.3,
-    )
-    g3.set_axis_labels("Sample size parameter", "Empirical FDR (diluted)")
-    for ax in g3.axes.flatten():
-        ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
-        ax.grid(alpha=0.25)
-        ax.set_ylim(-0.02, 1.02)
-    for ext in ("svg", "pdf"):
-        g3.figure.savefig(plot_dir / f"indicspecies_fdr_curves.{ext}", bbox_inches="tight")
-    plt.close(g3.figure)
-
-    # Conditional FDR (only among simulations with discoveries)
-    if "fdr_conditional" in nonnull.columns:
-        g4 = sns.relplot(
+        g2 = sns.relplot(
             data=nonnull,
             x="n_size",
-            y="fdr_conditional",
+            y="sensitivity",
             hue="scenario",
             style="duleg_label",
             col="analysis_label",
@@ -457,14 +478,68 @@ def plot_power(df: pd.DataFrame, outdir: Path, target_power: float) -> None:
             height=3.2,
             aspect=1.3,
         )
-        g4.set_axis_labels("Sample size parameter", "Conditional FDR (among discoveries)")
-        for ax in g4.axes.flatten():
+        g2.set_axis_labels("Sample size parameter", "Sensitivity")
+        for ax in g2.axes.flatten():
+            ax.grid(alpha=0.25)
+            ax.set_ylim(-0.02, 1.02)
+        for ext in ("svg", "pdf"):
+            g2.figure.savefig(plot_dir / f"indicspecies_sensitivity_curves_{suffix}.{ext}", bbox_inches="tight")
+        plt.close(g2.figure)
+
+        g3 = sns.relplot(
+            data=nonnull,
+            x="n_size",
+            y="fdr",
+            hue="scenario",
+            style="duleg_label",
+            col="analysis_label",
+            col_wrap=2,
+            kind="line",
+            marker="o",
+            facet_kws={"sharey": True},
+            height=3.2,
+            aspect=1.3,
+        )
+        g3.set_axis_labels("Sample size parameter", "Empirical FDR (diluted)")
+        for ax in g3.axes.flatten():
             ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
             ax.grid(alpha=0.25)
             ax.set_ylim(-0.02, 1.02)
         for ext in ("svg", "pdf"):
-            g4.figure.savefig(plot_dir / f"indicspecies_fdr_conditional_curves.{ext}", bbox_inches="tight")
-        plt.close(g4.figure)
+            g3.figure.savefig(plot_dir / f"indicspecies_fdr_curves_{suffix}.{ext}", bbox_inches="tight")
+        plt.close(g3.figure)
+
+        # Conditional FDR (only among simulations with discoveries)
+        if "fdr_conditional" in nonnull.columns:
+            g4 = sns.relplot(
+                data=nonnull,
+                x="n_size",
+                y="fdr_conditional",
+                hue="scenario",
+                style="duleg_label",
+                col="analysis_label",
+                col_wrap=2,
+                kind="line",
+                marker="o",
+                facet_kws={"sharey": True},
+                height=3.2,
+                aspect=1.3,
+            )
+            g4.set_axis_labels("Sample size parameter", "Conditional FDR (among discoveries)")
+            for ax in g4.axes.flatten():
+                ax.axhline(0.05, ls=":", lw=1, color="red", alpha=0.4)
+                ax.grid(alpha=0.25)
+                ax.set_ylim(-0.02, 1.02)
+            for ext in ("svg", "pdf"):
+                g4.figure.savefig(plot_dir / f"indicspecies_fdr_conditional_curves_{suffix}.{ext}", bbox_inches="tight")
+            plt.close(g4.figure)
+
+    if "grouping_col" in df.columns:
+        for grp in ("status", "type_group"):
+            sub = df[df["grouping_col"] == grp].copy()
+            _plot_for_subset(sub, grp)
+    else:
+        _plot_for_subset(df, "all")
 
 
 def parse_args() -> argparse.Namespace:

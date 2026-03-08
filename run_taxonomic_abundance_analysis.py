@@ -24,6 +24,31 @@ from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 
+def filter_contralateral_cancer(df: pd.DataFrame, case_col: str, type_col: str, contralateral_sample_types: list[str], contralateral_col: str,
+                                cancer_site_col: str, lung_side_col: str,
+                                contralateral_value: str) -> pd.DataFrame:
+    work = df.copy()
+    contra = contralateral_col
+    if contra not in work.columns and {cancer_site_col, lung_side_col}.issubset(work.columns):
+        cancer_side = work[cancer_site_col].astype(str).str[:1].str.upper()
+        lung_side = work[lung_side_col].astype(str).str[:1].str.upper()
+        case_vals = work[case_col].astype(str)
+        work[".derived_lung_status"] = np.where(
+            case_vals.isin(["Control", "Non-Cancer"]),
+            "Healthy",
+            np.where(cancer_side == lung_side, "TumorSide", "Contralateral"),
+        )
+        contra = ".derived_lung_status"
+
+    if contra not in work.columns:
+        return work
+
+    is_cancer = ~work[case_col].astype(str).isin(["Control", "Non-Cancer"])
+    is_contra = work[contra].astype(str) == str(contralateral_value)
+    in_target_type = work[type_col].astype(str).isin(set(contralateral_sample_types))
+    return work.loc[~(is_cancer & is_contra & in_target_type)].copy()
+
+
 def aggregate_to_taxonomy(long_df: pd.DataFrame, tax_level: str, sample_col: str, count_col: str) -> pd.DataFrame:
     agg = long_df.groupby([sample_col, tax_level], as_index=False)[count_col].sum()
     wide = agg.pivot(index=sample_col, columns=tax_level, values=count_col).fillna(0)
@@ -168,6 +193,14 @@ def main() -> None:
     p.add_argument("--type-col", default="type_group")
     p.add_argument("--count-col", default="count")
     p.add_argument("--min-prevalence", type=float, default=0.10)
+    p.add_argument("--exclude-contralateral-in-cancer", dest="exclude_contralateral_in_cancer", action="store_true")
+    p.add_argument("--keep-contralateral-in-cancer", dest="exclude_contralateral_in_cancer", action="store_false")
+    p.add_argument("--contralateral-col", default="lung_status")
+    p.add_argument("--cancer-site-col", default="Cancer_Site")
+    p.add_argument("--lung-side-col", default="lung_code")
+    p.add_argument("--contralateral-value", default="Contralateral")
+    p.add_argument("--contralateral-sample-types", default="Lung Brush,BAL", help="Comma-separated sample types where contralateral exclusion applies")
+    p.set_defaults(exclude_contralateral_in_cancer=True)
     p.add_argument("--transform", choices=["none", "rclr"], default="none")
     p.add_argument("--outdir", required=True)
     args = p.parse_args()
@@ -176,6 +209,17 @@ def main() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     long_df = pd.read_csv(args.data_long, sep="\t", low_memory=False)
+    if args.exclude_contralateral_in_cancer:
+        long_df = filter_contralateral_cancer(
+            long_df,
+            case_col=args.case_col,
+            type_col=args.type_col,
+            contralateral_sample_types=[x.strip() for x in args.contralateral_sample_types.split(",") if x.strip()],
+            contralateral_col=args.contralateral_col,
+            cancer_site_col=args.cancer_site_col,
+            lung_side_col=args.lung_side_col,
+            contralateral_value=args.contralateral_value,
+        )
 
     tax_levels = [x.strip() for x in args.tax_levels.split(",") if x.strip()]
     sample_types = [x.strip() for x in args.sample_types.split(",") if x.strip()]

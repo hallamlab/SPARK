@@ -380,6 +380,11 @@ def main():
             'n_simulations': args.n_simulations
         })
 
+        # Early stopping: if power >= 0.995, skip remaining sample sizes
+        if power >= 0.995:
+            print(f"  → Power ≥ 0.995 reached. Skipping larger sample sizes.")
+            break
+
     omnibus_df = pd.DataFrame(omnibus_results)
     omnibus_df.to_csv(outdir / 'sample_type_permanova_power_omnibus.tsv',
                       sep='\t', index=False)
@@ -418,6 +423,11 @@ def main():
                 'r2_ci_upper': np.percentile(r2_vals, 97.5),
                 'n_simulations': args.n_simulations
             })
+
+            # Early stopping: if power >= 0.995, skip remaining sample sizes
+            if power >= 0.995:
+                print(f"  → Power ≥ 0.995 reached. Skipping larger sample sizes for this comparison.")
+                break
 
     pairwise_df = pd.DataFrame(pairwise_results)
     pairwise_df.to_csv(outdir / 'sample_type_permanova_power_pairwise.tsv',

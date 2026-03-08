@@ -42,6 +42,10 @@ option_list <- list(
               help="Optional comma-separated type_group levels for status power (default: all sites)"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
               help="For Lung Brush status power, exclude contralateral cancer samples [default: %default]"),
+  make_option("--status-exclude-contralateral", type="logical", default=TRUE,
+              help="Exclude contralateral cancer samples for selected status sample types [default: %default]"),
+  make_option("--status-contralateral-sites", type="character", default="Lung Brush,BAL",
+              help="Comma-separated type_group values where contralateral exclusion applies [default: %default]"),
   make_option("--contralateral-col", type="character", default="lung_status",
               help="Metadata column identifying contralateral samples [default: %default]"),
   make_option("--cancer-site-col", type="character", default="Cancer_Site",
@@ -54,8 +58,14 @@ option_list <- list(
               help="Label in status column for cancer samples [default: %default]"),
   make_option("--lung-brush-label", type="character", default="Lung Brush",
               help="Value in type_group identifying Lung Brush samples [default: %default]"),
-  make_option("--sample-sizes", type="character", default="6,8,10,15,20,25,30",
-              help="Comma-separated sample sizes to test [default: %default]"),
+  make_option("--sample-sizes", type="character", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100",
+              help="Fallback sample sizes if cancer/stype grids are not provided [default: %default]"),
+  make_option("--sample-sizes-cancer", type="character", default="",
+              help="Comma-separated sample sizes for status (cancer vs control) ISA power"),
+  make_option("--sample-sizes-stype", type="character", default="",
+              help="Comma-separated sample sizes for type_group ISA power"),
+  make_option("--scenarios", type="character", default="observed,null",
+              help="Comma-separated: observed, null, weak, moderate, strong [default: %default]"),
   make_option("--transform", type="character", default="none",
               help="Abundance transform before multipatt: none|rclr [default: %default]"),
   make_option("--n-simulations", type="integer", default=1000,
@@ -95,9 +105,13 @@ if (is.null(args$`n-simulations`)) args$`n-simulations` <- 1000
 if (is.null(args$perms)) args$perms <- 199
 if (is.null(args$alpha)) args$alpha <- 0.05
 if (is.null(args$`test-duleg`)) args$`test-duleg` <- TRUE
-if (is.null(args$`sample-sizes`)) args$`sample-sizes` <- "6,8,10,15,20,25,30"
+if (is.null(args$`sample-sizes`)) args$`sample-sizes` <- "5,8,10,15,20,25,30,40,50,60,70,80,90,100"
+if (is.null(args$`sample-sizes-cancer`)) args$`sample-sizes-cancer` <- ""
+if (is.null(args$`sample-sizes-stype`)) args$`sample-sizes-stype` <- ""
+if (is.null(args$scenarios)) args$scenarios <- "observed,null"
 if (is.null(args$`group-cols`)) args$`group-cols` <- "status,type_group"
 if (is.null(args$`status-sites`)) args$`status-sites` <- ""
+if (is.null(args$`status-contralateral-sites`)) args$`status-contralateral-sites` <- "Lung Brush,BAL"
 
 if (!(args$transform %in% c("none", "rclr"))) {
   stop("--transform must be one of: none, rclr")
@@ -211,9 +225,51 @@ cat("  Patients:", length(unique(meta[[args$`patient-col`]])), "\n\n")
 
 # grouping columns already parsed above when extracting metadata
 group_cols <- group_cols_vec
-sample_sizes <- as.integer(strsplit(args$`sample-sizes`, ",")[[1]])
+sample_sizes_default <- as.integer(strsplit(args$`sample-sizes`, ",")[[1]])
+sample_sizes_default <- sample_sizes_default[!is.na(sample_sizes_default)]
+if (length(sample_sizes_default) == 0) {
+  stop("No valid values parsed from --sample-sizes")
+}
+
+sample_sizes_cancer <- sample_sizes_default
+if (nzchar(args$`sample-sizes-cancer`)) {
+  sample_sizes_cancer <- as.integer(strsplit(args$`sample-sizes-cancer`, ",")[[1]])
+  sample_sizes_cancer <- sample_sizes_cancer[!is.na(sample_sizes_cancer)]
+  if (length(sample_sizes_cancer) == 0) {
+    stop("No valid values parsed from --sample-sizes-cancer")
+  }
+}
+
+sample_sizes_stype <- sample_sizes_default
+if (nzchar(args$`sample-sizes-stype`)) {
+  sample_sizes_stype <- as.integer(strsplit(args$`sample-sizes-stype`, ",")[[1]])
+  sample_sizes_stype <- sample_sizes_stype[!is.na(sample_sizes_stype)]
+  if (length(sample_sizes_stype) == 0) {
+    stop("No valid values parsed from --sample-sizes-stype")
+  }
+}
+
 status_sites_requested <- strsplit(args$`status-sites`, ",", fixed = TRUE)[[1]] %>% trimws()
 status_sites_requested <- status_sites_requested[status_sites_requested != ""]
+status_contralateral_sites <- strsplit(args$`status-contralateral-sites`, ",", fixed = TRUE)[[1]] %>% trimws()
+status_contralateral_sites <- status_contralateral_sites[status_contralateral_sites != ""]
+
+# Parse requested scenarios
+requested_scenarios <- tolower(trimws(strsplit(args$scenarios, ",")[[1]]))
+cat("Requested scenarios:", paste(requested_scenarios, collapse=", "), "\n")
+
+# Determine actual number of control patients from the data
+if ("status" %in% colnames(meta)) {
+  control_patients <- meta %>%
+    filter(status %in% c("Control", "Non-Cancer")) %>%
+    pull(!!sym(args$`patient-col`)) %>%
+    unique()
+  actual_n_control <- length(control_patients)
+  cat("Detected", actual_n_control, "control patients in data\n")
+} else {
+  actual_n_control <- NULL
+  cat("No 'status' column found; cannot auto-detect control count\n")
+}
 
 cat("Grouping columns:", paste(group_cols, collapse=", "), "\n")
 if (length(status_sites_requested) > 0) {
@@ -221,7 +277,9 @@ if (length(status_sites_requested) > 0) {
 } else {
   cat("Status sites filter: all\n")
 }
-cat("Sample sizes to test:", paste(sample_sizes, collapse=", "), "\n")
+cat("Sample sizes (status/cancer):", paste(sample_sizes_cancer, collapse=", "), "\n")
+cat("Sample sizes (type_group):", paste(sample_sizes_stype, collapse=", "), "\n")
+cat("Fallback sample sizes:", paste(sample_sizes_default, collapse=", "), "\n")
 cat("Simulations:", args$`n-simulations`, "\n")
 cat("Permutations per test:", args$perms, "\n")
 cat("Test duleg (combos):", args$`test-duleg`, "\n\n")
@@ -229,6 +287,90 @@ cat("Test duleg (combos):", args$`test-duleg`, "\n\n")
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+#' Build scenario list based on requested scenarios
+#'
+#' @param requested Vector of requested scenario names (lowercase)
+#' @param top_asv_idx Top ASV indices for spike-ins (can be NULL if no spikes requested)
+#' @return List of scenario configurations
+build_scenario_list <- function(requested, top_asv_idx = NULL) {
+  scenarios <- list()
+
+  if ("null" %in% requested) {
+    scenarios <- c(scenarios, list(
+      list(name = "Null", asv_indices = NULL, fold_change = 1.0, use_true_null = TRUE)
+    ))
+  }
+
+  if ("observed" %in% requested) {
+    scenarios <- c(scenarios, list(
+      list(name = "Observed", asv_indices = NULL, fold_change = 1.0, use_true_null = FALSE)
+    ))
+  }
+
+  if ("weak" %in% requested) {
+    if (is.null(top_asv_idx) || length(top_asv_idx) == 0) {
+      warning("'weak' scenario requested but no spike ASVs available; skipping")
+    } else {
+      scenarios <- c(scenarios, list(
+        list(name = "Weak", asv_indices = top_asv_idx[1:min(3, length(top_asv_idx))],
+             fold_change = 1.5, use_true_null = FALSE)
+      ))
+    }
+  }
+
+  if ("moderate" %in% requested) {
+    if (is.null(top_asv_idx) || length(top_asv_idx) == 0) {
+      warning("'moderate' scenario requested but no spike ASVs available; skipping")
+    } else {
+      scenarios <- c(scenarios, list(
+        list(name = "Moderate", asv_indices = top_asv_idx[1:min(5, length(top_asv_idx))],
+             fold_change = 2.0, use_true_null = FALSE)
+      ))
+    }
+  }
+
+  if ("strong" %in% requested) {
+    if (is.null(top_asv_idx) || length(top_asv_idx) == 0) {
+      warning("'strong' scenario requested but no spike ASVs available; skipping")
+    } else {
+      scenarios <- c(scenarios, list(
+        list(name = "Strong", asv_indices = top_asv_idx,
+             fold_change = 2.5, use_true_null = FALSE)
+      ))
+    }
+  }
+
+  if (length(scenarios) == 0) {
+    stop("No valid scenarios were built from requested: ", paste(requested, collapse=", "))
+  }
+
+  return(scenarios)
+}
+
+#' Compute hybrid sample sizes for cancer vs control
+#'
+#' For n_cancer <= actual_n_control: use actual_n_control
+#' For n_cancer > actual_n_control: use balanced (n_cancer)
+#'
+#' @param n_cancer Number of cancer patients
+#' @param actual_n_control Actual number of control patients in data
+#' @param group_levels Character vector of group level names (e.g., c("Cancer", "Control"))
+#' @return Named vector with sample sizes per group
+compute_hybrid_n_per_group <- function(n_cancer, actual_n_control, group_levels) {
+  if (is.null(actual_n_control)) {
+    # Fallback: balanced sampling
+    n_control <- n_cancer
+  } else if (n_cancer <= actual_n_control) {
+    n_control <- actual_n_control
+  } else {
+    n_control <- n_cancer
+  }
+
+  # Return named vector
+  # Assumes first group is "Cancer" or treatment group
+  setNames(c(n_cancer, n_control), group_levels)
+}
 
 #' Bootstrap patients with replacement (preserves hierarchical structure)
 #'
@@ -537,11 +679,8 @@ spike_in_first_group <- function(counts, grouping, spike_asv_idx, fold_change) {
 apply_matrix_transform <- function(mat, method = "none") {
   method <- tolower(method)
   if (method == "none") {
-    rs <- rowSums(mat)
-    rs[rs == 0] <- 1
-    rel <- sweep(mat, 1, rs, "/")
-    rel[is.na(rel)] <- 0
-    return(rel)
+    # Match run_indicspecies.R default behavior: use raw counts.
+    return(mat)
   }
   if (method != "rclr") {
     stop("Unsupported transform: ", method)
@@ -768,6 +907,7 @@ for (gcol in group_cols) {
   }
 
   cat("\n--- Grouping Column:", gcol, "---\n")
+  sample_sizes_current <- if (gcol == "status") sample_sizes_cancer else sample_sizes_stype
 
   grouping_vec <- meta[[gcol]]
 
@@ -812,6 +952,20 @@ for (gcol in group_cols) {
       meta_site <- meta[keep_idx, , drop = FALSE][site_mask, , drop = FALSE]
       grouping_site <- droplevels(as.factor(grouping_clean[site_mask]))
 
+      if (isTRUE(args$`status-exclude-contralateral`) && (as.character(site) %in% status_contralateral_sites)) {
+        if (!(effective_contralateral_col %in% colnames(meta_site))) {
+          warning("Cannot exclude contralateral samples for status power: column \"", effective_contralateral_col, "\" not found.")
+        } else {
+          is_cancer_site <- as.character(meta_site[[gcol]]) == as.character(args$`cancer-label`)
+          is_contralateral_site <- as.character(meta_site[[effective_contralateral_col]]) == as.character(args$`contralateral-value`)
+          keep_site_global <- !(is_cancer_site & is_contralateral_site)
+          counts_site <- counts_site[keep_site_global, , drop = FALSE]
+          patients_site <- patients_site[keep_site_global]
+          grouping_site <- droplevels(grouping_site[keep_site_global])
+          meta_site <- meta_site[keep_site_global, , drop = FALSE]
+        }
+      }
+
       # Optional: exclude contralateral samples from cancer patients in Lung Brush.
       site_label_for_output <- site
       if (isTRUE(args$`status-extra-no-contralateral`) &&
@@ -848,13 +1002,8 @@ for (gcol in group_cols) {
       mean_abund <- colMeans(counts_site)
       top_asv_idx <- order(mean_abund, decreasing = TRUE)[1:min(10, ncol(counts_site))]
 
-      scenarios <- list(
-        list(name = "Null", asv_indices = NULL, fold_change = 1.0, use_true_null = TRUE),
-        list(name = "Observed", asv_indices = NULL, fold_change = 1.0, use_true_null = FALSE),
-        list(name = "Weak", asv_indices = top_asv_idx[1:min(3, length(top_asv_idx))], fold_change = 1.5, use_true_null = FALSE),
-        list(name = "Moderate", asv_indices = top_asv_idx[1:min(5, length(top_asv_idx))], fold_change = 2.0, use_true_null = FALSE),
-        list(name = "Strong", asv_indices = top_asv_idx, fold_change = 2.5, use_true_null = FALSE)
-      )
+      # Build scenarios based on user request
+      scenarios <- build_scenario_list(requested_scenarios, top_asv_idx)
 
       for (scenario in scenarios) {
         cat("\n    Scenario:", scenario$name, "(duleg=FALSE)\n")
@@ -862,12 +1011,17 @@ for (gcol in group_cols) {
           cat("      Spiking", length(scenario$asv_indices), "ASVs @", scenario$fold_change, "×\n")
         }
 
-        for (n_size in sample_sizes) {
-          cat("      n =", n_size, "")
+        for (n_cancer in sample_sizes_current) {
+          # Hybrid logic: compute n_per_group for cancer vs control
+          group_levels <- levels(grouping_site)
+          n_per_group <- compute_hybrid_n_per_group(n_cancer, actual_n_control, group_levels)
+
+          cat(sprintf("      n_cancer=%d, n_control=%d", n_per_group[1], n_per_group[2]), "")
+
           result <- run_isa_power_generic(
             counts_site, patients_site, grouping_site,
             scenario$asv_indices, scenario$fold_change,
-            n_size,
+            n_per_group,
             duleg = FALSE,
             use_true_null = scenario$use_true_null,
             use_blocking = FALSE,
@@ -876,7 +1030,7 @@ for (gcol in group_cols) {
             alpha = args$alpha,
             seed = args$seed
           )
-          cat(sprintf("→ Power=%.3f, Sens=%.3f, FDR=%.3f, FDRc=%.3f\n",
+          cat(sprintf(" → Power=%.3f, Sens=%.3f, FDR=%.3f, FDRc=%.3f\n",
                       result$power, result$sensitivity, result$fdr, result$fdr_conditional))
 
           all_results <- rbind(all_results, data.frame(
@@ -885,7 +1039,8 @@ for (gcol in group_cols) {
             subgroup_level = site_label_for_output,
             duleg = FALSE,
             scenario = scenario$name,
-            n_size = n_size,
+            n_cancer = n_per_group[1],
+            n_control = n_per_group[2],
             power = result$power,
             sensitivity = result$sensitivity,
             fdr = result$fdr,
@@ -894,6 +1049,12 @@ for (gcol in group_cols) {
             n_perm = args$perms,
             stringsAsFactors = FALSE
           ))
+
+          # Early stopping: if power >= 0.995, skip remaining sample sizes
+          if (result$power >= 0.995) {
+            cat("      → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.\n")
+            break
+          }
         }
       }
 
@@ -904,12 +1065,17 @@ for (gcol in group_cols) {
             cat("      Spiking", length(scenario$asv_indices), "ASVs @", scenario$fold_change, "×\n")
           }
 
-          for (n_size in sample_sizes) {
-            cat("      n =", n_size, "")
+          for (n_cancer in sample_sizes_current) {
+            # Hybrid logic: compute n_per_group for cancer vs control
+            group_levels <- levels(grouping_site)
+            n_per_group <- compute_hybrid_n_per_group(n_cancer, actual_n_control, group_levels)
+
+            cat(sprintf("      n_cancer=%d, n_control=%d", n_per_group[1], n_per_group[2]), "")
+
             result <- run_isa_power_generic(
               counts_site, patients_site, grouping_site,
               scenario$asv_indices, scenario$fold_change,
-              n_size,
+              n_per_group,
               duleg = TRUE,
               use_true_null = scenario$use_true_null,
               use_blocking = FALSE,
@@ -918,7 +1084,7 @@ for (gcol in group_cols) {
               alpha = args$alpha,
               seed = args$seed
             )
-            cat(sprintf("→ Power=%.3f, Sens=%.3f, FDR=%.3f, FDRc=%.3f\n",
+            cat(sprintf(" → Power=%.3f, Sens=%.3f, FDR=%.3f, FDRc=%.3f\n",
                         result$power, result$sensitivity, result$fdr, result$fdr_conditional))
 
             all_results <- rbind(all_results, data.frame(
@@ -927,7 +1093,8 @@ for (gcol in group_cols) {
               subgroup_level = site_label_for_output,
               duleg = TRUE,
               scenario = scenario$name,
-              n_size = n_size,
+              n_cancer = n_per_group[1],
+              n_control = n_per_group[2],
               power = result$power,
               sensitivity = result$sensitivity,
               fdr = result$fdr,
@@ -936,6 +1103,12 @@ for (gcol in group_cols) {
               n_perm = args$perms,
               stringsAsFactors = FALSE
             ))
+
+            # Early stopping: if power >= 0.995, skip remaining sample sizes
+            if (result$power >= 0.995) {
+              cat("      → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.\n")
+              break
+            }
           }
         }
       }
@@ -967,14 +1140,8 @@ for (gcol in group_cols) {
   mean_abund <- colMeans(counts_clean)
   top_asv_idx <- order(mean_abund, decreasing = TRUE)[1:min(10, ncol(counts_clean))]
 
-  # Define spike scenarios
-  scenarios <- list(
-    list(name = "Null", asv_indices = NULL, fold_change = 1.0, use_true_null = TRUE),
-    list(name = "Observed", asv_indices = NULL, fold_change = 1.0, use_true_null = FALSE),
-    list(name = "Weak", asv_indices = top_asv_idx[1:min(3, length(top_asv_idx))], fold_change = 1.5, use_true_null = FALSE),
-    list(name = "Moderate", asv_indices = top_asv_idx[1:min(5, length(top_asv_idx))], fold_change = 2.0, use_true_null = FALSE),
-    list(name = "Strong", asv_indices = top_asv_idx, fold_change = 2.5, use_true_null = FALSE)
-  )
+  # Build scenarios based on user request
+  scenarios <- build_scenario_list(requested_scenarios, top_asv_idx)
 
   # Test duleg=FALSE (single groups)
   for (scenario in scenarios) {
@@ -983,7 +1150,7 @@ for (gcol in group_cols) {
       cat("    Spiking", length(scenario$asv_indices), "ASVs @", scenario$fold_change, "×\n")
     }
 
-    for (n_size in sample_sizes) {
+    for (n_size in sample_sizes_current) {
       if (use_blocking) {
         cat("    n_patients =", n_size, "")
       } else {
@@ -1012,7 +1179,8 @@ for (gcol in group_cols) {
         subgroup_level = NA_character_,
         duleg = FALSE,
         scenario = scenario$name,
-        n_size = n_size,
+        n_cancer = n_size,
+        n_control = n_size,
         power = result$power,
         sensitivity = result$sensitivity,
         fdr = result$fdr,
@@ -1021,6 +1189,12 @@ for (gcol in group_cols) {
         n_perm = args$perms,
         stringsAsFactors = FALSE
       ))
+
+      # Early stopping: if power >= 0.995, skip remaining sample sizes
+      if (result$power >= 0.995) {
+        cat("    → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.\n")
+        break
+      }
     }
   }
 
@@ -1032,7 +1206,7 @@ for (gcol in group_cols) {
         cat("    Spiking", length(scenario$asv_indices), "ASVs @", scenario$fold_change, "×\n")
       }
 
-      for (n_size in sample_sizes) {
+      for (n_size in sample_sizes_current) {
         if (use_blocking) {
           cat("    n_patients =", n_size, "")
         } else {
@@ -1061,7 +1235,8 @@ for (gcol in group_cols) {
           subgroup_level = NA_character_,
           duleg = TRUE,
           scenario = scenario$name,
-          n_size = n_size,
+          n_cancer = n_size,
+          n_control = n_size,
           power = result$power,
           sensitivity = result$sensitivity,
           fdr = result$fdr,
@@ -1070,6 +1245,12 @@ for (gcol in group_cols) {
           n_perm = args$perms,
           stringsAsFactors = FALSE
         ))
+
+        # Early stopping: if power >= 0.995, skip remaining sample sizes
+        if (result$power >= 0.995) {
+          cat("    → Power ≥ 0.995 reached. Skipping larger sample sizes for this scenario.\n")
+          break
+        }
       }
     }
   }

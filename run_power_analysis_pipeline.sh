@@ -22,7 +22,9 @@ Usage:
     [--n-control 25] [--n-simulations 1000] [--n-perm 199] \
     [--alpha 0.05] [--seed 42] \
     [--skip-estimate] [--skip-plot] \
-    [--transform none|rclr]
+    [--transform none|rclr] \
+    [--indicspecies-dir <main_analysis_output/indicspecies>] \
+    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Lung Brush,BAL"]
 USAGE
 }
 
@@ -43,6 +45,9 @@ SEED="42"
 SKIP_ESTIMATE="false"
 SKIP_PLOT="false"
 TRANSFORM="none"
+INDICSPECIES_DIR=""
+EXCLUDE_CONTRALATERAL="true"
+CONTRALATERAL_SAMPLE_TYPES="Lung Brush,BAL"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,6 +68,9 @@ while [[ $# -gt 0 ]]; do
     --skip-estimate) SKIP_ESTIMATE="true"; shift ;;
     --skip-plot) SKIP_PLOT="true"; shift ;;
     --transform) TRANSFORM="$2"; shift 2 ;;
+    --indicspecies-dir) INDICSPECIES_DIR="$2"; shift 2 ;;
+    --keep-contralateral-in-cancer) EXCLUDE_CONTRALATERAL="false"; shift ;;
+    --contralateral-sample-types) CONTRALATERAL_SAMPLE_TYPES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 2 ;;
   esac
@@ -95,7 +103,9 @@ if [[ "$SKIP_ESTIMATE" == "false" ]]; then
     --case-col "$CASE_COL" \
     --type-col "$TYPE_COL" \
     --outdir "$EFFECT_DIR" \
-    --transform "$TRANSFORM"
+    --transform "$TRANSFORM" \
+    --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL" \
+    --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES"
 fi
 
 log "Running power_main.py"
@@ -111,13 +121,43 @@ python3 "$SCRIPT_DIR/power_main.py" \
   --alpha "$ALPHA" \
   --seed "$SEED" \
   --outdir "$RESULTS_DIR" \
-  --transform "$TRANSFORM"
+  --transform "$TRANSFORM" \
+  --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL" \
+  --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES"
 
 if [[ "$SKIP_PLOT" == "false" ]]; then
   log "Plotting power curves"
   python3 "$SCRIPT_DIR/plot_power_curves.py" \
-    --input "$RESULTS_DIR" \
+    --results-dir "$RESULTS_DIR" \
     --outdir "$PLOTS_DIR"
+
+  # ISA power/aligned plotting (includes ISA power curves from indicspecies_power_results.tsv).
+  ISA_POWER_RESULTS="$RESULTS_DIR/indicspecies_power_results.tsv"
+  if [[ -f "$ISA_POWER_RESULTS" ]]; then
+    ISA_PLOT_DIR="$PLOTS_DIR/indicspecies_aligned"
+
+    # Auto-discover main analysis indicspecies outputs if user didn't pass --indicspecies-dir.
+    if [[ -z "$INDICSPECIES_DIR" ]]; then
+      CANDIDATE_ISA_DIR="$(cd "$OUTDIR/.." && pwd)/main_analysis_output/indicspecies"
+      if [[ -d "$CANDIDATE_ISA_DIR" ]]; then
+        INDICSPECIES_DIR="$CANDIDATE_ISA_DIR"
+      fi
+    fi
+
+    ISA_PLOT_CMD=(
+      python3 "$SCRIPT_DIR/plot_indicspecies_aligned.py"
+      --power-results "$ISA_POWER_RESULTS"
+      --outdir "$ISA_PLOT_DIR"
+    )
+    if [[ -n "$INDICSPECIES_DIR" ]]; then
+      ISA_PLOT_CMD+=(--indicspecies-dir "$INDICSPECIES_DIR")
+    fi
+
+    log "Plotting ISA power/aligned outputs"
+    "${ISA_PLOT_CMD[@]}"
+  else
+    log "Skipping ISA power/aligned plots (no file: $ISA_POWER_RESULTS)"
+  fi
 fi
 
 log "Power pipeline complete"

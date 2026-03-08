@@ -268,6 +268,11 @@ def main():
                 'n_simulations': args.n_simulations
             })
 
+            # Early stopping: if power >= 0.995, skip remaining sample sizes
+            if power >= 0.995:
+                print(f"  → Power ≥ 0.995 reached. Skipping larger sample sizes for this level.")
+                break
+
     # Save results
     results_df = pd.DataFrame(all_results)
     outfile = outdir / 'taxonomic_sample_type_power.tsv'

@@ -37,6 +37,21 @@ sns.set_style("white")
 
 PALETTE_STATUS = {"Control": "#bdbdbd", "Cancer": "#A50026"}
 PALETTE_TYPES = {"BAL": "#0072B2", "Lung Brush": "#009E73", "Oral Rinse": "#6A3D9A"}
+BOXPLOT_HEIGHT = 4.8
+AXIS_LABEL_SIZE = 10
+AXIS_TICK_SIZE = 9
+TITLE_SIZE = 11
+BOXPLOT_SUBPLOT_ADJUST = dict(left=0.12, right=0.98, bottom=0.33, top=0.90)
+AXIS_LINEWIDTH = 0.5
+TICK_LINEWIDTH = 0.5
+BOXPLOT_LINEWIDTH = 0.5
+SPLIT_THRESHOLD_REL_ABUND = 0.03
+
+
+def style_axes(ax: plt.Axes) -> None:
+    for side in ("left", "bottom", "right", "top"):
+        ax.spines[side].set_linewidth(AXIS_LINEWIDTH)
+    ax.tick_params(axis="both", width=TICK_LINEWIDTH)
 
 
 def save_fig(fig: plt.Figure, out_base: Path) -> None:
@@ -94,6 +109,117 @@ def top_taxa(df: pd.DataFrame, n: int, q_col: str = "q_value") -> list[str]:
     return d["taxon"].dropna().astype(str).head(n).tolist()
 
 
+def q_to_stars(q: float) -> str:
+    if pd.isna(q):
+        return ""
+    if q <= 0.001:
+        return "***"
+    if q <= 0.01:
+        return "**"
+    if q <= 0.05:
+        return "*"
+    return ""
+
+
+def order_taxa_by_desc_median(d: pd.DataFrame, taxa: list[str]) -> list[str]:
+    present = [t for t in taxa if t in set(d["taxon"].dropna().astype(str))]
+    if not present:
+        return taxa
+    med = (
+        d[d["taxon"].isin(present)]
+        .groupby("taxon", as_index=False)["rel_abundance"]
+        .median()
+        .sort_values("rel_abundance", ascending=False)
+    )
+    ordered = med["taxon"].tolist()
+    missing = [t for t in taxa if t not in ordered]
+    return ordered + missing
+
+
+def plot_sample_type_split_boxplots(
+    d: pd.DataFrame,
+    tax_level: str,
+    outdir: Path,
+    type_col: str,
+    hue_order: list[str],
+    base_name: str,
+    title_prefix: str,
+) -> None:
+    if d.empty:
+        return
+    threshold = SPLIT_THRESHOLD_REL_ABUND
+    stats = d.groupby("taxon", as_index=False)["rel_abundance"].agg(median="median", max="max")
+    # Keep the "low" panel compact: if a taxon has any value above threshold,
+    # force it into the high panel even if its median is low.
+    high_taxa = stats.loc[(stats["median"] > threshold) | (stats["max"] > threshold), "taxon"].tolist()
+    low_taxa = stats.loc[~stats["taxon"].isin(high_taxa), "taxon"].tolist()
+
+    d_low = d[d["taxon"].isin(low_taxa)].copy()
+    low_max = float(d_low["rel_abundance"].max()) if not d_low.empty else np.nan
+
+    def _draw(sub_df: pd.DataFrame, taxa: list[str], out_suffix: str, title_suffix: str, add_line: bool) -> None:
+        if sub_df.empty or not taxa:
+            return
+        order = order_taxa_by_desc_median(sub_df, taxa)
+        fig, ax = plt.subplots(figsize=(max(3.0, len(order) * 0.9), BOXPLOT_HEIGHT))
+        sns.boxplot(
+            data=sub_df,
+            x="taxon",
+            y="rel_abundance",
+            hue=type_col,
+            order=order,
+            hue_order=hue_order,
+            palette=PALETTE_TYPES,
+            linewidth=BOXPLOT_LINEWIDTH,
+            fliersize=0,
+            ax=ax,
+        )
+        sns.stripplot(
+            data=sub_df,
+            x="taxon",
+            y="rel_abundance",
+            hue=type_col,
+            order=order,
+            hue_order=hue_order,
+            dodge=True,
+            color="black",
+            size=2.2,
+            alpha=0.25,
+            ax=ax,
+        )
+        handles, labels = ax.get_legend_handles_labels()
+        n = len(hue_order)
+        ax.legend(handles[:n], labels[:n], frameon=False, title="Sample type")
+        ax.set_xlabel(f"{tax_level}", fontsize=AXIS_LABEL_SIZE)
+        ax.set_ylabel("Relative abundance", fontsize=AXIS_LABEL_SIZE)
+        ax.set_title(f"{title_prefix} - {tax_level} ({title_suffix})", fontsize=TITLE_SIZE)
+        ax.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+        ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+        if add_line and np.isfinite(low_max):
+            ax.axhline(low_max, ls="--", lw=0.8, color="black", alpha=0.8, zorder=0)
+        style_axes(ax)
+        sns.despine(ax=ax)
+        fig.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
+        save_fig(fig, outdir / f"{base_name}_{out_suffix}_{tax_level}")
+
+    _draw(d[d["taxon"].isin(high_taxa)].copy(), high_taxa, "median_gt3", "median/max > 3%", add_line=True)
+    _draw(d_low, low_taxa, "median_le3", "median/max <= 3%", add_line=False)
+
+
+def apply_log_y_axis(ax: plt.Axes, d: pd.DataFrame) -> bool:
+    vals = pd.to_numeric(d["rel_abundance"], errors="coerce")
+    pos = vals[vals > 0]
+    if pos.empty:
+        return False
+    ymin = float(pos.min()) * 0.8
+    ymax = float(pos.max()) * 1.1
+    if ymax <= ymin:
+        ymax = ymin * 10.0
+    ax.set_yscale("log")
+    ax.set_ylim(ymin, ymax)
+    return True
+
+
 def plot_cancer_boxplots(
     rel_df: pd.DataFrame,
     cancer_res: pd.DataFrame,
@@ -105,26 +231,35 @@ def plot_cancer_boxplots(
     top_n: int,
 ) -> None:
     sub = cancer_res[(cancer_res["tax_level"] == tax_level) & (cancer_res["q_value"].notna())]
+    if sub.empty:
+        return
+
+    # Use one fixed taxa set per taxonomic level so all sample types display the same count.
+    ranked = sub.groupby("taxon", as_index=False)["q_value"].min().sort_values("q_value")
+    chosen = ranked["taxon"].head(top_n).tolist()
+    if not chosen:
+        return
+
     for st in sorted(sub["sample_type"].unique()):
         s = sub[sub["sample_type"] == st]
-        sig = s[s["q_value"] <= alpha]
-        chosen = top_taxa(sig if not sig.empty else s, top_n)
-        if not chosen:
-            continue
+        q_map = s.set_index("taxon")["q_value"].to_dict()
 
         d = rel_df[(rel_df[type_col] == st) & (rel_df["taxon"].isin(chosen))].copy()
         if d.empty:
             continue
+        order = order_taxa_by_desc_median(d, chosen)
 
-        fig, ax = plt.subplots(figsize=(max(8, len(chosen) * 0.8), 5.8))
+        fig, ax = plt.subplots(figsize=(max(1.5, len(order) * 0.18), BOXPLOT_HEIGHT))
         sns.boxplot(
             data=d,
             x="taxon",
             y="rel_abundance",
             hue=case_col,
-            order=chosen,
+            order=order,
             hue_order=["Control", "Cancer"],
             palette=PALETTE_STATUS,
+            width=0.5,
+            linewidth=BOXPLOT_LINEWIDTH,
             fliersize=0,
             ax=ax,
         )
@@ -133,7 +268,7 @@ def plot_cancer_boxplots(
             x="taxon",
             y="rel_abundance",
             hue=case_col,
-            order=chosen,
+            order=order,
             hue_order=["Control", "Cancer"],
             dodge=True,
             color="black",
@@ -144,11 +279,25 @@ def plot_cancer_boxplots(
 
         handles, labels = ax.get_legend_handles_labels()
         ax.legend(handles[:2], labels[:2], frameon=False, title="Status")
-        ax.set_xlabel(f"{tax_level}")
-        ax.set_ylabel("Relative abundance")
-        ax.set_title(f"Cancer vs Control ({st}) - {tax_level}")
-        ax.tick_params(axis="x", rotation=45)
+        ax.set_xlabel(f"{tax_level}", fontsize=AXIS_LABEL_SIZE)
+        ax.set_ylabel("Relative abundance", fontsize=AXIS_LABEL_SIZE)
+        ax.set_title(f"Cancer vs Control ({st}) - {tax_level}", fontsize=TITLE_SIZE)
+        ax.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+        ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+        style_axes(ax)
+
+        # Add significance markers from corrected q-values for this sample type.
+        y_max = float(d["rel_abundance"].max()) if not d["rel_abundance"].empty else 0.0
+        pad = max(0.002, y_max * 0.06)
+        y_ann = y_max + pad
+        ax.set_ylim(top=y_ann + pad * 1.5)
+        for i, taxon in enumerate(order):
+            stars = q_to_stars(q_map.get(taxon, np.nan))
+            if stars:
+                ax.text(i, y_ann, stars, ha="center", va="bottom", fontsize=11, color="black")
+
         sns.despine(ax=ax)
+        fig.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
         save_fig(fig, outdir / f"cancer_vs_control_boxplots_{tax_level}_{st.replace(' ', '_')}")
 
 
@@ -186,17 +335,19 @@ def plot_sample_type_three_group_boxplots(
     d = d[d[patient_col].isin(keep_patients)]
     if d.empty:
         return
+    order = order_taxa_by_desc_median(d, chosen)
 
     hue_order = [x for x in ["BAL", "Oral Rinse", "Lung Brush"] if x in d[type_col].unique()]
-    fig, ax = plt.subplots(figsize=(max(9, len(chosen) * 0.85), 6.0))
+    fig, ax = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
     sns.boxplot(
         data=d,
         x="taxon",
         y="rel_abundance",
         hue=type_col,
-        order=chosen,
+        order=order,
         hue_order=hue_order,
         palette=PALETTE_TYPES,
+        linewidth=BOXPLOT_LINEWIDTH,
         fliersize=0,
         ax=ax,
     )
@@ -205,7 +356,7 @@ def plot_sample_type_three_group_boxplots(
         x="taxon",
         y="rel_abundance",
         hue=type_col,
-        order=chosen,
+        order=order,
         hue_order=hue_order,
         dodge=True,
         color="black",
@@ -217,12 +368,276 @@ def plot_sample_type_three_group_boxplots(
     handles, labels = ax.get_legend_handles_labels()
     n = len(hue_order)
     ax.legend(handles[:n], labels[:n], frameon=False, title="Sample type")
-    ax.set_xlabel(f"{tax_level}")
-    ax.set_ylabel("Relative abundance")
-    ax.set_title(f"Sample Type Comparison (All 3 Types) - {tax_level}")
-    ax.tick_params(axis="x", rotation=45)
+    ax.set_xlabel(f"{tax_level}", fontsize=AXIS_LABEL_SIZE)
+    ax.set_ylabel("Relative abundance", fontsize=AXIS_LABEL_SIZE)
+    ax.set_title(f"Sample Type Comparison (All 3 Types) - {tax_level}", fontsize=TITLE_SIZE)
+    ax.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+    ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+    style_axes(ax)
     sns.despine(ax=ax)
+    fig.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
     save_fig(fig, outdir / f"sample_type_three_group_boxplots_{tax_level}")
+    # Additional log-scale variant for wide dynamic-range taxa.
+    fig_log, ax_log = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
+    sns.boxplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        palette=PALETTE_TYPES,
+        linewidth=BOXPLOT_LINEWIDTH,
+        fliersize=0,
+        ax=ax_log,
+    )
+    sns.stripplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        dodge=True,
+        color="black",
+        size=2.2,
+        alpha=0.25,
+        ax=ax_log,
+    )
+    handles, labels = ax_log.get_legend_handles_labels()
+    n = len(hue_order)
+    ax_log.legend(handles[:n], labels[:n], frameon=False, title="Sample type")
+    ax_log.set_xlabel(f"{tax_level}", fontsize=AXIS_LABEL_SIZE)
+    ax_log.set_ylabel("Relative abundance (log scale)", fontsize=AXIS_LABEL_SIZE)
+    ax_log.set_title(f"Sample Type Comparison (All 3 Types, log y) - {tax_level}", fontsize=TITLE_SIZE)
+    ax_log.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+    ax_log.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+    apply_log_y_axis(ax_log, d)
+    style_axes(ax_log)
+    sns.despine(ax=ax_log)
+    fig_log.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
+    save_fig(fig_log, outdir / f"sample_type_three_group_boxplots_logy_{tax_level}")
+    plot_sample_type_split_boxplots(
+        d=d,
+        tax_level=tax_level,
+        outdir=outdir,
+        type_col=type_col,
+        hue_order=hue_order,
+        base_name="sample_type_three_group_boxplots_split",
+        title_prefix="Sample Type Comparison (All 3 Types)",
+    )
+
+
+def plot_sample_type_three_group_boxplots_significant(
+    rel_df: pd.DataFrame,
+    pair_res: pd.DataFrame,
+    tax_level: str,
+    outdir: Path,
+    patient_col: str,
+    type_col: str,
+    alpha: float,
+    top_n: int,
+) -> None:
+    sub = pair_res[
+        (pair_res["tax_level"] == tax_level)
+        & (pair_res["q_value"].notna())
+        & (pair_res["q_value"] <= alpha)
+    ].copy()
+    if sub.empty:
+        return
+
+    ranked = sub.groupby("taxon", as_index=False)["q_value"].min().sort_values("q_value")
+    chosen = ranked["taxon"].head(top_n).tolist()
+    if not chosen:
+        return
+
+    d = rel_df[rel_df["taxon"].isin(chosen)].copy()
+    if d.empty:
+        return
+
+    needed_types = {"BAL", "Oral Rinse", "Lung Brush"}
+    patient_types = d.groupby(patient_col)[type_col].apply(lambda x: set(x.dropna().unique()))
+    keep_patients = patient_types[patient_types.apply(lambda s: needed_types.issubset(s))].index
+    d = d[d[patient_col].isin(keep_patients)]
+    if d.empty:
+        return
+    order = order_taxa_by_desc_median(d, chosen)
+
+    hue_order = [x for x in ["BAL", "Oral Rinse", "Lung Brush"] if x in d[type_col].unique()]
+    fig, ax = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
+    sns.boxplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        palette=PALETTE_TYPES,
+        linewidth=BOXPLOT_LINEWIDTH,
+        fliersize=0,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        dodge=True,
+        color="black",
+        size=2.2,
+        alpha=0.25,
+        ax=ax,
+    )
+
+    handles, labels = ax.get_legend_handles_labels()
+    n = len(hue_order)
+    ax.legend(handles[:n], labels[:n], frameon=False, title="Sample type")
+    ax.set_xlabel(f"{tax_level} (significant only)", fontsize=AXIS_LABEL_SIZE)
+    ax.set_ylabel("Relative abundance", fontsize=AXIS_LABEL_SIZE)
+    ax.set_title(f"Sample Type Comparison (Significant, All 3 Types) - {tax_level}", fontsize=TITLE_SIZE)
+    ax.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+    ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+    style_axes(ax)
+    sns.despine(ax=ax)
+    fig.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
+    save_fig(fig, outdir / f"sample_type_three_group_boxplots_significant_{tax_level}")
+    # Additional log-scale variant for wide dynamic-range taxa.
+    fig_log, ax_log = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
+    sns.boxplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        palette=PALETTE_TYPES,
+        linewidth=BOXPLOT_LINEWIDTH,
+        fliersize=0,
+        ax=ax_log,
+    )
+    sns.stripplot(
+        data=d,
+        x="taxon",
+        y="rel_abundance",
+        hue=type_col,
+        order=order,
+        hue_order=hue_order,
+        dodge=True,
+        color="black",
+        size=2.2,
+        alpha=0.25,
+        ax=ax_log,
+    )
+    handles, labels = ax_log.get_legend_handles_labels()
+    n = len(hue_order)
+    ax_log.legend(handles[:n], labels[:n], frameon=False, title="Sample type")
+    ax_log.set_xlabel(f"{tax_level} (significant only)", fontsize=AXIS_LABEL_SIZE)
+    ax_log.set_ylabel("Relative abundance (log scale)", fontsize=AXIS_LABEL_SIZE)
+    ax_log.set_title(f"Sample Type Comparison (Significant, log y) - {tax_level}", fontsize=TITLE_SIZE)
+    ax_log.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+    ax_log.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+    apply_log_y_axis(ax_log, d)
+    style_axes(ax_log)
+    sns.despine(ax=ax_log)
+    fig_log.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
+    save_fig(fig_log, outdir / f"sample_type_three_group_boxplots_significant_logy_{tax_level}")
+    plot_sample_type_split_boxplots(
+        d=d,
+        tax_level=tax_level,
+        outdir=outdir,
+        type_col=type_col,
+        hue_order=hue_order,
+        base_name="sample_type_three_group_boxplots_significant_split",
+        title_prefix="Sample Type Comparison (Significant, All 3 Types)",
+    )
+
+
+def plot_cancer_boxplots_significant_panels(
+    rel_df: pd.DataFrame,
+    cancer_res: pd.DataFrame,
+    tax_level: str,
+    outdir: Path,
+    type_col: str,
+    case_col: str,
+    alpha: float,
+    top_n: int,
+) -> None:
+    sub = cancer_res[
+        (cancer_res["tax_level"] == tax_level)
+        & (cancer_res["q_value"].notna())
+        & (cancer_res["q_value"] <= alpha)
+    ].copy()
+    if sub.empty:
+        return
+
+    ranked = sub.groupby("taxon", as_index=False)["q_value"].min().sort_values("q_value")
+    chosen = ranked["taxon"].head(top_n).tolist()
+    if not chosen:
+        return
+
+    sample_types = [x for x in ["BAL", "Lung Brush", "Oral Rinse"] if x in sub["sample_type"].dropna().unique()]
+    if not sample_types:
+        return
+
+    for st in sample_types:
+        s = sub[sub["sample_type"] == st]
+        q_map = s.set_index("taxon")["q_value"].to_dict()
+
+        d = rel_df[(rel_df[type_col] == st) & (rel_df["taxon"].isin(chosen))].copy()
+        if d.empty:
+            continue
+        order = order_taxa_by_desc_median(d, chosen)
+        fig, ax = plt.subplots(figsize=(max(1.5, len(order) * 0.18), BOXPLOT_HEIGHT))
+
+        sns.boxplot(
+            data=d,
+            x="taxon",
+            y="rel_abundance",
+            hue=case_col,
+            order=order,
+            hue_order=["Control", "Cancer"],
+            palette=PALETTE_STATUS,
+            width=0.5,
+            linewidth=BOXPLOT_LINEWIDTH,
+            fliersize=0,
+            ax=ax,
+        )
+        sns.stripplot(
+            data=d,
+            x="taxon",
+            y="rel_abundance",
+            hue=case_col,
+            order=order,
+            hue_order=["Control", "Cancer"],
+            dodge=True,
+            color="black",
+            size=2.2,
+            alpha=0.30,
+            ax=ax,
+        )
+
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles[:2], labels[:2], frameon=False, title="Status")
+        ax.set_xlabel(f"{tax_level} (significant)", fontsize=AXIS_LABEL_SIZE)
+        ax.set_ylabel("Relative abundance", fontsize=AXIS_LABEL_SIZE)
+        ax.set_title(st, fontsize=TITLE_SIZE)
+        ax.tick_params(axis="x", rotation=45, labelsize=AXIS_TICK_SIZE)
+        ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+        style_axes(ax)
+
+        y_max = float(d["rel_abundance"].max()) if not d["rel_abundance"].empty else 0.0
+        pad = max(0.002, y_max * 0.06)
+        y_ann = y_max + pad
+        ax.set_ylim(top=y_ann + pad * 1.5)
+        for i, taxon in enumerate(order):
+            stars = q_to_stars(q_map.get(taxon, np.nan))
+            if stars:
+                ax.text(i, y_ann, stars, ha="center", va="bottom", fontsize=11, color="black")
+        sns.despine(ax=ax)
+        fig.subplots_adjust(**BOXPLOT_SUBPLOT_ADJUST)
+        save_fig(fig, outdir / f"cancer_vs_control_boxplots_significant_{tax_level}_{st.replace(' ', '_')}")
 
 
 def effect_heatmap(df: pd.DataFrame, tax_level: str, col_name: str, value_name: str, out_base: Path, top_n: int) -> None:
@@ -254,9 +669,12 @@ def effect_heatmap(df: pd.DataFrame, tax_level: str, col_name: str, value_name: 
         cbar_kws={"label": value_name},
         ax=ax,
     )
-    ax.set_title(f"Effect Heatmap ({tax_level})")
-    ax.set_xlabel(col_name)
-    ax.set_ylabel(tax_level)
+    ax.set_title(f"Effect Heatmap ({tax_level})", fontsize=TITLE_SIZE)
+    ax.set_xlabel(col_name, fontsize=AXIS_LABEL_SIZE)
+    ax.set_ylabel(tax_level, fontsize=AXIS_LABEL_SIZE)
+    ax.tick_params(axis="x", labelsize=AXIS_TICK_SIZE)
+    ax.tick_params(axis="y", labelsize=AXIS_TICK_SIZE)
+    style_axes(ax)
     save_fig(fig, out_base)
 
 
@@ -292,7 +710,6 @@ def main() -> None:
             case_col=args.case_col,
             count_col=args.count_col,
         )
-
         plot_cancer_boxplots(
             rel_df,
             cancer_res,
@@ -311,6 +728,26 @@ def main() -> None:
             outdir=outdir,
             patient_col=args.patient_col,
             type_col=args.type_col,
+            alpha=args.alpha,
+            top_n=args.top_n,
+        )
+        plot_sample_type_three_group_boxplots_significant(
+            rel_df,
+            pair_res,
+            tax_level=tax_level,
+            outdir=outdir,
+            patient_col=args.patient_col,
+            type_col=args.type_col,
+            alpha=args.alpha,
+            top_n=args.top_n,
+        )
+        plot_cancer_boxplots_significant_panels(
+            rel_df,
+            cancer_res,
+            tax_level=tax_level,
+            outdir=outdir,
+            type_col=args.type_col,
+            case_col=args.case_col,
             alpha=args.alpha,
             top_n=args.top_n,
         )

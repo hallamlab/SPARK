@@ -89,27 +89,17 @@ def add_alpha_threshold(ax, alpha=0.05):
 
 
 def find_sample_size_for_power(df, target_power=0.8):
-    """Interpolate sample size needed to achieve target power."""
+    """Find minimum sample size that achieves target power (no interpolation)."""
     if df['Power'].max() < target_power:
         return None
 
-    # Find bracketing points
-    below = df[df['Power'] < target_power]
+    # Find first sample size that achieves target power
     above = df[df['Power'] >= target_power]
 
-    if len(below) == 0:
-        return df['n_cancer'].min()
     if len(above) == 0:
         return None
 
-    n1, p1 = below.iloc[-1][['n_cancer', 'Power']]
-    n2, p2 = above.iloc[0][['n_cancer', 'Power']]
-
-    # Linear interpolation
-    if p2 == p1:
-        return n2
-    n_interp = n1 + (target_power - p1) * (n2 - n1) / (p2 - p1)
-    return n_interp
+    return int(above['n_cancer'].min())
 
 
 def plot_cancer_vs_control(results_dir: Path, outdir: Path):
@@ -474,6 +464,13 @@ def generate_summary_table(results_dir: Path, outdir: Path):
     permanova_df = pd.read_csv(results_dir / 'permanova_power_stratified.tsv', sep='\t')
     shannon_df = pd.read_csv(results_dir / 'shannon_power_stratified.tsv', sep='\t')
 
+    # Load taxonomic data if available
+    taxonomic_file = results_dir / 'taxonomic_abundance_power.tsv'
+    if taxonomic_file.exists():
+        taxonomic_df = pd.read_csv(taxonomic_file, sep='\t')
+    else:
+        taxonomic_df = None
+
     summary_rows = []
 
     sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
@@ -486,6 +483,7 @@ def generate_summary_table(results_dir: Path, outdir: Path):
         ].sort_values('n_cancer')
 
         n_80_perm = find_sample_size_for_power(df_perm_obs, 0.8)
+        max_n_perm = int(df_perm_obs['n_cancer'].max())
         current_power_perm = df_perm_obs[df_perm_obs['n_cancer'] == 8]['Power'].values
         current_power_perm = current_power_perm[0] if len(current_power_perm) > 0 else np.nan
 
@@ -496,6 +494,7 @@ def generate_summary_table(results_dir: Path, outdir: Path):
         ].sort_values('n_cancer')
 
         n_80_shan = find_sample_size_for_power(df_shan_obs, 0.8)
+        max_n_shan = int(df_shan_obs['n_cancer'].max())
         current_power_shan = df_shan_obs[df_shan_obs['n_cancer'] == 8]['Power'].values
         current_power_shan = current_power_shan[0] if len(current_power_shan) > 0 else np.nan
 
@@ -503,8 +502,8 @@ def generate_summary_table(results_dir: Path, outdir: Path):
             'Sample_Type': stype,
             'Analysis': 'PERMANOVA',
             'Current_n': 8,
-            'Current_Power': f'{current_power_perm:.1%}' if not np.isnan(current_power_perm) else 'N/A',
-            'n_for_80%_Power': f'{n_80_perm:.1f}' if n_80_perm else '>30',
+            'Current_Power': f'{current_power_perm:.3f}' if not np.isnan(current_power_perm) else 'N/A',
+            'n_for_80%_Power': str(n_80_perm) if n_80_perm else f'>{max_n_perm}',
             'Status': 'Adequate' if current_power_perm >= 0.8 else 'Underpowered'
         })
 
@@ -512,10 +511,34 @@ def generate_summary_table(results_dir: Path, outdir: Path):
             'Sample_Type': stype,
             'Analysis': 'Shannon',
             'Current_n': 8,
-            'Current_Power': f'{current_power_shan:.1%}' if not np.isnan(current_power_shan) else 'N/A',
-            'n_for_80%_Power': f'{n_80_shan:.1f}' if n_80_shan else '>30',
+            'Current_Power': f'{current_power_shan:.3f}' if not np.isnan(current_power_shan) else 'N/A',
+            'n_for_80%_Power': str(n_80_shan) if n_80_shan else f'>{max_n_shan}',
             'Status': 'Adequate' if current_power_shan >= 0.8 else 'Underpowered'
         })
+
+        # Taxonomic abundance - Phylum and Family levels
+        if taxonomic_df is not None:
+            for tax_level in ['Phylum', 'Family']:
+                df_tax_obs = taxonomic_df[
+                    (taxonomic_df['sample_type'] == stype) &
+                    (taxonomic_df['tax_level'] == tax_level) &
+                    (taxonomic_df['scenario'] == 'Observed')
+                ].sort_values('n_cancer')
+
+                if not df_tax_obs.empty:
+                    n_80_tax = find_sample_size_for_power(df_tax_obs.rename(columns={'power': 'Power'}), 0.8)
+                    max_n_tax = int(df_tax_obs['n_cancer'].max())
+                    current_power_tax = df_tax_obs[df_tax_obs['n_cancer'] == 8]['power'].values
+                    current_power_tax = current_power_tax[0] if len(current_power_tax) > 0 else np.nan
+
+                    summary_rows.append({
+                        'Sample_Type': stype,
+                        'Analysis': f'Taxonomic ({tax_level})',
+                        'Current_n': 8,
+                        'Current_Power': f'{current_power_tax:.3f}' if not np.isnan(current_power_tax) else 'N/A',
+                        'n_for_80%_Power': str(n_80_tax) if n_80_tax else f'>{max_n_tax}',
+                        'Status': 'Adequate' if current_power_tax >= 0.8 else 'Underpowered'
+                    })
 
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(outdir / 'power_summary_cancer_vs_control.tsv',
@@ -546,16 +569,30 @@ def main():
 
     # Generate plots
     print("\n1. Cancer vs Control (PERMANOVA + Shannon)...")
-    plot_cancer_vs_control(args.results_dir, args.outdir)
+    if (args.results_dir / 'permanova_power_stratified.tsv').exists():
+        plot_cancer_vs_control(args.results_dir, args.outdir)
+    else:
+        print("  ⊘ Skipped: permanova_power_stratified.tsv not found")
 
     print("\n2. Sample Type Comparisons...")
-    plot_sample_type_comparison(args.results_dir, args.outdir)
+    perm_file = args.results_dir / 'sample_type_permanova_power.tsv'
+    perm_pairwise = args.results_dir / 'sample_type_permanova_power_pairwise.tsv'
+    if perm_file.exists() or perm_pairwise.exists():
+        plot_sample_type_comparison(args.results_dir, args.outdir)
+    else:
+        print("  ⊘ Skipped: sample type files not found (analysis not run)")
 
     print("\n3. Taxonomic Differential Abundance...")
-    plot_taxonomic_abundance(args.results_dir, args.outdir)
+    if (args.results_dir / 'taxonomic_abundance_power.tsv').exists():
+        plot_taxonomic_abundance(args.results_dir, args.outdir)
+    else:
+        print("  ⊘ Skipped: taxonomic_abundance_power.tsv not found")
 
     print("\n4. Summary Table...")
-    generate_summary_table(args.results_dir, args.outdir)
+    if (args.results_dir / 'permanova_power_stratified.tsv').exists():
+        generate_summary_table(args.results_dir, args.outdir)
+    else:
+        print("  ⊘ Skipped: no power results available")
 
     print("\n" + "="*60)
     print("✓ All visualizations complete!")
