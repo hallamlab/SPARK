@@ -127,7 +127,7 @@ log "Running patient-aware ISA"
 ISA_DIR="$OUTDIR/indicspecies"
 mkdir -p "$ISA_DIR"
 
-Rscript "$SCRIPT_DIR/run_indicspecies.R" \
+Rscript "$SCRIPT_DIR/indicator_species/run_indicspecies.R" \
   --data-wide "$DATA_WIDE" \
   --data-long "$DATA_LONG" \
   --sample-col "$SAMPLE_COL" \
@@ -144,7 +144,7 @@ TYPE_RESULTS="$OUTDIR/indicspecies/type_group_indicator_species_summary.tsv"
 STATUS_RESULTS="$OUTDIR/indicspecies/status_indicator_species_summary.tsv"
 
 PLOT_ISA_CMD=(
-  python3 "$SCRIPT_DIR/plot_indicspecies.py"
+  python3 "$SCRIPT_DIR/indicator_species/plot_indicspecies.py"
   --type-results "$TYPE_RESULTS"
   --status-results "$STATUS_RESULTS"
   --outdir "$ISA_DIR"
@@ -161,7 +161,7 @@ fi
 "${PLOT_ISA_CMD[@]}"
 
 log "Generating aligned ISA summary/plot bundle"
-python3 "$SCRIPT_DIR/plot_indicspecies_aligned.py" \
+python3 "$SCRIPT_DIR/indicator_species/plot_indicspecies_aligned.py" \
   --indicspecies-dir "$OUTDIR/indicspecies" \
   --outdir "$OUTDIR/indicspecies_aligned" \
   --alpha 0.05 \
@@ -199,7 +199,7 @@ fi
 log "Running patient-aware Bray-Curtis PERMANOVA"
 BRAY_DIR="$OUTDIR/bray_patient_aware"
 mkdir -p "$BRAY_DIR"
-Rscript "$SCRIPT_DIR/run_bray_permanova_patient_aware.R" \
+Rscript "$SCRIPT_DIR/beta_diversity/run_bray_permanova_patient_aware.R" \
   --data-wide "$DATA_WIDE" \
   --data-long "$DATA_LONG" \
   --sample-col "$SAMPLE_COL" \
@@ -215,7 +215,7 @@ Rscript "$SCRIPT_DIR/run_bray_permanova_patient_aware.R" \
   --transform "$TRANSFORM"
 
 log "Plotting patient-aware Bray outputs"
-python3 "$SCRIPT_DIR/plot_bray_permanova_patient_aware.py" \
+python3 "$SCRIPT_DIR/beta_diversity/plot_bray_permanova_patient_aware.py" \
   --indir "$BRAY_DIR/tables" \
   --outdir "$BRAY_DIR/figures"
 
@@ -226,7 +226,7 @@ log "Running patient-aware taxonomy analyses"
 TAX_DIR="$OUTDIR/taxonomy_patient_aware"
 mkdir -p "$TAX_DIR/tables" "$TAX_DIR/figures"
 
-python3 "$SCRIPT_DIR/run_taxonomic_abundance_analysis.py" \
+python3 "$SCRIPT_DIR/taxonomic_analysis/run_taxonomic_abundance_analysis.py" \
   --data-long "$DATA_LONG" \
   --sample-col "$SAMPLE_COL" \
   --patient-col "$PATIENT_COL" \
@@ -241,7 +241,7 @@ python3 "$SCRIPT_DIR/run_taxonomic_abundance_analysis.py" \
   --outdir "$TAX_DIR/tables" \
   --transform "$TRANSFORM"
 
-python3 "$SCRIPT_DIR/run_taxonomic_sample_type_analysis.py" \
+python3 "$SCRIPT_DIR/taxonomic_analysis/run_taxonomic_sample_type_analysis.py" \
   --data-long "$DATA_LONG" \
   --sample-col "$SAMPLE_COL" \
   --patient-col "$PATIENT_COL" \
@@ -256,7 +256,7 @@ python3 "$SCRIPT_DIR/run_taxonomic_sample_type_analysis.py" \
   --transform "$TRANSFORM"
 
 log "Plotting patient-aware taxonomy outputs"
-python3 "$SCRIPT_DIR/plot_taxonomic_observed_analysis.py" \
+python3 "$SCRIPT_DIR/taxonomic_analysis/plot_taxonomic_observed_analysis.py" \
   --data-long "$DATA_LONG" \
   --cancer-results "$TAX_DIR/tables/taxonomic_abundance_observed.tsv" \
   --sampletype-results "$TAX_DIR/tables/taxonomic_sample_type_observed_pairwise.tsv" \

@@ -4,9 +4,9 @@ set -euo pipefail
 usage() {
   cat <<USAGE
 Run full power-analysis workflow:
-  1) estimate_effects.py
-  2) power_main.py
-  3) plot_power_curves.py
+  1) power_analysis/estimate_effects.py
+  2) power_analysis/power_main.py
+  3) power_analysis/plot_power_curves.py
 
 Usage:
   $(basename "$0") \
@@ -95,7 +95,7 @@ log() { printf "[%(%F %T)T] %s\n" -1 "$*"; }
 
 if [[ "$SKIP_ESTIMATE" == "false" ]]; then
   log "Estimating observed effect sizes"
-  python3 "$SCRIPT_DIR/estimate_effects.py" \
+  python3 "$SCRIPT_DIR/power_analysis/estimate_effects.py" \
     --data-wide "$DATA_WIDE" \
     --data-long "$DATA_LONG" \
     --sample-col "$SAMPLE_COL" \
@@ -108,8 +108,8 @@ if [[ "$SKIP_ESTIMATE" == "false" ]]; then
     --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES"
 fi
 
-log "Running power_main.py"
-python3 "$SCRIPT_DIR/power_main.py" \
+log "Running power_analysis/power_main.py"
+python3 "$SCRIPT_DIR/power_analysis/power_main.py" \
   --data-wide "$DATA_WIDE" \
   --data-long "$DATA_LONG" \
   --effect-sizes-dir "$EFFECT_DIR" \
@@ -127,7 +127,7 @@ python3 "$SCRIPT_DIR/power_main.py" \
 
 if [[ "$SKIP_PLOT" == "false" ]]; then
   log "Plotting power curves"
-  python3 "$SCRIPT_DIR/plot_power_curves.py" \
+  python3 "$SCRIPT_DIR/power_analysis/plot_power_curves.py" \
     --results-dir "$RESULTS_DIR" \
     --outdir "$PLOTS_DIR"
 
@@ -145,7 +145,7 @@ if [[ "$SKIP_PLOT" == "false" ]]; then
     fi
 
     ISA_PLOT_CMD=(
-      python3 "$SCRIPT_DIR/plot_indicspecies_aligned.py"
+      python3 "$SCRIPT_DIR/indicator_species/plot_indicspecies_aligned.py"
       --power-results "$ISA_POWER_RESULTS"
       --outdir "$ISA_PLOT_DIR"
     )
