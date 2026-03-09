@@ -7,7 +7,7 @@ Features
 - All paths & style values are configurable
 - Safe I/O + schema checks
 - Reusable spring-layout (cache to JSON)
-- Multiple plot “modes” (degree, abundance, type ISA, status ISA, venn, phylum×{abundance,ISA}, labeled variants)
+- Multiple plot modes (combined degree+edgeweight, abundance, type ISA, status ISA, venn, phylum×{abundance,ISA}, labeled variants)
 - Consistent aesthetics with your rcParams
 """
 
@@ -15,7 +15,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict, Iterable, Tuple, Optional, List
+from typing import Dict, Iterable, Tuple, Optional, List, Set, Union
 
 import networkx as nx
 import numpy as np
@@ -55,7 +55,7 @@ def ok(msg: str):
     print(f"[+] {msg}")
 
 
-def load_table(path: str, sep: str = None, index_col: Optional[int | str] = None) -> pd.DataFrame:
+def load_table(path: str, sep: str = None, index_col: Optional[Union[int, str]] = None) -> pd.DataFrame:
     if not os.path.exists(path):
         die(f"Missing file: {path}")
     if sep is None:
@@ -86,7 +86,7 @@ def preflight_node_attr_report(
     name: str,
     color_attr: str,
     size_attr: str = "AxB",
-    palette_values: set | None = None
+    palette_values: Optional[Set] = None
 ) -> None:
     """Print helpful counts before plotting."""
     n_nodes = G.number_of_nodes()
@@ -208,7 +208,7 @@ def build_type_palette() -> Dict[str, str]:
         'BAL+Lung Brush': '#00FFFF',
         'Lung Brush': '#009E73',
         'Lung Brush+Oral Rinse': '#C1EAAD',
-        'BAL+Lung Brush+Oral Rinse': 'lightgray'
+        'BAL+Lung Brush+Oral Rinse': '#000000'
     }
 
 
@@ -293,20 +293,56 @@ def reshape_indicspecies_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
 
-    # 4) reshape to long; keep both A and B
-    out = (
-        pd.wide_to_long(
-            df,
-            stubnames=['A', 'B'],
-            i=['ASV_ID', 'index'],
-            j='Group',
-            sep='.',
-            suffix='.+',          # group names can include spaces/plus signs
-        )
-        .reset_index()[['ASV_ID', 'index', 'Group', 'A', 'B']]
-        .sort_values(['ASV_ID', 'index', 'Group'], ignore_index=True)
-    )
+    # 4) reshape to long; keep both A and B plus summary stats like stat/p/q
+    extra_cols = [
+        c for c in df.columns
+        if c not in {'ASV_ID', 'index'} and not c.startswith('A.') and not c.startswith('B.')
+    ]
+    out = pd.wide_to_long(
+        df,
+        stubnames=['A', 'B'],
+        i=['ASV_ID', 'index'],
+        j='Group',
+        sep='.',
+        suffix='.+',          # group names can include spaces/plus signs
+    ).reset_index()
+    ordered_cols = ['ASV_ID', 'index', 'Group', 'A', 'B'] + [c for c in extra_cols if c in out.columns]
+    out = out[ordered_cols].sort_values(['ASV_ID', 'index', 'Group'], ignore_index=True)
     return out
+
+
+def apply_indicator_overlay(
+    df: pd.DataFrame,
+    *,
+    label_col: str,
+    color_col: str,
+    stat_col: str = "stat",
+    metric_col: str = "q.value",
+    stat_thresh: float = 0.25,
+    metric_thresh: float = 0.05,
+    default_color: str = "lightgray",
+    allowed_labels: Optional[set[str]] = None,
+) -> pd.DataFrame:
+    out = df.copy()
+    stat_vals = pd.to_numeric(out.get(stat_col), errors="coerce")
+    metric_vals = pd.to_numeric(out.get(metric_col), errors="coerce")
+    sig_mask = (stat_vals >= stat_thresh) & (metric_vals <= metric_thresh)
+    sig_mask = sig_mask.fillna(False)
+    if allowed_labels is not None:
+        sig_mask = sig_mask & out[label_col].isin(allowed_labels)
+    out[f"{label_col}_sig"] = sig_mask
+    out.loc[~sig_mask, label_col] = np.nan
+    out.loc[~sig_mask, color_col] = default_color
+    return out
+
+
+def resolve_indicator_metric(summary_df: pd.DataFrame) -> str:
+    if "q.value" in summary_df.columns:
+        return "q.value"
+    if "p.value" in summary_df.columns:
+        return "p.value"
+    die("Summary table must contain either 'q.value' or 'p.value'.")
+
 
 def long_AB_for_group(summary_df: pd.DataFrame, index_map: Dict[int, str]) -> pd.DataFrame:
     """
@@ -320,12 +356,200 @@ def long_AB_for_group(summary_df: pd.DataFrame, index_map: Dict[int, str]) -> pd
     return df
 
 
+def _simple_undirected_graph(G: nx.Graph) -> nx.Graph:
+    H = nx.Graph()
+    H.add_nodes_from(G.nodes(data=True))
+    for u, v, data in G.edges(data=True):
+        if u == v:
+            continue
+        H.add_edge(u, v, **data)
+    return H
+
+
+def compute_graph_metrics(G: nx.Graph) -> Dict[str, float]:
+    H = _simple_undirected_graph(G)
+    n_nodes = H.number_of_nodes()
+    n_edges = H.number_of_edges()
+    abs_weights = []
+    for _, _, data in H.edges(data=True):
+        try:
+            abs_weights.append(abs(float(data.get("weight", 0.0))))
+        except Exception:
+            abs_weights.append(0.0)
+    weights = np.asarray(abs_weights, dtype=float) if abs_weights else np.asarray([], dtype=float)
+
+    metrics = {
+        "nodes": n_nodes,
+        "edges": n_edges,
+        "density": float(nx.density(H)) if n_nodes > 1 else np.nan,
+        "average_degree": float((2.0 * n_edges) / n_nodes) if n_nodes else np.nan,
+        "average_clustering": float(nx.average_clustering(H)) if n_nodes else np.nan,
+        "average_clustering_weighted": float(nx.average_clustering(H, weight="weight")) if n_nodes and n_edges else np.nan,
+        "transitivity": float(nx.transitivity(H)) if n_nodes and n_edges else np.nan,
+        "connected_components": int(nx.number_connected_components(H)) if n_nodes else 0,
+        "largest_component_nodes": 0,
+        "largest_component_fraction": np.nan,
+        "second_largest_component_nodes": 0,
+        "mean_component_size": np.nan,
+        "median_component_size": np.nan,
+        "min_component_size": np.nan,
+        "max_component_size": np.nan,
+        "singleton_components": 0,
+        "non_singleton_components": 0,
+        "avg_shortest_path_lcc": np.nan,
+        "mean_abs_edge_weight": float(np.mean(weights)) if weights.size else np.nan,
+        "median_abs_edge_weight": float(np.median(weights)) if weights.size else np.nan,
+        "max_abs_edge_weight": float(np.max(weights)) if weights.size else np.nan,
+    }
+
+    if n_nodes:
+        components = list(nx.connected_components(H))
+        if components:
+            component_sizes = sorted((len(c) for c in components), reverse=True)
+            largest_nodes = max(components, key=len)
+            largest_size = len(largest_nodes)
+            metrics["largest_component_nodes"] = int(largest_size)
+            metrics["largest_component_fraction"] = float(largest_size / n_nodes)
+            metrics["second_largest_component_nodes"] = int(component_sizes[1]) if len(component_sizes) > 1 else 0
+            metrics["mean_component_size"] = float(np.mean(component_sizes))
+            metrics["median_component_size"] = float(np.median(component_sizes))
+            metrics["min_component_size"] = int(np.min(component_sizes))
+            metrics["max_component_size"] = int(np.max(component_sizes))
+            metrics["singleton_components"] = int(sum(size == 1 for size in component_sizes))
+            metrics["non_singleton_components"] = int(sum(size > 1 for size in component_sizes))
+            if largest_size > 1:
+                largest_sub = H.subgraph(largest_nodes).copy()
+                metrics["avg_shortest_path_lcc"] = float(nx.average_shortest_path_length(largest_sub))
+    return metrics
+
+
+def randomize_graph_degree_preserving(
+    G: nx.Graph,
+    *,
+    seed: int,
+    nswap_multiplier: int = 10,
+) -> nx.Graph:
+    H = nx.Graph()
+    H.add_nodes_from(G.nodes())
+    H.add_edges_from(G.edges())
+    n_edges = H.number_of_edges()
+    if n_edges < 2:
+        return H
+
+    nswap = max(1, int(n_edges * nswap_multiplier))
+    max_tries = max(100, nswap * 20)
+    nx.double_edge_swap(H, nswap=nswap, max_tries=max_tries, seed=seed)
+    return H
+
+
+def summarize_null_model(
+    G: nx.Graph,
+    *,
+    network_id: str,
+    replicates: int,
+    seed: int,
+    nswap_multiplier: int,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    rng = np.random.default_rng(seed)
+    rows = []
+    for rep in range(replicates):
+        H = randomize_graph_degree_preserving(
+            G,
+            seed=int(rng.integers(0, 2**31 - 1)),
+            nswap_multiplier=nswap_multiplier,
+        )
+        metrics = compute_graph_metrics(H)
+        metrics["network_id"] = network_id
+        metrics["replicate"] = rep + 1
+        rows.append(metrics)
+
+    null_df = pd.DataFrame(rows)
+    summary = {
+        "null_model": "degree_preserving_edge_swap",
+        "null_replicates": int(len(null_df)),
+    }
+    for metric in ["average_clustering", "transitivity", "avg_shortest_path_lcc"]:
+        vals = pd.to_numeric(null_df.get(metric), errors="coerce").dropna()
+        if vals.empty:
+            summary[f"null_{metric}_mean"] = np.nan
+            summary[f"null_{metric}_sd"] = np.nan
+            summary[f"null_{metric}_p2_5"] = np.nan
+            summary[f"null_{metric}_p97_5"] = np.nan
+        else:
+            summary[f"null_{metric}_mean"] = float(vals.mean())
+            summary[f"null_{metric}_sd"] = float(vals.std(ddof=1)) if len(vals) > 1 else 0.0
+            summary[f"null_{metric}_p2_5"] = float(vals.quantile(0.025))
+            summary[f"null_{metric}_p97_5"] = float(vals.quantile(0.975))
+    return null_df, summary
+
+
+def build_component_membership_table(
+    G: nx.Graph,
+    *,
+    network_id: str,
+) -> pd.DataFrame:
+    H = _simple_undirected_graph(G)
+    rows = []
+    components = sorted(nx.connected_components(H), key=len, reverse=True)
+    for comp_idx, nodes in enumerate(components, start=1):
+        component_nodes = sorted(nodes, key=str)
+        component_size = len(component_nodes)
+        is_largest = comp_idx == 1
+        for node_id in component_nodes:
+            node_attrs = G.nodes[node_id]
+            rows.append({
+                "network_id": network_id,
+                "component_id": comp_idx,
+                "component_size": component_size,
+                "is_largest_component": is_largest,
+                "GraphML_ID": node_id,
+                "ASV_ID": node_attrs.get("Taxon", node_id),
+            })
+    return pd.DataFrame(rows)
+
+
 # ---------------------------- Plot modes -------------------------------------
 def plot_degree(G: nx.Graph, pos: Dict, out_svg: str, degree_scale: float, edge_width_scale: float):
     plt.figure(figsize=(18, 18))
-    # edges weighted by |weight|
-    e_w = [abs(G.edges[e].get('weight', 0)) * edge_width_scale for e in G.edges()]
-    draw_edges_light(G, pos, alpha=0.6, edge_widths=e_w)
+    # edges scaled linearly by |weight| into a visible width range
+    edgelist = list(G.edges())
+    abs_w = []
+    for e in edgelist:
+        try:
+            abs_w.append(abs(float(G.edges[e].get('weight', 0.0))))
+        except Exception:
+            abs_w.append(0.0)
+
+    edge_min_w = 0.25
+    edge_max_w = max(edge_min_w + 0.25, float(edge_width_scale))
+
+    if abs_w:
+        w_arr = np.asarray(abs_w, dtype=float)
+        lo = float(np.nanmin(w_arr))
+        hi = float(np.nanmax(w_arr))
+        if not np.isfinite(lo):
+            lo = 0.0
+        if not np.isfinite(hi):
+            hi = lo
+        if hi <= lo:
+            edge_widths = [0.5 * (edge_min_w + edge_max_w)] * len(edgelist)
+            legend_weights = [lo]
+        else:
+            def map_weight_to_width(weight: float) -> float:
+                t = (float(weight) - lo) / (hi - lo)
+                return edge_min_w + t * (edge_max_w - edge_min_w)
+
+            edge_widths = [map_weight_to_width(w) for w in w_arr]
+            legend_weights = sorted(set([
+                float(np.quantile(w_arr, 0.1)),
+                float(np.quantile(w_arr, 0.5)),
+                float(np.quantile(w_arr, 0.9)),
+            ]))
+        draw_edges_light(G, pos, alpha=0.6, edge_widths=edge_widths)
+    else:
+        legend_weights = []
+        draw_edges_light(G, pos, alpha=0.6, edge_widths=None)
+
     def size_fn(n):
         deg = _safe_float(G.nodes[n].get('Degree', 0), 0.0)
         if deg <= 0:
@@ -342,15 +566,48 @@ def plot_degree(G: nx.Graph, pos: Dict, out_svg: str, degree_scale: float, edge_
             return max(2.0, degree_scale * 0.05)   # must match size_fn
         return (deg + 1.0) * degree_scale
 
-    handles = [
+    degree_handles = [
         plt.scatter([], [], s=legend_size(s),
                     edgecolors='black', facecolors='gray', alpha=1,
-                    label=f'{s}')
+                    label=f'Degree: {s}')
         for s in svals
     ]
+    edge_handles = []
+    if legend_weights:
+        if len(legend_weights) == 1:
+            weight_vals = legend_weights
+        else:
+            weight_vals = [legend_weights[0], legend_weights[len(legend_weights) // 2], legend_weights[-1]]
+        # Preserve order while removing near-duplicates after rounding.
+        seen = set()
+        for wt in weight_vals:
+            key = round(float(wt), 4)
+            if key in seen:
+                continue
+            seen.add(key)
+            if len(legend_weights) == 1 or hi <= lo:
+                line_w = 0.5 * (edge_min_w + edge_max_w)
+            else:
+                t = (float(wt) - lo) / (hi - lo)
+                line_w = edge_min_w + t * (edge_max_w - edge_min_w)
+            edge_handles.append(
+                Line2D([0], [0], color="darkgray", linewidth=line_w, alpha=0.8, label=f"|weight|: {float(wt):.3g}")
+            )
 
-    plt.legend(handles=handles, loc='upper left', bbox_to_anchor=(1, 1),
-               title="Node Degree", frameon=False, scatterpoints=1, labelspacing=1.5)
+    legend_handles = degree_handles + edge_handles
+    legend_labels = [h.get_label() for h in legend_handles]
+    legend_title = "Node Degree / |weight|"
+    plt.legend(
+        handles=legend_handles,
+        labels=legend_labels,
+        loc='upper left',
+        bbox_to_anchor=(1, 1),
+        title=legend_title,
+        frameon=False,
+        scatterpoints=1,
+        handlelength=3.0,
+        labelspacing=1.5,
+    )
 
     plt.axis('equal'); plt.xlim(auto=False); plt.ylim(auto=False)
     plt.title("SPIEC-EASI Network\nNode size: Degree | Edges scaled by |weight|")
@@ -543,7 +800,17 @@ def plot_abundance(
     plt.close()
 
 
-def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, title=None):
+def plot_type_isa(
+    G,
+    pos,
+    out_svg,
+    type_palette,
+    isa_scale=500,
+    label=False,
+    title=None,
+    color_attr="type_color",
+    label_attr=None,
+):
     """
     Robust type-ISA plot:
     - Defaults missing colors to 'lightgray' and missing AxB to 0
@@ -560,7 +827,7 @@ def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, tit
     node_sizes  = []
     for n in nodes:
         d = G.nodes[n]
-        c = d.get("type_color", "lightgray")
+        c = d.get(color_attr, "lightgray")
         # if value is not one of your palette values, fall back to gray
         if c not in set(type_palette.values()):
             c = "lightgray"
@@ -592,8 +859,10 @@ def plot_type_isa(G, pos, out_svg, type_palette, isa_scale=500, label=False, tit
 
     # Optional labels for non-gray nodes
     if label:
+        if label_attr is None:
+            label_attr = color_attr
         for n in nodes:
-            if G.nodes[n].get("type_color", "lightgray") != "lightgray":
+            if G.nodes[n].get(label_attr, "lightgray") != "lightgray":
                 x, y = pos[n]
                 ax.text(x, y, G.nodes[n].get("Taxon", n),
                         fontsize=9, fontweight="bold",
@@ -843,6 +1112,14 @@ def main():
                    help="type_group_indicator_species_summary.tsv")
     p.add_argument("--status-summary", default=None,
                    help="status_indicator_species_summary.tsv")
+    p.add_argument("--type-q-thresh", type=float, default=0.05,
+                   help="Maximum q.value to keep a type indicator color overlay (default: 0.05).")
+    p.add_argument("--type-stat-thresh", type=float, default=0.25,
+                   help="Minimum stat to keep a type indicator color overlay (default: 0.25).")
+    p.add_argument("--status-q-thresh", type=float, default=0.05,
+                   help="Maximum q.value to keep a status indicator color overlay (default: 0.05).")
+    p.add_argument("--status-stat-thresh", type=float, default=0.25,
+                   help="Minimum stat to keep a status indicator color overlay (default: 0.25).")
 
     # Layout options
     p.add_argument("--layout-json-all", default=None, help="Cache/Load layout JSON for graph-pos-all.")
@@ -854,6 +1131,10 @@ def main():
     p.add_argument("--degree-scale", type=float, default=80.0, help="Base size multiplier for degree plots.")
     p.add_argument("--edge-width-scale", type=float, default=5.0, help="Edge width multiplier for |weight|.")
     p.add_argument("--isa-scale", type=float, default=500.0, help="Node size multiplier for ISA (AxB).")
+    p.add_argument("--null-replicates", type=int, default=100,
+                   help="Number of degree-preserving random graphs for topology summary (default: 100).")
+    p.add_argument("--null-nswap-multiplier", type=int, default=10,
+                   help="Edge swaps per observed edge in each null graph (default: 10).")
 
     # Which plots to render
     p.add_argument("--modes", nargs="+", default=["all"],
@@ -862,6 +1143,8 @@ def main():
                        "abundance_sub", "abundance_median_sub",
                        "edgeweight_sub",
                        "type_isa", "type_isa_labeled",
+                       "type_isa_all", "type_isa_all_labeled",
+                       "type_isa_all_lung_labels",
                        "type_venn", "type_venn_labeled",
                        "status_isa", "status_isa_labeled",
                        "phylum_abund", "phylum_isa",
@@ -873,6 +1156,8 @@ def main():
 
     data_dir = args.data_dir
     os.makedirs(args.outdir, exist_ok=True)
+    tables_outdir = os.path.join(args.outdir, "tables")
+    os.makedirs(tables_outdir, exist_ok=True)
 
     # Resolve defaults
     graph_all = args.graph_pos_all or os.path.join(data_dir, "spark_combined_output/spieceasi/network_pos_all.graphml")
@@ -948,8 +1233,18 @@ def main():
     type_sum = load_table(type_summary_path, sep='\t')
     status_sum = load_table(status_summary_path, sep='\t')
 
-    ensure_cols(type_sum, ['ASV', 'index'], "type_summary")
-    ensure_cols(status_sum, ['ASV', 'index'], "status_summary")
+    ensure_cols(type_sum, ['ASV', 'index', 'stat', 'p.value'], "type_summary")
+    ensure_cols(status_sum, ['ASV', 'index', 'stat', 'p.value'], "status_summary")
+    type_metric_col = resolve_indicator_metric(type_sum)
+    status_metric_col = resolve_indicator_metric(status_sum)
+    ok(f"type ISA overlay metric: {type_metric_col}")
+    ok(f"status ISA overlay metric: {status_metric_col}")
+    type_lung_labels = {
+        "Lung Brush",
+        "BAL+Lung Brush",
+        "Lung Brush+Oral Rinse",
+        "BAL+Lung Brush+Oral Rinse",
+    }
 
     type_long = long_AB_for_group(type_sum.copy(), type_index)
     status_long = long_AB_for_group(status_sum.copy(), status_index)
@@ -959,10 +1254,37 @@ def main():
     nfeat_type = nf.reset_index().merge(
         type_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
+    nfeat_type['type_stat'] = pd.to_numeric(nfeat_type.get('stat'), errors='coerce')
+    nfeat_type['type_metric_value'] = pd.to_numeric(nfeat_type.get(type_metric_col), errors='coerce')
 
     # color per type group index
     nfeat_type['type_name'] = nfeat_type['index'].map(type_index)
-    nfeat_type['type_color'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
+    nfeat_type['type_color_all'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
+    nfeat_type = apply_indicator_overlay(
+        nfeat_type,
+        label_col="type_name",
+        color_col="type_color_all",
+        stat_col="type_stat",
+        metric_col="type_metric_value",
+        stat_thresh=args.type_stat_thresh,
+        metric_thresh=args.type_q_thresh,
+    )
+    nfeat_type['type_name_all'] = nfeat_type['type_name']
+    nfeat_type['type_color_lung'] = nfeat_type['type_name'].map(type_palette).fillna('lightgray')
+    nfeat_type = apply_indicator_overlay(
+        nfeat_type,
+        label_col="type_name",
+        color_col="type_color_lung",
+        stat_col="type_stat",
+        metric_col="type_metric_value",
+        stat_thresh=args.type_stat_thresh,
+        metric_thresh=args.type_q_thresh,
+        allowed_labels=type_lung_labels,
+    )
+    nfeat_type['type_name_lung'] = nfeat_type['type_name']
+    nfeat_type['type_color'] = nfeat_type['type_color_lung']
+    ok(f"type ISA all-significant colored nodes: {int((nfeat_type['type_color_all'] != 'lightgray').sum())}")
+    ok(f"type ISA lung-associated colored nodes: {int((nfeat_type['type_color_lung'] != 'lightgray').sum())}")
 
     # venn color
     venn_map = venn_type_map()
@@ -979,8 +1301,20 @@ def main():
     nfeat_status = nf.reset_index().merge(
         status_long.set_index('ASV_ID'), left_on='Taxon', right_index=True, how='left'
     ).set_index('GraphML_ID')
+    nfeat_status['status_stat'] = pd.to_numeric(nfeat_status.get('stat'), errors='coerce')
+    nfeat_status['status_metric_value'] = pd.to_numeric(nfeat_status.get(status_metric_col), errors='coerce')
     nfeat_status['status_name'] = nfeat_status['index'].map(status_index)
     nfeat_status['status_color'] = nfeat_status['status_name'].map(status_palette).fillna('lightgray')
+    nfeat_status = apply_indicator_overlay(
+        nfeat_status,
+        label_col="status_name",
+        color_col="status_color",
+        stat_col="status_stat",
+        metric_col="status_metric_value",
+        stat_thresh=args.status_stat_thresh,
+        metric_thresh=args.status_q_thresh,
+    )
+    ok(f"status ISA colored nodes: {int((nfeat_status['status_color'] != 'lightgray').sum())}")
     # add taxonomy to status table (for consistency)
     nfeat_status = nfeat_status.reset_index().merge(
         tax.reset_index(), left_on='Taxon', right_on='ASV_ID', how='left'
@@ -1000,7 +1334,11 @@ def main():
 
     keep_cols = [
         'Taxon', 'Degree', 'Betweenness', 'Closeness', 'EigenCentral',
-        'A', 'B', 'AxB', 'type_color', 'status_color', 'venn_color', 'Phylum',
+        'A', 'B', 'AxB',
+        'type_name', 'type_name_all', 'type_name_lung',
+        'type_color', 'type_color_all', 'type_color_lung', 'type_name_sig', 'type_stat', 'type_metric_value',
+        'status_name', 'status_color', 'status_name_sig', 'status_stat', 'status_metric_value',
+        'venn_color', 'Phylum',
         'mean_all', 'mean_nonzero', 'median_all', 'median_nonzero',
     ]
 
@@ -1015,6 +1353,45 @@ def main():
     G_all = load_graph(graph_all)
     G_sub = load_graph(graph_sub)
 
+    # Topology summaries for manuscript-ready reporting
+    topology_rows = []
+    null_rows = []
+    for network_id, graph_obj, seed_offset in [
+        ("POS_ALL", G_all, 0),
+        ("POS_SUB", G_sub, 1),
+    ]:
+        observed = compute_graph_metrics(graph_obj)
+        observed["network_id"] = network_id
+        null_df, null_summary = summarize_null_model(
+            graph_obj,
+            network_id=network_id,
+            replicates=args.null_replicates,
+            seed=args.layout_seed + seed_offset,
+            nswap_multiplier=args.null_nswap_multiplier,
+        )
+        obs_clust = observed.get("average_clustering", np.nan)
+        null_clust = pd.to_numeric(null_df.get("average_clustering"), errors="coerce").dropna()
+        observed["empirical_p_null_clustering_ge_observed"] = (
+            float((null_clust >= obs_clust).mean()) if len(null_clust) else np.nan
+        )
+        observed["clustering_ratio_vs_null_mean"] = (
+            float(obs_clust / null_summary["null_average_clustering_mean"])
+            if pd.notna(obs_clust) and pd.notna(null_summary["null_average_clustering_mean"]) and null_summary["null_average_clustering_mean"] not in (0, 0.0)
+            else np.nan
+        )
+        observed.update(null_summary)
+        topology_rows.append(observed)
+        null_rows.append(null_df)
+
+    topology_summary_df = pd.DataFrame(topology_rows)
+    null_replicates_df = pd.concat(null_rows, ignore_index=True) if null_rows else pd.DataFrame()
+    topology_summary_path = os.path.join(tables_outdir, "network_topology_summary.tsv")
+    null_replicates_path = os.path.join(tables_outdir, "network_topology_null_replicates.tsv")
+    topology_summary_df.to_csv(topology_summary_path, sep="\t", index=False)
+    null_replicates_df.to_csv(null_replicates_path, sep="\t", index=False)
+    ok(f"wrote topology summary: {topology_summary_path}")
+    ok(f"wrote topology null replicates: {null_replicates_path}")
+
     # Attach attributes (each plot function can use what it needs)
     add_node_attrs_from_df(G_all, nfeat_type, keep_cols)
     add_node_attrs_from_df(G_all, nfeat_status, keep_cols)
@@ -1023,6 +1400,15 @@ def main():
     add_node_attrs_from_df(G_sub, nfeat_type, keep_cols)
     add_node_attrs_from_df(G_sub, nfeat_status, keep_cols)
     add_node_attrs_from_df(G_sub, nfeat_abund, keep_cols)
+
+    component_membership_all = build_component_membership_table(G_all, network_id="POS_ALL")
+    component_membership_sub = build_component_membership_table(G_sub, network_id="POS_SUB")
+    component_membership_all_path = os.path.join(tables_outdir, "network_component_membership_POS_ALL.tsv")
+    component_membership_sub_path = os.path.join(tables_outdir, "network_component_membership_POS_SUB.tsv")
+    component_membership_all.to_csv(component_membership_all_path, sep="\t", index=False)
+    component_membership_sub.to_csv(component_membership_sub_path, sep="\t", index=False)
+    ok(f"wrote component membership: {component_membership_all_path}")
+    ok(f"wrote component membership: {component_membership_sub_path}")
 
     # Positions (cached)
     pos_all = spring_layout_cached(G_all, seed=args.layout_seed,
@@ -1038,8 +1424,9 @@ def main():
         modes = {
             "degree_all", "degree_sub",
             "abundance_sub", "abundance_median_sub",
-            "edgeweight_sub",
             "type_isa", "type_isa_labeled",
+            "type_isa_all", "type_isa_all_labeled",
+            "type_isa_all_lung_labels",
             "type_venn", "type_venn_labeled",
             "status_isa", "status_isa_labeled",
             "phylum_abund", "phylum_isa"
@@ -1052,22 +1439,18 @@ def main():
         palette_values=set(type_palette.values())
     )
 
-    # Degree (all edges; weighted widths)
+    # Combined degree + edgeweight (all edges)
     if "degree_all" in modes:
-        out = os.path.join(args.outdir, "network_degree_POS_ALL.svg")
+        out = os.path.join(args.outdir, "network_degree_edgeweight_combined_POS_ALL.svg")
         plot_degree(G_all, pos_all, out, degree_scale=args.degree_scale,
                     edge_width_scale=args.edge_width_scale)
 
-    # Degree (thresholded subgraph)
-    if "degree_sub" in modes:
-        out = os.path.join(args.outdir, "network_degree_POS_SUB.svg")
+    # Combined degree + edgeweight (thresholded subgraph)
+    render_degree_sub = ("degree_sub" in modes) or ("edgeweight_sub" in modes)
+    if render_degree_sub:
+        out = os.path.join(args.outdir, "network_degree_edgeweight_combined_POS_SUB.svg")
         plot_degree(G_sub, pos_sub, out, degree_scale=args.degree_scale,
                     edge_width_scale=args.edge_width_scale)
-
-    # Edge-weight plot (thresholded subgraph): equal nodes, edge width = |weight|
-    if "edgeweight_sub" in modes:
-        out = os.path.join(args.outdir, "network_edgeweight_POS_SUB.svg")
-        plot_edgeweight_equalnodes(G_sub, pos_sub, out)
 
     # Abundance (thresholded subgraph) — multiple variants
     if "abundance_sub" in modes:
@@ -1103,13 +1486,43 @@ def main():
             size_scale=1.0,
         )
 
-    # Type ISA (color by type ISA, size by AxB)
+    # Type ISA (lung-associated significant colors only; size by AxB)
     if "type_isa" in modes:
-        out = os.path.join(args.outdir, "network_type_ISA.svg")
-        plot_type_isa(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=False)
+        out = os.path.join(args.outdir, "network_type_ISA_lung_associated.svg")
+        plot_type_isa(
+            G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=False,
+            title="SPIEC-EASI Network\nNode color: Type Group Indicators (Lung-associated) | Node size: Indicator Species Strength",
+            color_attr="type_color_lung",
+        )
     if "type_isa_labeled" in modes:
-        out = os.path.join(args.outdir, "network_type_ISA_LABELED.svg")
-        plot_type_isa(G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True)
+        out = os.path.join(args.outdir, "network_type_ISA_lung_associated_LABELED.svg")
+        plot_type_isa(
+            G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True,
+            title="SPIEC-EASI Network\nNode color: Type Group Indicators (Lung-associated) | Node size: Indicator Species Strength",
+            color_attr="type_color_lung",
+        )
+    if "type_isa_all" in modes:
+        out = os.path.join(args.outdir, "network_type_ISA_all_significant.svg")
+        plot_type_isa(
+            G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=False,
+            title="SPIEC-EASI Network\nNode color: Type Group Indicators (All significant) | Node size: Indicator Species Strength",
+            color_attr="type_color_all",
+        )
+    if "type_isa_all_labeled" in modes:
+        out = os.path.join(args.outdir, "network_type_ISA_all_significant_LABELED.svg")
+        plot_type_isa(
+            G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True,
+            title="SPIEC-EASI Network\nNode color: Type Group Indicators (All significant) | Node size: Indicator Species Strength",
+            color_attr="type_color_all",
+        )
+    if "type_isa_all_lung_labels" in modes:
+        out = os.path.join(args.outdir, "network_type_ISA_all_significant_lung_labels.svg")
+        plot_type_isa(
+            G_sub, pos_sub, out, type_palette, isa_scale=args.isa_scale, label=True,
+            title="SPIEC-EASI Network\nNode color: Type Group Indicators (All significant) | Labels: Lung-associated only | Node size: Indicator Species Strength",
+            color_attr="type_color_all",
+            label_attr="type_color_lung",
+        )
 
     # Type Venn
     if "type_venn" in modes:

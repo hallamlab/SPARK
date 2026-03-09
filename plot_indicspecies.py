@@ -191,6 +191,89 @@ def compute_sig_table(
     return df
 
 
+def apply_overlay_labels(
+    df: pd.DataFrame,
+    *,
+    label_col: str,
+    p_col: str,
+    stat_col: str,
+    out_col: str,
+    p_thresh: float,
+    stat_thresh: float,
+    allowed_labels: Optional[set[str]] = None,
+) -> pd.DataFrame:
+    """
+    Build a plot-only overlay label that keeps weak/non-significant points gray.
+    """
+    out = df.copy()
+    overlay_mask = (
+        pd.to_numeric(out[p_col], errors="coerce") < p_thresh
+    ) & (
+        pd.to_numeric(out[stat_col], errors="coerce") > stat_thresh
+    )
+    overlay_mask = overlay_mask.fillna(False)
+    if allowed_labels is not None:
+        overlay_mask = overlay_mask & out[label_col].isin(allowed_labels)
+    out[out_col] = np.where(overlay_mask, out[label_col].fillna("not_indicator"), "not_indicator")
+    out[f"{out_col}_significance"] = overlay_mask
+    return out
+
+
+def merge_summary_metrics(
+    df: pd.DataFrame,
+    summary_df: Optional[pd.DataFrame],
+    *,
+    prefix: str,
+) -> pd.DataFrame:
+    """
+    Add summary metrics used for thresholding, preferring q.value from the
+    summary table when available.
+    """
+    out = df.copy()
+    stat_col = f"{prefix}_stat"
+    pval_col = f"{prefix}_p_value"
+    out[f"{prefix}_q_value"] = np.nan
+    out[f"{prefix}_threshold_stat"] = pd.to_numeric(out.get(stat_col), errors="coerce")
+    out[f"{prefix}_threshold_value"] = pd.to_numeric(out.get(pval_col), errors="coerce")
+    out[f"{prefix}_threshold_metric"] = "p.value"
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out[f"{prefix}_log_q"] = np.nan
+
+    if summary_df is None:
+        return out
+
+    summary_cols = ["ASV_ID"]
+    for col in ["q.value", "stat"]:
+        if col in summary_df.columns:
+            summary_cols.append(col)
+    if len(summary_cols) == 1:
+        return out
+
+    merged = out.merge(summary_df[summary_cols], on="ASV_ID", how="left", suffixes=("", "_summary"))
+    if "stat" in merged.columns:
+        merged[f"{prefix}_threshold_stat"] = pd.to_numeric(merged["stat"], errors="coerce").fillna(merged[f"{prefix}_threshold_stat"])
+    if "q.value" in merged.columns:
+        qvals = pd.to_numeric(merged["q.value"], errors="coerce")
+        merged[f"{prefix}_q_value"] = qvals
+        merged[f"{prefix}_threshold_value"] = qvals
+        merged[f"{prefix}_threshold_metric"] = "q.value"
+        with np.errstate(divide="ignore", invalid="ignore"):
+            merged[f"{prefix}_log_q"] = (-np.log10(qvals)).replace([np.inf, -np.inf], np.nan).round(3)
+    return merged
+
+
+def pretty_axis_label(column: str) -> str:
+    labels = {
+        "type_stat": "Indicator Statistic",
+        "status_stat": "Indicator Statistic",
+        "type_log_p": "-log10(raw p-value)",
+        "status_log_p": "-log10(raw p-value)",
+        "type_log_q": "-log10(q-value)",
+        "status_log_q": "-log10(q-value)",
+    }
+    return labels.get(column, column)
+
+
 def plot_p_vs_stat_no_overlap(
     df: pd.DataFrame,
     output_file: Path,
@@ -217,7 +300,7 @@ def plot_p_vs_stat_no_overlap(
     label_arrow_alpha: float = 1.0,
     label_arrow_shrinkA: float = 6.0,
     label_arrow_shrinkB: float = 0.0,
-    label_arrow_anchor: str = "text",
+    label_arrow_anchor: str = "bbox",
     adjust_expand_points=(1.4, 1.6),
     adjust_expand_text=(1.4, 1.6),
     adjust_force_points=(0.5, 0.8),
@@ -457,8 +540,8 @@ def plot_p_vs_stat_no_overlap(
         legend=False,
         ax=ax,
     )
-    ax.set_xlabel(x_col)
-    ax.set_ylabel(y_col)
+    ax.set_xlabel(pretty_axis_label(x_col))
+    ax.set_ylabel(pretty_axis_label(y_col))
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
     ax.set_ylim(ymin - 0.05, ymax + 0.05)
     if invert_y:
@@ -482,8 +565,8 @@ def plot_p_vs_stat_no_overlap(
         texts = []
         xspan = (xmax - xmin) if (xmax != xmin) else 1.0
         yspan = (ymax - ymin) if (ymax != ymin) else 1.0
-        dx0 = 0.01 * xspan
-        dy0 = 0.01 * yspan
+        base_dx = 0.012 * xspan
+        base_dy = 0.018 * yspan
         label_bbox_kwargs = None
         if label_bbox:
             label_bbox_kwargs = dict(
@@ -492,9 +575,9 @@ def plot_p_vs_stat_no_overlap(
                 alpha=label_bbox_alpha,
                 edgecolor=label_bbox_edgecolor,
             )
-        arrowprops = None
-        if label_arrow and label_arrow_anchor == "text":
-            arrowprops = dict(
+        annotation_arrowprops = None
+        if label_arrow:
+            annotation_arrowprops = dict(
                 arrowstyle="-",
                 color=label_arrow_color,
                 lw=label_arrow_width,
@@ -503,14 +586,27 @@ def plot_p_vs_stat_no_overlap(
                 shrinkB=label_arrow_shrinkB,
             )
 
-        for (xv, yv), s in zip(dd_lab[["_x_", "_y_"]].to_numpy(), lab.to_numpy()):
+        golden_angle = np.pi * (3.0 - np.sqrt(5.0))
+        coords = dd_lab[["_x_", "_y_"]].to_numpy()
+        for i, ((xv, yv), s) in enumerate(zip(coords, lab.to_numpy())):
+            angle = i * golden_angle
+            ring = 1.0 + (i % 3) * 0.55
+            dx = np.cos(angle) * base_dx * ring
+            dy = np.sin(angle) * base_dy * ring
+            ha = "left" if dx >= 0 else "right"
+            va = "bottom" if dy >= 0 else "top"
             texts.append(
-                ax.text(
-                    xv + dx0,
-                    yv + dy0,
+                ax.annotate(
                     s,
+                    xy=(xv, yv),
+                    xytext=(xv + dx, yv + dy),
+                    textcoords="data",
                     fontsize=label_fontsize,
                     bbox=label_bbox_kwargs,
+                    arrowprops=annotation_arrowprops,
+                    ha=ha,
+                    va=va,
+                    annotation_clip=False,
                 )
             )
 
@@ -540,37 +636,12 @@ def plot_p_vs_stat_no_overlap(
                     lim=adjust_lim,
                     avoid_self=adjust_avoid_self,
                     only_move=only_move,
-                    arrowprops=arrowprops,
                 )
                 used_adjust = True
             except Exception:
                 pass
-        if label_arrow and label_arrow_anchor == "bbox":
+        if used_adjust:
             fig.canvas.draw()
-            renderer = fig.canvas.get_renderer()
-            for (xv, yv), txt in zip(dd_lab[["_x_", "_y_"]].to_numpy(), texts):
-                bbox = txt.get_window_extent(renderer=renderer)
-                px, py = ax.transData.transform((xv, yv))
-                cx = min(max(px, bbox.x0), bbox.x1)
-                cy = min(max(py, bbox.y0), bbox.y1)
-                x0, y0 = ax.transData.inverted().transform((cx, cy))
-                ax.plot(
-                    [xv, x0],
-                    [yv, y0],
-                    color=label_arrow_color,
-                    lw=label_arrow_width,
-                    alpha=label_arrow_alpha,
-                )
-        elif label_arrow and not used_adjust:
-            for (xv, yv), txt in zip(dd_lab[["_x_", "_y_"]].to_numpy(), texts):
-                tx, ty = txt.get_position()
-                ax.plot(
-                    [xv, tx],
-                    [yv, ty],
-                    color=label_arrow_color,
-                    lw=label_arrow_width,
-                    alpha=label_arrow_alpha,
-                )
 
     # Legend pane
     if show_legend and leg_ax is not None:
@@ -613,8 +684,12 @@ def main():
     )
     ap.add_argument("--type-results", type=Path, required=True,
                     help="indicspecies sign table for type_group (TSV).")
+    ap.add_argument("--type-summary", type=Path, default=None,
+                    help="Optional indicspecies summary table for type_group; if present, q.value is used for type thresholds.")
     ap.add_argument("--status-results", type=Path, required=True,
                     help="indicspecies sign table for status (TSV).")
+    ap.add_argument("--status-summary", type=Path, default=None,
+                    help="Optional indicspecies summary table for status; if present, q.value is used for status thresholds.")
     ap.add_argument("--type-venn", type=Path, default=None,
                     help="Optional Type Venn presence table (cols: grouping, ASV_ID).")
     ap.add_argument("--status-venn", type=Path, default=None,
@@ -627,6 +702,48 @@ def main():
     # Thresholds
     ap.add_argument("--p-thresh", type=float, default=0.05, help="p-value threshold (default: 0.05).")
     ap.add_argument("--stat-thresh", type=float, default=0.0, help="stat threshold (default: 0.0).")
+    ap.add_argument(
+        "--status-overlay-p-thresh",
+        type=float,
+        default=0.05,
+        help="Status overlay raw p-value threshold when no status summary is provided (default: 0.05).",
+    )
+    ap.add_argument(
+        "--status-overlay-q-thresh",
+        type=float,
+        default=0.05,
+        help="Status overlay q-value threshold when --status-summary is provided (default: 0.05).",
+    )
+    ap.add_argument(
+        "--status-overlay-stat-thresh",
+        type=float,
+        default=0.25,
+        help="Combined-plot status overlay stat threshold (default: 0.25).",
+    )
+    ap.add_argument(
+        "--type-overlay-p-thresh",
+        type=float,
+        default=0.05,
+        help="Type-group overlay raw p-value threshold when no type summary is provided (default: 0.05).",
+    )
+    ap.add_argument(
+        "--type-overlay-q-thresh",
+        type=float,
+        default=0.05,
+        help="Type-group overlay q-value threshold when --type-summary is provided (default: 0.05).",
+    )
+    ap.add_argument(
+        "--type-overlay-stat-thresh",
+        type=float,
+        default=0.25,
+        help="Type-group overlay stat threshold (default: 0.25).",
+    )
+    ap.add_argument(
+        "--type-label-allowlist",
+        type=str,
+        default="Lung Brush,BAL+Lung Brush,Lung Brush+Oral Rinse,Oral Rinse+BAL+Lung Brush",
+        help="Comma-separated type labels allowed for thresholded type labels.",
+    )
 
     # Index maps
     ap.add_argument("--type-index", type=str, required=True,
@@ -765,11 +882,27 @@ def main():
     else:
         tdf.rename(columns={tdf.columns[0]: "ASV_ID"}, inplace=True)
 
+    type_summary_df = None
+    if args.type_summary is not None:
+        type_summary_df = pd.read_csv(args.type_summary, sep="\t", header=0)
+        if type_summary_df.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
+            type_summary_df.rename(columns={type_summary_df.columns[0]: "ASV_ID"}, inplace=True)
+        else:
+            type_summary_df.rename(columns={type_summary_df.columns[0]: "ASV_ID"}, inplace=True)
+
     sdf = pd.read_csv(args.status_results, sep="\t", header=0)
     if sdf.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
         sdf.rename(columns={sdf.columns[0]: "ASV_ID"}, inplace=True)
     else:
         sdf.rename(columns={sdf.columns[0]: "ASV_ID"}, inplace=True)
+
+    status_summary_df = None
+    if args.status_summary is not None:
+        status_summary_df = pd.read_csv(args.status_summary, sep="\t", header=0)
+        if status_summary_df.columns[0].lower() not in ("asv_id", "asv", "feature", "otu"):
+            status_summary_df.rename(columns={status_summary_df.columns[0]: "ASV_ID"}, inplace=True)
+        else:
+            status_summary_df.rename(columns={status_summary_df.columns[0]: "ASV_ID"}, inplace=True)
 
     type_venn_df = None
     if args.type_venn and args.type_venn.exists():
@@ -797,6 +930,13 @@ def main():
     type_palette = parse_mapping(args.type_palette)
     status_palette = parse_mapping(args.status_palette)
     status_markers = parse_mapping(args.status_markers)
+    type_label_allowlist = {
+        item.strip() for item in args.type_label_allowlist.split(",") if item.strip()
+    } or None
+    has_type_q_values = type_summary_df is not None and "q.value" in type_summary_df.columns
+    has_status_q_values = status_summary_df is not None and "q.value" in status_summary_df.columns
+    type_y_col = "type_log_q" if has_type_q_values else "type_log_p"
+    status_y_col = "status_log_q" if has_status_q_values else "status_log_p"
 
     # ---- Build significance tables ----
     type_sig = compute_sig_table(
@@ -814,6 +954,38 @@ def main():
     if TYPE_LABEL_ALLOWLIST is not None:
         type_sig_mask = type_sig_mask & type_sig["type_label"].isin(TYPE_LABEL_ALLOWLIST)
     type_sig["label_type_sig"] = np.where(type_sig_mask.fillna(False), type_asv, "")
+    type_sig = merge_summary_metrics(type_sig, type_summary_df, prefix="type")
+    type_overlay_thresh = args.type_overlay_q_thresh if has_type_q_values else args.type_overlay_p_thresh
+    type_sig = apply_overlay_labels(
+        type_sig,
+        label_col="type_label",
+        p_col="type_threshold_value",
+        stat_col="type_threshold_stat",
+        out_col="type_overlay_label",
+        p_thresh=type_overlay_thresh,
+        stat_thresh=args.type_overlay_stat_thresh,
+        allowed_labels=type_label_allowlist,
+    )
+    type_sig["label_type_overlay"] = np.where(
+        type_sig["type_overlay_label"].ne("not_indicator"),
+        type_asv,
+        "",
+    )
+    type_sig = apply_overlay_labels(
+        type_sig,
+        label_col="type_label",
+        p_col="type_threshold_value",
+        stat_col="type_threshold_stat",
+        out_col="type_overlay_label_all",
+        p_thresh=type_overlay_thresh,
+        stat_thresh=args.type_overlay_stat_thresh,
+        allowed_labels=None,
+    )
+    type_sig["label_type_overlay_all"] = np.where(
+        type_sig["type_overlay_label_all"].ne("not_indicator"),
+        type_asv,
+        "",
+    )
     type_sig.to_csv(tables_outdir / "type_group_ISA_enriched.tsv", sep="\t", index=False)
 
     status_sig = compute_sig_table(
@@ -822,25 +994,114 @@ def main():
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
         force_all_sig=True, prefix="status"
     )
+    status_sig = merge_summary_metrics(status_sig, status_summary_df, prefix="status")
+    status_overlay_thresh = args.status_overlay_q_thresh if has_status_q_values else args.status_overlay_p_thresh
+    status_sig = apply_overlay_labels(
+        status_sig,
+        label_col="status_label",
+        p_col="status_threshold_value",
+        stat_col="status_threshold_stat",
+        out_col="status_overlay_label",
+        p_thresh=status_overlay_thresh,
+        stat_thresh=args.status_overlay_stat_thresh,
+    )
+    status_asv = status_sig["ASV_ID"].astype("object").fillna("").astype(str)
+    status_sig["label_status_overlay"] = np.where(
+        status_sig["status_overlay_label"].ne("not_indicator"),
+        status_asv,
+        "",
+    )
     status_sig.to_csv(tables_outdir / "status_ISA_enriched.tsv", sep="\t", index=False)
 
     # ---- Type plot (ISA) ----
     plot_p_vs_stat_no_overlap(
         type_sig,
         plots_outdir / "type_group_ISA_plot.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="type_label",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="type_overlay_label",
         type_palette=type_palette,
         plot_size_in=(args.plot_width, args.plot_height),
     )
     plot_p_vs_stat_no_overlap(
         type_sig,
         plots_outdir / "type_group_ISA_plot_labelled.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="type_label",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="type_overlay_label",
         type_palette=type_palette,
         plot_size_in=(args.plot_width, args.plot_height),
-        label_col="label_type_sig",
+        label_col="label_type_overlay",
+        label_fontsize=args.label_fontsize,
+        label_max_points=args.label_max_points,
+        label_bbox=args.label_bbox,
+        label_bbox_alpha=args.label_bbox_alpha,
+        label_bbox_color=args.label_bbox_color,
+        label_bbox_edgecolor=args.label_bbox_edgecolor,
+        label_bbox_pad=args.label_bbox_pad,
+        label_bbox_boxstyle=args.label_bbox_boxstyle,
+        label_arrow=args.label_arrow,
+        label_arrow_color=args.label_arrow_color,
+        label_arrow_width=args.label_arrow_width,
+        label_arrow_alpha=args.label_arrow_alpha,
+        label_arrow_shrinkA=args.label_arrow_shrinkA,
+        label_arrow_shrinkB=args.label_arrow_shrinkB,
+        label_arrow_anchor=args.label_arrow_anchor,
+        adjust_expand_points=args.adjust_expand_points,
+        adjust_expand_text=args.adjust_expand_text,
+        adjust_force_points=args.adjust_force_points,
+        adjust_force_text=args.adjust_force_text,
+        adjust_lim=args.adjust_lim,
+        adjust_avoid_self=args.adjust_avoid_self,
+        adjust_only_move_points=args.adjust_only_move_points,
+        adjust_only_move_text=args.adjust_only_move_text,
+    )
+    plot_p_vs_stat_no_overlap(
+        type_sig,
+        plots_outdir / "type_group_ISA_plot_all_types.svg",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="type_overlay_label_all",
+        type_palette=type_palette,
+        plot_size_in=(args.plot_width, args.plot_height),
+    )
+    plot_p_vs_stat_no_overlap(
+        type_sig,
+        plots_outdir / "type_group_ISA_plot_all_types_labelled.svg",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="type_overlay_label_all",
+        type_palette=type_palette,
+        plot_size_in=(args.plot_width, args.plot_height),
+        label_col="label_type_overlay_all",
+        label_fontsize=args.label_fontsize,
+        label_max_points=args.label_max_points,
+        label_bbox=args.label_bbox,
+        label_bbox_alpha=args.label_bbox_alpha,
+        label_bbox_color=args.label_bbox_color,
+        label_bbox_edgecolor=args.label_bbox_edgecolor,
+        label_bbox_pad=args.label_bbox_pad,
+        label_bbox_boxstyle=args.label_bbox_boxstyle,
+        label_arrow=args.label_arrow,
+        label_arrow_color=args.label_arrow_color,
+        label_arrow_width=args.label_arrow_width,
+        label_arrow_alpha=args.label_arrow_alpha,
+        label_arrow_shrinkA=args.label_arrow_shrinkA,
+        label_arrow_shrinkB=args.label_arrow_shrinkB,
+        label_arrow_anchor=args.label_arrow_anchor,
+        adjust_expand_points=args.adjust_expand_points,
+        adjust_expand_text=args.adjust_expand_text,
+        adjust_force_points=args.adjust_force_points,
+        adjust_force_text=args.adjust_force_text,
+        adjust_lim=args.adjust_lim,
+        adjust_avoid_self=args.adjust_avoid_self,
+        adjust_only_move_points=args.adjust_only_move_points,
+        adjust_only_move_text=args.adjust_only_move_text,
+    )
+    plot_p_vs_stat_no_overlap(
+        type_sig,
+        plots_outdir / "type_group_ISA_plot_all_types_lung_labels.svg",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="type_overlay_label_all",
+        type_palette=type_palette,
+        plot_size_in=(args.plot_width, args.plot_height),
+        label_col="label_type_overlay",
         label_fontsize=args.label_fontsize,
         label_max_points=args.label_max_points,
         label_bbox=args.label_bbox,
@@ -891,13 +1152,42 @@ def main():
         tvenn_label_to_palette_key = {normalize_combo(k): k for k in type_palette.keys()}  # identity by default
         tvenn_sig["type_label"] = tvenn_sig["type_label"].map(lambda s: tvenn_label_to_palette_key.get(s, s))
         tvenn_sig["type_color"] = tvenn_sig["type_label"].map(lambda k: type_palette.get(k, "lightgray"))
+        tvenn_sig = merge_summary_metrics(tvenn_sig, type_summary_df, prefix="type")
+        tvenn_sig = apply_overlay_labels(
+            tvenn_sig,
+            label_col="type_label",
+            p_col="type_threshold_value",
+            stat_col="type_threshold_stat",
+            out_col="type_overlay_label",
+            p_thresh=type_overlay_thresh,
+            stat_thresh=args.type_overlay_stat_thresh,
+            allowed_labels=type_label_allowlist,
+        )
+        tvenn_sig = apply_overlay_labels(
+            tvenn_sig,
+            label_col="type_label",
+            p_col="type_threshold_value",
+            stat_col="type_threshold_stat",
+            out_col="type_overlay_label_all",
+            p_thresh=type_overlay_thresh,
+            stat_thresh=args.type_overlay_stat_thresh,
+            allowed_labels=None,
+        )
 
         tvenn_sig.to_csv(tables_outdir / "type_group_Venn_enriched.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
             tvenn_sig,
             plots_outdir / "type_group_Venn_plot.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="type_label",
+            x_col="type_stat", y_col=type_y_col,
+            hue_col="type_overlay_label",
+            type_palette=type_palette,
+            plot_size_in=(args.plot_width, args.plot_height),
+        )
+        plot_p_vs_stat_no_overlap(
+            tvenn_sig,
+            plots_outdir / "type_group_Venn_plot_all_types.svg",
+            x_col="type_stat", y_col=type_y_col,
+            hue_col="type_overlay_label_all",
             type_palette=type_palette,
             plot_size_in=(args.plot_width, args.plot_height),
         )
@@ -927,13 +1217,29 @@ def main():
         svenn_label_to_palette_key = {normalize_combo(k): k for k in status_palette.keys()}  # identity by default
         svenn_sig["status_label"] = svenn_sig["status_label"].map(lambda s: svenn_label_to_palette_key.get(s, s))
         svenn_sig["status_color"] = svenn_sig["status_label"].map(lambda k: status_palette.get(k, "lightgray"))
+        svenn_sig = merge_summary_metrics(svenn_sig, status_summary_df, prefix="status")
+        svenn_sig = apply_overlay_labels(
+            svenn_sig,
+            label_col="status_label",
+            p_col="status_threshold_value",
+            stat_col="status_threshold_stat",
+            out_col="status_overlay_label",
+            p_thresh=status_overlay_thresh,
+            stat_thresh=args.status_overlay_stat_thresh,
+        )
+        svenn_asv = svenn_sig["ASV_ID"].astype("object").fillna("").astype(str)
+        svenn_sig["label_status_overlay"] = np.where(
+            svenn_sig["status_overlay_label"].ne("not_indicator"),
+            svenn_asv,
+            "",
+        )
 
         svenn_sig.to_csv(tables_outdir / "status_group_Venn_enriched.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
             svenn_sig,
             plots_outdir / "status_group_Venn_plot.svg",
-            x_col="status_stat", y_col="status_log_p",
-            hue_col="status_label",
+            x_col="status_stat", y_col=status_y_col,
+            hue_col="status_overlay_label",
             type_palette=status_palette,
             plot_size_in=(args.plot_width, args.plot_height),
         )
@@ -941,10 +1247,14 @@ def main():
     venn_combined = None
     if ((type_venn_df is not None) and (status_venn_df is not None)):
         # ---- Venn Combined tables/plots: join type + status on ASV ----
-        venn_combined = pd.merge(tvenn_sig[["ASV_ID", "type_stat", "type_p_value", "type_log_p",
-                                    "type_significance", "type_label", "type_color"]],
-                            svenn_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
-                                        "status_significance", "status_label"]],
+        venn_combined = pd.merge(tvenn_sig[["ASV_ID", "type_stat", "type_p_value", "type_q_value",
+                                    "type_log_p", "type_log_q", "type_significance", "type_label",
+                                    "type_color", "type_threshold_stat", "type_threshold_value",
+                                    "type_threshold_metric"]],
+                            svenn_sig[["ASV_ID", "status_stat", "status_p_value", "status_q_value",
+                                        "status_log_p", "status_log_q", "status_significance",
+                                        "status_label", "status_threshold_stat",
+                                        "status_threshold_value", "status_threshold_metric"]],
                             on="ASV_ID", how="outer")
         venn_asv = venn_combined["ASV_ID"].astype("object").fillna("").astype(str)
         venn_type_sig = (
@@ -975,17 +1285,21 @@ def main():
     plot_p_vs_stat_no_overlap(
         status_sig,
         plots_outdir / "status_ISA_plot.svg",
-        x_col="status_stat", y_col="status_log_p",
-        hue_col="status_label",
+        x_col="status_stat", y_col=status_y_col,
+        hue_col="status_overlay_label",
         type_palette=status_palette,
         plot_size_in=(args.plot_width, args.plot_height),
     )
 
     # ---- Combined tables/plots: join type + status on ASV ----
-    combined = pd.merge(type_sig[["ASV_ID", "type_stat", "type_p_value", "type_log_p",
-                                  "type_significance", "type_label", "type_color"]],
-                        status_sig[["ASV_ID", "status_stat", "status_p_value", "status_log_p",
-                                    "status_significance", "status_label"]],
+    combined = pd.merge(type_sig[["ASV_ID", "type_stat", "type_p_value", "type_q_value",
+                                  "type_log_p", "type_log_q", "type_significance", "type_label",
+                                  "type_color", "type_threshold_stat", "type_threshold_value",
+                                  "type_threshold_metric"]],
+                        status_sig[["ASV_ID", "status_stat", "status_p_value", "status_q_value",
+                                    "status_log_p", "status_log_q", "status_significance",
+                                    "status_label", "status_threshold_stat",
+                                    "status_threshold_value", "status_threshold_metric"]],
                         on="ASV_ID", how="outer")
     # Label only significant points for combined plots (based on which palette is used)
     comb_asv = combined["ASV_ID"].astype("object").fillna("").astype(str)
@@ -1011,13 +1325,27 @@ def main():
     combined["label_status_sig"] = np.where(comb_status_sig, comb_asv, "")
     combined["label_status_all"] = np.where(comb_status_allow.fillna(False), comb_asv, "")
     combined["label_any_sig"] = np.where((comb_type_sig | comb_status_sig), comb_asv, "")
+    combined = apply_overlay_labels(
+        combined,
+        label_col="status_label",
+        p_col="status_threshold_value",
+        stat_col="status_threshold_stat",
+        out_col="status_overlay_label",
+        p_thresh=status_overlay_thresh,
+        stat_thresh=args.status_overlay_stat_thresh,
+    )
+    combined["label_status_overlay"] = np.where(
+        combined["status_overlay_label"].ne("not_indicator"),
+        comb_asv,
+        "",
+    )
     combined.to_csv(tables_outdir / "Type_status_ISA_results.tsv", sep="\t", index=False)
 
     plot_p_vs_stat_no_overlap(
         combined,
         plots_outdir / "Combined_ISA_plot.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="status_label", # style_col="status_label",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="status_overlay_label", # style_col="status_label",
         type_palette=status_palette, # marker_dict=status_markers,
         legend_color_title="Status", # legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
@@ -1026,12 +1354,12 @@ def main():
     plot_p_vs_stat_no_overlap(
         combined,
         plots_outdir / "Combined_ISA_plot_labelled.svg",
-        x_col="type_stat", y_col="type_log_p",
-        hue_col="status_label", # style_col="status_label",
+        x_col="type_stat", y_col=type_y_col,
+        hue_col="status_overlay_label", # style_col="status_label",
         type_palette=status_palette, # marker_dict=status_markers,
         legend_color_title="Status", #legend_marker_title="Status",
         plot_size_in=(args.plot_width, args.plot_height),
-        label_col="label_status_all",
+        label_col="label_status_overlay",
         label_fontsize=args.label_fontsize,
         label_max_points=args.label_max_points,
         label_bbox=args.label_bbox,
@@ -1058,11 +1386,26 @@ def main():
     )
 
     if venn_combined is not None:
+        venn_combined = apply_overlay_labels(
+            venn_combined,
+            label_col="status_label",
+            p_col="status_threshold_value",
+            stat_col="status_threshold_stat",
+            out_col="status_overlay_label",
+            p_thresh=status_overlay_thresh,
+            stat_thresh=args.status_overlay_stat_thresh,
+        )
+        venn_asv = venn_combined["ASV_ID"].astype("object").fillna("").astype(str)
+        venn_combined["label_status_overlay"] = np.where(
+            venn_combined["status_overlay_label"].ne("not_indicator"),
+            venn_asv,
+            "",
+        )
         plot_p_vs_stat_no_overlap(
             venn_combined,
             plots_outdir / "Combined_Venn_plot.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="status_label", # style_col="status_label",
+            x_col="type_stat", y_col=type_y_col,
+            hue_col="status_overlay_label", # style_col="status_label",
             type_palette=status_palette, # marker_dict=status_markers,
             legend_color_title="Status", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
@@ -1071,12 +1414,12 @@ def main():
         plot_p_vs_stat_no_overlap(
             venn_combined,
             plots_outdir / "Combined_Venn_plot_labelled.svg",
-            x_col="type_stat", y_col="type_log_p",
-            hue_col="status_label", # style_col="status_label",
+            x_col="type_stat", y_col=type_y_col,
+            hue_col="status_overlay_label", # style_col="status_label",
             type_palette=status_palette, # marker_dict=status_markers,
             legend_color_title="Status", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
-            label_col="label_status_all",
+            label_col="label_status_overlay",
             label_fontsize=args.label_fontsize,
             label_max_points=args.label_max_points,
             label_bbox=args.label_bbox,
@@ -1112,7 +1455,7 @@ def main():
         plot_p_vs_stat_no_overlap(
             type_tax,
             plots_outdir / "type_group_ISA_plot_Phylum.svg",
-            x_col="type_stat", y_col="type_log_p",
+            x_col="type_stat", y_col=type_y_col,
             hue_col="Phylum", type_palette=phyl_pal,
             legend_color_title="Phylum",
             plot_size_in=(args.plot_width, args.plot_height),
@@ -1124,7 +1467,7 @@ def main():
         plot_p_vs_stat_no_overlap(
             comb_tax,
             plots_outdir / "Combined_ISA_plot_Phylum.svg",
-            x_col="type_stat", y_col="type_log_p",
+            x_col="type_stat", y_col=type_y_col,
             hue_col="Phylum", # style_col="status_label",
             type_palette=phyl_pal, # marker_dict=status_markers,
             legend_color_title="Phylum", # legend_marker_title="Status",
@@ -1134,12 +1477,12 @@ def main():
         plot_p_vs_stat_no_overlap(
             comb_tax,
             plots_outdir / "Combined_ISA_plot_Phylum_labelled.svg",
-            x_col="type_stat", y_col="type_log_p",
+            x_col="type_stat", y_col=type_y_col,
             hue_col="Phylum", # style_col="status_label",
             type_palette=phyl_pal, # marker_dict=status_markers,
             legend_color_title="Phylum", # legend_marker_title="Status",
             plot_size_in=(args.plot_width, args.plot_height),
-            label_col="label_any_sig",
+            label_col="label_status_overlay",
             label_fontsize=args.label_fontsize,
             label_max_points=args.label_max_points,           
             label_bbox=args.label_bbox,
@@ -1172,7 +1515,7 @@ def main():
             plot_p_vs_stat_no_overlap(
                 venn_comb_tax,
                 plots_outdir / "Combined_Venn_plot_Phylum.svg",
-                x_col="type_stat", y_col="type_log_p",
+                x_col="type_stat", y_col=type_y_col,
                 hue_col="Phylum", # style_col="status_label",
                 type_palette=phyl_pal, # marker_dict=status_markers,
                 legend_color_title="Phylum", # legend_marker_title="Status",
@@ -1182,12 +1525,12 @@ def main():
             plot_p_vs_stat_no_overlap(
                 venn_comb_tax,
                 plots_outdir / "Combined_Venn_plot_Phylum_labelled.svg",
-                x_col="type_stat", y_col="type_log_p",
+                x_col="type_stat", y_col=type_y_col,
                 hue_col="Phylum", # style_col="status_label",
                 type_palette=phyl_pal, # marker_dict=status_markers,
                 legend_color_title="Phylum", # legend_marker_title="Status",
                 plot_size_in=(args.plot_width, args.plot_height),
-                label_col="label_any_sig",
+                label_col="label_status_overlay",
                 label_fontsize=args.label_fontsize,
                 label_max_points=args.label_max_points,           
                 label_bbox=args.label_bbox,

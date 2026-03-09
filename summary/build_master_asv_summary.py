@@ -29,18 +29,31 @@ DELIM_BY_SUFFIX = {
 
 # User-requested downstream whitelist (ASV_meta is provided separately via --asv-meta)
 DEFAULT_WHITELIST = [
+    "type_group_ISA_enriched.tsv",
+    "status_ISA_enriched.tsv",
     "Type_status_ISA_results.tsv",
     "Type_status_Venn_results.tsv",
     "node_features.status.tsv",
     "node_features.type.tsv",
+    "network_topology_summary.tsv",
+    "network_component_membership_POS_ALL.tsv",
+    "network_component_membership_POS_SUB.tsv",
 ]
 
 # Enforced key mapping for known files
 PREFERRED_KEY_BY_BASENAME = {
+    "type_group_ISA_enriched.tsv": "ASV_ID",
+    "status_ISA_enriched.tsv": "ASV_ID",
     "Type_status_ISA_results.tsv": "ASV_ID",
     "Type_status_Venn_results.tsv": "ASV_ID",
     "node_features.status.tsv": "Taxon",
     "node_features.type.tsv": "Taxon",
+    "network_component_membership_POS_ALL.tsv": "ASV_ID",
+    "network_component_membership_POS_SUB.tsv": "ASV_ID",
+}
+
+GLOBAL_NETWORK_SUMMARY_BASENAMES = {
+    "network_topology_summary.tsv",
 }
 
 
@@ -335,11 +348,64 @@ def table_to_asv_features(
     return out, table_meta
 
 
+def table_to_global_features(
+    path: Path,
+    prefix: str,
+) -> tuple[pd.DataFrame | None, dict]:
+    table_meta = {
+        "status": "unknown",
+        "file": str(path),
+        "key_column": "<global>",
+        "preferred_key": "",
+        "original_columns": [],
+        "column_map": [],
+        "rows_in": 0,
+        "asv_rows": 1,
+        "feature_cols": 0,
+        "key_unique_n": 1,
+        "key_duplicate_rows": 0,
+    }
+
+    try:
+        df = read_table(path)
+    except Exception as exc:
+        table_meta["status"] = f"read_error: {exc}"
+        return None, table_meta
+
+    table_meta["rows_in"] = int(len(df))
+    table_meta["original_columns"] = list(df.columns)
+    if df.empty:
+        table_meta["status"] = "empty_table"
+        return None, table_meta
+    if "network_id" not in df.columns:
+        table_meta["status"] = "no_network_id"
+        return None, table_meta
+
+    records = {"__GLOBAL__": "__GLOBAL__"}
+    colmap = []
+    for _, row in df.iterrows():
+        net = sanitize_token(str(row["network_id"]))
+        for col in df.columns:
+            if col == "network_id":
+                continue
+            out_col = f"{prefix}__{net}__{sanitize_token(col)}"
+            records[out_col] = row[col]
+            colmap.append((f"{row['network_id']}::{col}", out_col))
+
+    out = pd.DataFrame([records])
+    out = out.rename(columns={"__GLOBAL__": "GLOBAL_KEY"})
+    table_meta["column_map"] = colmap
+    table_meta["status"] = f"global_network_summary_{len(colmap)}"
+    table_meta["feature_cols"] = int(len(colmap))
+    return out, table_meta
+
+
 def build_asv_feature_table(
     selected_paths: list[tuple[str, Path]],
     max_direct_cols: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     feature_frames: list[pd.DataFrame] = []
+    global_feature_frames: list[pd.DataFrame] = []
     manifest_rows: list[dict[str, object]] = []
     column_map_rows: list[dict[str, object]] = []
     original_col_rows: list[dict[str, object]] = []
@@ -348,16 +414,22 @@ def build_asv_feature_table(
         basename = table_path.name
         preferred_key = PREFERRED_KEY_BY_BASENAME.get(basename)
         prefix = f"{kind}__{sanitize_token(table_path.stem)}"
-        feats, meta = table_to_asv_features(
-            table_path,
-            prefix=prefix,
-            max_direct_cols=max_direct_cols,
-            preferred_key=preferred_key,
-        )
+        if basename in GLOBAL_NETWORK_SUMMARY_BASENAMES:
+            feats, meta = table_to_global_features(table_path, prefix=prefix)
+            included = feats is not None and not feats.empty
+            if included:
+                global_feature_frames.append(feats)
+        else:
+            feats, meta = table_to_asv_features(
+                table_path,
+                prefix=prefix,
+                max_direct_cols=max_direct_cols,
+                preferred_key=preferred_key,
+            )
+            included = feats is not None and not feats.empty
+            if included:
+                feature_frames.append(feats)
 
-        included = feats is not None and not feats.empty
-        if included:
-            feature_frames.append(feats)
 
         manifest_rows.append(
             {
@@ -414,13 +486,22 @@ def build_asv_feature_table(
             raise ValueError(f"Duplicate output columns detected after mapping: {preview}")
 
     if not feature_frames:
-        return pd.DataFrame(columns=["ASV_ID"]), manifest, column_map, collisions_original
+        merged = pd.DataFrame(columns=["ASV_ID"])
+    else:
+        merged = feature_frames[0]
+        for frame in feature_frames[1:]:
+            merged = merged.merge(frame, on="ASV_ID", how="outer")
+        merged = merged.drop_duplicates(subset=["ASV_ID"]).reset_index(drop=True)
 
-    merged = feature_frames[0]
-    for frame in feature_frames[1:]:
-        merged = merged.merge(frame, on="ASV_ID", how="outer")
-    merged = merged.drop_duplicates(subset=["ASV_ID"]).reset_index(drop=True)
-    return merged, manifest, column_map, collisions_original
+    if not global_feature_frames:
+        global_features = pd.DataFrame(columns=["GLOBAL_KEY"])
+    else:
+        global_features = global_feature_frames[0]
+        for frame in global_feature_frames[1:]:
+            global_features = global_features.merge(frame, on="GLOBAL_KEY", how="outer")
+        global_features = global_features.drop_duplicates(subset=["GLOBAL_KEY"]).reset_index(drop=True)
+
+    return merged, global_features, manifest, column_map, collisions_original
 
 
 def rollup_asv_meta(asv_meta: pd.DataFrame) -> pd.DataFrame:
@@ -511,14 +592,21 @@ def main() -> None:
     )
     info(f"Whitelisted downstream files found: {len(selected)}")
 
-    ds_features, manifest, colmap, col_collisions = build_asv_feature_table(
+    ds_features, global_features, manifest, colmap, col_collisions = build_asv_feature_table(
         selected_paths=selected,
         max_direct_cols=args.max_direct_cols,
     )
-    info(f"Collected downstream features: {max(0, ds_features.shape[1] - 1)} columns.")
+    info(
+        f"Collected downstream features: "
+        f"{max(0, ds_features.shape[1] - 1)} ASV-level columns, "
+        f"{max(0, global_features.shape[1] - 1)} global columns."
+    )
 
     # 1) Long-form master
     long_master = asv_meta.merge(ds_features, on="ASV_ID", how="left")
+    if not global_features.empty:
+        long_master["GLOBAL_KEY"] = "__GLOBAL__"
+        long_master = long_master.merge(global_features, on="GLOBAL_KEY", how="left").drop(columns=["GLOBAL_KEY"])
     long_path = args.outdir / "ASV_master_long.tsv"
     long_master.to_csv(long_path, sep="\t", index=False)
     info(f"Wrote long master: {long_path} ({long_master.shape[0]} rows, {long_master.shape[1]} cols)")
@@ -530,6 +618,9 @@ def main() -> None:
 
     count_master = asv_counts.merge(meta_rollup, on="ASV_ID", how="left")
     count_master = count_master.merge(ds_features, on="ASV_ID", how="left")
+    if not global_features.empty:
+        count_master["GLOBAL_KEY"] = "__GLOBAL__"
+        count_master = count_master.merge(global_features, on="GLOBAL_KEY", how="left").drop(columns=["GLOBAL_KEY"])
     count_path = args.outdir / "ASV_master_count_wide.tsv"
     count_master.to_csv(count_path, sep="\t", index=False)
     info(f"Wrote count-style master: {count_path} ({count_master.shape[0]} rows, {count_master.shape[1]} cols)")

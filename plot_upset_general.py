@@ -31,7 +31,8 @@ Outputs
 For each suite, script writes:
 - UpSet unique membership plot (counts of unique features)
 - UpSet weighted plot (abundance-weighted; stacked by group)
-- Venn plot (2-3 sets via matplotlib-venn if installed; 4-6 sets via venn if installed)
+- Venn plot (counts; 2-3 sets via matplotlib-venn if installed; 4-6 sets via venn if installed)
+- Weighted Venn plot (2-3 sets only; abundance-weighted areas with exact sum labels)
 - presence table TSV (exclusive membership lists)
 - sum table TSV (exclusive membership abundance sums)
 
@@ -174,6 +175,157 @@ def exclusive_sets(name_to_set: Mapping[str, set]) -> Dict[Tuple[str, ...], List
             if members:
                 out[tuple(combo)] = sorted(members)
     return out
+
+
+def exclusive_value_sums(
+    name_to_set: Mapping[str, set],
+    per_feature_total: Mapping[str, float],
+) -> Dict[Tuple[str, ...], float]:
+    """
+    Sum feature totals within each exclusive overlap region.
+    """
+    exclusive = exclusive_sets(name_to_set)
+    return {
+        combo: float(sum(per_feature_total.get(feature_id, 0.0) for feature_id in feature_ids))
+        for combo, feature_ids in exclusive.items()
+    }
+
+
+def venn3_subset_values(
+    names: Sequence[str],
+    combo_values: Mapping[Tuple[str, ...], float],
+) -> Dict[str, float]:
+    """
+    Map tuple-based subset keys onto matplotlib-venn's binary subset ids.
+    """
+    subset_ids = ("100", "010", "110", "001", "101", "011", "111")
+    subsets = {subset_id: 0.0 for subset_id in subset_ids}
+    for combo, value in combo_values.items():
+        key = "".join("1" if name in set(combo) else "0" for name in names)
+        if key != "000":
+            subsets[key] = float(value)
+    return subsets
+
+
+def venn2_subset_values(
+    names: Sequence[str],
+    combo_values: Mapping[Tuple[str, ...], float],
+) -> Dict[str, float]:
+    """
+    Map tuple-based subset keys onto matplotlib-venn's binary subset ids.
+    """
+    subset_ids = ("10", "01", "11")
+    subsets = {subset_id: 0.0 for subset_id in subset_ids}
+    for combo, value in combo_values.items():
+        key = "".join("1" if name in set(combo) else "0" for name in names)
+        if key != "00":
+            subsets[key] = float(value)
+    return subsets
+
+
+def compress_venn_layout_sizes(subsets: Mapping[str, float]) -> Dict[str, float]:
+    """
+    Keep all non-zero regions visible without letting extreme dynamic ranges
+    collapse small intersections out of the diagram.
+    """
+    compressed = {}
+    for subset_id, value in subsets.items():
+        if value <= 0:
+            compressed[subset_id] = 0.0
+            continue
+        compressed[subset_id] = max(float(np.log10(value + 1.0)), 0.4)
+    return compressed
+
+
+def format_venn_value(value: float) -> str:
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def venn_fallback_position(diagram, subset_id: str) -> Optional[Tuple[float, float]]:
+    """
+    Approximate a label position when matplotlib-venn omits one for a tiny
+    but non-zero region.
+    """
+    centers = getattr(diagram, "centers", None)
+    if centers is None:
+        return None
+
+    points = [np.asarray(center, dtype=float) for center in centers]
+    radii = getattr(diagram, "radii", None)
+    mean_radius = float(np.mean(radii)) if radii is not None else 0.25
+    offset = max(mean_radius * 0.32, 0.08)
+
+    included = [idx for idx, flag in enumerate(subset_id) if flag == "1"]
+    excluded = [idx for idx, flag in enumerate(subset_id) if flag == "0"]
+
+    if len(included) == len(points):
+        return tuple(np.mean(points, axis=0))
+
+    if len(included) == 1 and excluded:
+        origin = points[included[0]]
+        away = origin - np.mean([points[idx] for idx in excluded], axis=0)
+    elif len(included) == 2 and len(excluded) == 1:
+        origin = np.mean([points[idx] for idx in included], axis=0)
+        away = origin - points[excluded[0]]
+    else:
+        return None
+
+    norm = float(np.linalg.norm(away))
+    if norm < 1e-9:
+        return tuple(origin)
+    return tuple(origin + (away / norm) * offset)
+
+
+def apply_venn_labels(diagram, subset_values: Mapping[str, float], ax) -> None:
+    for subset_id, actual_value in subset_values.items():
+        text = format_venn_value(actual_value) if actual_value > 0 else ""
+        label = diagram.get_label_by_id(subset_id)
+        if label is not None:
+            label.set_text(text)
+            continue
+        if not text:
+            continue
+        pos = venn_fallback_position(diagram, subset_id)
+        if pos is None:
+            continue
+        ax.text(pos[0], pos[1], text, ha="center", va="center", fontsize=6, color="#262626")
+
+
+def plot_venn2_values(
+    names: Sequence[str],
+    subset_values: Mapping[str, float],
+    colors: Mapping[str, str],
+):
+    layout_sizes = compress_venn_layout_sizes(subset_values)
+    diagram = venn2(
+        subsets=layout_sizes,
+        set_labels=tuple(names),
+        set_colors=(colors[names[0]], colors[names[1]]),
+        alpha=0.6,
+    )
+    apply_venn_labels(diagram, subset_values, plt.gca())
+    return diagram
+
+
+def plot_venn3_values(
+    names: Sequence[str],
+    subset_values: Mapping[str, float],
+    colors: Mapping[str, str],
+):
+    """
+    Render a 3-set Venn using compressed layout sizes and exact displayed labels.
+    """
+    layout_sizes = compress_venn_layout_sizes(subset_values)
+    diagram = venn3(
+        subsets=layout_sizes,
+        set_labels=tuple(names),
+        set_colors=(colors[names[0]], colors[names[1]], colors[names[2]]),
+        alpha=0.6,
+    )
+    apply_venn_labels(diagram, subset_values, plt.gca())
+    return diagram
 
 
 # ---------- IO ----------
@@ -334,6 +486,7 @@ def plot_venn(
     out_base: Path,
     formats: Sequence[str],
     weighted_labels: Optional[Mapping[Tuple[str, ...], float]] = None,
+    plot_name: str = "venn",
 ) -> None:
     """
     2–3 sets => matplotlib-venn (if available)
@@ -344,43 +497,37 @@ def plot_venn(
 
     if len(names) == 2 and _HAVE_MPL_VENN:
         fig = plt.figure(figsize=(6, 6))
-        venn2([sets[0], sets[1]], tuple(names), set_colors=(colors[names[0]], colors[names[1]]), alpha=0.6)
+        if weighted_labels is None:
+            exclusive = exclusive_sets(group_sets)
+            subset_values = venn2_subset_values(
+                names,
+                {combo: float(len(features)) for combo, features in exclusive.items()},
+            )
+        else:
+            subset_values = venn2_subset_values(names, weighted_labels)
+        plot_venn2_values(names, subset_values, colors)
         plt.title(title)
-        savefig_multi(fig, out_base, "venn", formats)
+        savefig_multi(fig, out_base, plot_name, formats)
         return
 
     if len(names) == 3 and _HAVE_MPL_VENN:
         fig = plt.figure(figsize=(6, 6))
         if weighted_labels is None:
-            venn3(
-                [sets[0], sets[1], sets[2]],
-                tuple(names),
-                set_colors=(colors[names[0]], colors[names[1]], colors[names[2]]),
-                alpha=0.6,
+            exclusive = exclusive_sets(group_sets)
+            subset_values = venn3_subset_values(
+                names,
+                {combo: float(len(features)) for combo, features in exclusive.items()},
             )
+            plot_venn3_values(names, subset_values, colors)
         else:
-            label_map = {
-                (names[0],): "100",
-                (names[1],): "010",
-                (names[2],): "001",
-                (names[0], names[1]): "110",
-                (names[0], names[2]): "101",
-                (names[1], names[2]): "011",
-                (names[0], names[1], names[2]): "111",
-            }
-            subsets = {}
-            for combo, val in weighted_labels.items():
-                key = tuple(sorted(combo))
-                if key in label_map:
-                    subsets[label_map[key]] = float(val)
-            venn3(
-                subsets=subsets,
-                set_labels=tuple(names),
-                set_colors=(colors[names[0]], colors[names[1]], colors[names[2]]),
-                alpha=0.6,
-            )
+            subset_values = venn3_subset_values(names, weighted_labels)
+            plot_venn3_values(names, subset_values, colors)
         plt.title(title)
-        savefig_multi(fig, out_base, "venn", formats)
+        savefig_multi(fig, out_base, plot_name, formats)
+        return
+
+    if weighted_labels is not None and len(names) > 3:
+        print(f"[WARN] Weighted Venn plotting is only supported for 2-3 sets; got {len(names)}. Skipping.")
         return
 
     if 4 <= len(names) <= 6 and _HAVE_VENN:
@@ -398,7 +545,7 @@ def plot_venn(
             alpha=0.45,
         )
         ax.set_title(title)
-        savefig_multi(fig, out_base, "venn", formats)
+        savefig_multi(fig, out_base, plot_name, formats)
         plt.close(fig)
         return
 
@@ -443,7 +590,7 @@ def run_suite(
     suite keys (JSON):
       name: str (required)
       groups: list[str] (required) - labels from metadata[group_col]
-      plots: list[str] optional, any of: ["upset","upset_weighted","venn"]
+      plots: list[str] optional, any of: ["upset","upset_weighted","venn","venn_weighted"]
       tables: bool optional (default true)
       title: str optional (default derived)
     """
@@ -487,6 +634,17 @@ def run_suite(
 
     if "venn" in plots:
         plot_venn(group_sets, colors, title, plot_base, formats)
+
+    if "venn_weighted" in plots:
+        plot_venn(
+            group_sets,
+            colors,
+            f"{title} (weighted)",
+            plot_base,
+            formats,
+            weighted_labels=exclusive_value_sums(group_sets, feat_total),
+            plot_name="venn_weighted",
+        )
 
     if tables:
         write_presence_and_sums(group_sets, feat_total, table_base, name)
