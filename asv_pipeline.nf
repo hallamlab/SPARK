@@ -361,6 +361,15 @@ if( !networkModulesEnvFile.exists() ) {
 }
 log.info "Using network modules Conda/Mamba env definition: ${networkModulesCondaEnvPath}"
 
+def masterSummaryEnvConfigPath = config.environments?.master_summary
+def resolvedMasterSummaryEnvPath = masterSummaryEnvConfigPath ? resolveOptionalPath(masterSummaryEnvConfigPath, configRoot) : null
+def masterSummaryCondaEnvPath = resolvedMasterSummaryEnvPath ?: defaultAdvancedEnvPath
+def masterSummaryEnvFile = file(masterSummaryCondaEnvPath)
+if( !masterSummaryEnvFile.exists() ) {
+    exit 1, "Master summary conda environment YAML not found: ${masterSummaryCondaEnvPath}"
+}
+log.info "Using master summary Conda/Mamba env definition: ${masterSummaryCondaEnvPath}"
+
 def plotUpsetEnvConfigPath = config.environments?.plot_upset
 def resolvedPlotUpsetEnvPath = plotUpsetEnvConfigPath ? resolveOptionalPath(plotUpsetEnvConfigPath, configRoot) : null
 def plotUpsetCondaEnvPath = resolvedPlotUpsetEnvPath ?: defaultAdvancedEnvPath
@@ -525,6 +534,11 @@ if( !graphNetworkScriptFile.exists() ) {
     exit 1, "graph_network.py not found in project directory"
 }
 def graphNetworkScriptPath = graphNetworkScriptFile.canonicalPath
+def masterSummaryScriptFile = new File("${projectDir}/summary/build_master_asv_summary.py")
+if( !masterSummaryScriptFile.exists() ) {
+    exit 1, "summary/build_master_asv_summary.py not found in project directory"
+}
+def masterSummaryScriptPath = masterSummaryScriptFile.canonicalPath
 def emptyModulesScriptFile = new File("${projectDir}/empty_modules.tsv")
 if( !emptyModulesScriptFile.exists() ) {
     exit 1, "empty_modules.tsv not found in project directory"
@@ -818,6 +832,10 @@ def sankeyOutputPrefix = sankeyConfig.output_prefix ?: "metadata/data_loss_sanke
 def sankeyTitle = sankeyConfig.title ?: "Data Loss Flow"
 def sankeyMakeLabeled = (sankeyConfig.make_labeled == null) ? true : (sankeyConfig.make_labeled as boolean)
 def sankeyMakeUnlabeled = (sankeyConfig.make_unlabeled == null) ? true : (sankeyConfig.make_unlabeled as boolean)
+def sankeyArrangement = (sankeyConfig.arrangement ?: 'snap').toString().trim().toLowerCase()
+if( !(sankeyArrangement in ['snap', 'perpendicular', 'freeform', 'fixed']) ) {
+    exit 1, "Invalid sankey.arrangement '${sankeyArrangement}'. Allowed: snap, perpendicular, freeform, fixed"
+}
 if( sankeyEnabled && filterCountsEnabled && !filterCountsSaveIntermediates ) {
     exit 1, "Sankey requires filter_counts.save_intermediates to be true to access intermediate tables"
 }
@@ -841,7 +859,7 @@ if( metadataPlotsEnabled && (!metadataPlotsMetadataPath || !new File(metadataPlo
 }
 def metadataPlotsSubDir = metadataPlotsConfig.sub_dir ?: '.'
 def metadataPlotsSampleCol = metadataPlotsConfig.sample_col ?: 'sampleID'
-def metadataPlotsTypeCol = metadataPlotsConfig.type_col ?: 'Depth'
+def metadataPlotsTypeCol = metadataPlotsConfig.type_col ?: (metadataPlotsConfig.group1_col ?: 'Depth')
 def metadataPlotsColorCol = metadataPlotsConfig.color_col ?: 'Color'
 def metadataPlotsBiochemAssignmentsPath = metadataPlotsConfig.biochem_assignments ? resolveOptionalPath(metadataPlotsConfig.biochem_assignments, configRoot) : null
 def metadataPlotsBiochemSampleCol = metadataPlotsConfig.biochem_sample_col ?: 'cruise_year_month_depth'
@@ -886,6 +904,13 @@ if( metadataKeepTypesRaw instanceof List ) {
 } else if( metadataKeepTypesRaw ) {
     metadataKeepTypes = metadataKeepTypesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
 }
+def metadataGroupOrderRaw = metadataPlotsConfig.group_order
+List<String> metadataPlotsGroupOrder = []
+if( metadataGroupOrderRaw instanceof List ) {
+    metadataPlotsGroupOrder = metadataGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( metadataGroupOrderRaw ) {
+    metadataPlotsGroupOrder = metadataGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
 def metadataIncludeRankRaw = metadataPlotsConfig.include_rank
 List<String> metadataIncludeRank = []
 if( metadataIncludeRankRaw instanceof List ) {
@@ -907,6 +932,7 @@ boolean batchCorrectionEnabled = metadataPlotsEnabled && (batchCorrectionConfig.
 def batchCorrectionOutputDir = batchCorrectionConfig.output_dir ?: 'batch_correction'
 def batchCorrectionOutputDirAbs = new File(outputDir, batchCorrectionOutputDir).canonicalPath
 def batchCorrectionBatchCol = batchCorrectionConfig.batch_col ?: 'batch'
+def batchCorrectionSampleIdCol = batchCorrectionConfig.sample_id_col ?: metadataPlotsSampleCol
 def batchCorrectionOrientation = batchCorrectionConfig.asv_orientation ?: 'features_rows'
 def batchBiologicalCovariates = batchCorrectionConfig.biological_covariates ? batchCorrectionConfig.biological_covariates.toString().trim() : ''
 def batchBiologicalColorCols = batchCorrectionConfig.biological_color_col ?: 'Depth'
@@ -935,6 +961,7 @@ def outlierConfig = config.outlier_detection ?: [:]
 boolean outlierEnabled = batchCorrectionEnabled && (outlierConfig.containsKey('enabled') ? (outlierConfig.enabled as boolean) : true)
 def outlierOutputDir = outlierConfig.output_dir ?: 'outliers_corrected'
 def outlierOutputDirAbs = new File(outputDir, outlierOutputDir).canonicalPath
+def outlierSampleIdCol = outlierConfig.sample_id_col ?: (outlierConfig.sample_col ?: metadataPlotsSampleCol)
 def outlierGroupColsRaw = outlierConfig.group_cols
 List<String> outlierGroupCols = []
 if( outlierGroupColsRaw instanceof List ) {
@@ -965,8 +992,16 @@ def outlierHdbMetric = outlierConfig.hdbscan_metric ?: 'euclidean'
 
 def collectorsConfig = config.collectors_curve ?: [:]
 boolean collectorsEnabled = metadataPlotsEnabled && (collectorsConfig.containsKey('enabled') ? (collectorsConfig.enabled as boolean) : true)
-def collectorsGroupCol = collectorsConfig.group_col ?: 'Depth'
+def collectorsSampleCol = collectorsConfig.sample_col ?: metadataPlotsSampleCol
+def collectorsGroupCol = collectorsConfig.group_col ?: (collectorsConfig.group1_col ?: metadataPlotsTypeCol)
 def collectorsColorCol = collectorsConfig.color_col ?: 'Color'
+def collectorsGroupOrderRaw = collectorsConfig.group_order ?: metadataPlotsGroupOrder
+List<String> collectorsGroupOrder = []
+if( collectorsGroupOrderRaw instanceof List ) {
+    collectorsGroupOrder = collectorsGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( collectorsGroupOrderRaw ) {
+    collectorsGroupOrder = collectorsGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
 def collectorsPermutations = collectorsConfig.permutations ? (collectorsConfig.permutations as int) : 999
 def collectorsSeed = collectorsConfig.seed ? (collectorsConfig.seed as int) : 42
 def collectorsOutPrefix = collectorsConfig.out_prefix ?: 'metadata/collectors_curve'
@@ -988,11 +1023,25 @@ def plotUpsetSubDir = plotUpsetConfig.sub_dir ?: '.'
 def plotUpsetDomain = plotUpsetConfig.domain ?: 'micro'
 def plotUpsetTaxonomyPath = plotUpsetConfig.taxonomy_path ? resolveOptionalPath(plotUpsetConfig.taxonomy_path, configRoot) : null
 def plotUpsetSampleIdCol = plotUpsetConfig.sample_id_col ?: metadataPlotsSampleCol
-def plotUpsetGroupCol = plotUpsetConfig.group_col ?: metadataPlotsTypeCol
+def plotUpsetGroupCol = plotUpsetConfig.group_col ?: (plotUpsetConfig.group1_col ?: metadataPlotsTypeCol)
 def plotUpsetColorCol = plotUpsetConfig.color_col ?: metadataPlotsColorCol
-def plotUpsetSubsetGroups = plotUpsetConfig.subset_groups ? plotUpsetConfig.subset_groups.toString().trim() : ''
+def plotUpsetGroupOrderRaw = plotUpsetConfig.group_order ?: metadataPlotsGroupOrder
+List<String> plotUpsetGroupOrder = []
+if( plotUpsetGroupOrderRaw instanceof List ) {
+    plotUpsetGroupOrder = plotUpsetGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( plotUpsetGroupOrderRaw ) {
+    plotUpsetGroupOrder = plotUpsetGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def plotUpsetSubsetGroupsRaw = plotUpsetConfig.subset_groups
+List<String> plotUpsetSubsetGroups = []
+if( plotUpsetSubsetGroupsRaw instanceof List ) {
+    plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.collect { it.toString().trim() }.findAll { it }
+} else if( plotUpsetSubsetGroupsRaw ) {
+    plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
 boolean plotUpsetSkipVenn = plotUpsetConfig.containsKey('skip_venn') ? (plotUpsetConfig.skip_venn as boolean) : true
 def plotUpsetFormats = plotUpsetConfig.formats ?: 'pdf,svg,png'
+def plotUpsetFontSize = plotUpsetConfig.font_size != null ? (plotUpsetConfig.font_size as double) : 12d
 boolean plotUpsetRawOnly = plotUpsetConfig.containsKey('raw_only') ? (plotUpsetConfig.raw_only as boolean) : false
 boolean plotUpsetFinalOnly = plotUpsetConfig.containsKey('final_only') ? (plotUpsetConfig.final_only as boolean) : false
 if( plotUpsetRawOnly && plotUpsetFinalOnly ) {
@@ -1009,6 +1058,25 @@ def bubbleplotterOutputPrefix = bubbleplotterConfig.output_prefix ?: 'metadata/b
 def bubbleplotterOutputPrefixAbs = new File(outputDir, bubbleplotterOutputPrefix).canonicalPath
 def bubbleplotterOutputDirAbs = (new File(bubbleplotterOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
 def bubbleplotterFormats = bubbleplotterConfig.formats ?: 'pdf,png'
+def bubbleplotterCountCol = bubbleplotterConfig.count_col ?: 'count'
+def bubbleplotterSampleCol = bubbleplotterConfig.sample_col ?: metadataPlotsSampleCol
+def bubbleplotterDepthCol = bubbleplotterConfig.group1_col ?: (bubbleplotterConfig.depth_col ?: metadataPlotsTypeCol)
+def bubbleplotterColorCol = bubbleplotterConfig.color_col ?: metadataPlotsColorCol
+def bubbleplotterMonthCol = bubbleplotterConfig.group2_col ?: (bubbleplotterConfig.month_col ?: 'Month')
+def bubbleplotterGroup1OrderRaw = bubbleplotterConfig.group1_order ?: metadataPlotsGroupOrder
+List<String> bubbleplotterGroup1Order = []
+if( bubbleplotterGroup1OrderRaw instanceof List ) {
+    bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( bubbleplotterGroup1OrderRaw ) {
+    bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def bubbleplotterGroup2OrderRaw = bubbleplotterConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
+List<String> bubbleplotterGroup2Order = []
+if( bubbleplotterGroup2OrderRaw instanceof List ) {
+    bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( bubbleplotterGroup2OrderRaw ) {
+    bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
 def bubbleplotterFigsize = bubbleplotterConfig.figsize ?: '32,60'
 def bubbleplotterScale = bubbleplotterConfig.bubble_scale != null ? (bubbleplotterConfig.bubble_scale as double) : 10d
 boolean bubbleplotterNoAutoSize = bubbleplotterConfig.containsKey('no_auto_size') ? (bubbleplotterConfig.no_auto_size as boolean) : true
@@ -1022,11 +1090,36 @@ boolean umapClusteringEnabled = umapClusteringRequested
 def umapClusteringOutputPrefix = umapClusteringConfig.output_prefix ?: 'metadata/umap_clustering'
 def umapClusteringOutputPrefixAbs = new File(outputDir, umapClusteringOutputPrefix).canonicalPath
 def umapClusteringOutputDirAbs = (new File(umapClusteringOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
+def umapClusteringSampleCol = umapClusteringConfig.sample_col ?: metadataPlotsSampleCol
+def umapClusteringCountCol = umapClusteringConfig.count_col ?: 'count'
+def umapClusteringDepthCol = umapClusteringConfig.group1_col ?: (umapClusteringConfig.depth_col ?: metadataPlotsTypeCol)
+def umapClusteringColorCol = umapClusteringConfig.color_col ?: metadataPlotsColorCol
+def umapClusteringSecondaryCol = umapClusteringConfig.group2_col ?: (umapClusteringConfig.secondary_col ?: (umapClusteringConfig.month_col ?: 'Month'))
+def umapClusteringGroup1OrderRaw = umapClusteringConfig.group1_order ?: metadataPlotsGroupOrder
+List<String> umapClusteringGroup1Order = []
+if( umapClusteringGroup1OrderRaw instanceof List ) {
+    umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( umapClusteringGroup1OrderRaw ) {
+    umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def umapClusteringGroup2OrderRaw = umapClusteringConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
+List<String> umapClusteringGroup2Order = []
+if( umapClusteringGroup2OrderRaw instanceof List ) {
+    umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( umapClusteringGroup2OrderRaw ) {
+    umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
 def umapClusteringFormats = umapClusteringConfig.formats ?: 'pdf,png'
 def umapClusteringNormalize = umapClusteringConfig.normalize ?: 'clr'
 def umapClusteringTransform = umapClusteringConfig.transform ?: 'sqrt'
+def umapClusteringNeighbors = umapClusteringConfig.n_neighbors ? (umapClusteringConfig.n_neighbors as int) : 15
+def umapClusteringMinDist = umapClusteringConfig.min_dist != null ? (umapClusteringConfig.min_dist as double) : 0.1d
+def umapClusteringMetric = umapClusteringConfig.umap_metric ?: 'euclidean'
+def umapClusteringHdbscanMetric = umapClusteringConfig.hdbscan_metric ?: 'euclidean'
 def umapClusteringMinClusterSize = umapClusteringConfig.min_cluster_size ? (umapClusteringConfig.min_cluster_size as int) : 10
 def umapClusteringMinSamples = umapClusteringConfig.min_samples ? (umapClusteringConfig.min_samples as int) : 5
+boolean umapClusteringNoScale = (umapClusteringConfig.no_scale ?: false) as boolean
+def umapClusteringRandomState = umapClusteringConfig.random_state ? (umapClusteringConfig.random_state as int) : 42
 
 def biochemPreAsvConfig = config.biochem_pre_asv ?: [:]
 boolean biochemPreAsvEnabled = biochemPreAsvConfig.containsKey('enabled') ? (biochemPreAsvConfig.enabled as boolean) : false
@@ -1105,9 +1198,9 @@ def diversityMitoOutputDir = diversityConfig.mito_output_dir ?: 'mito/diversity'
 def diversityMitoOutputDirAbs = new File(outputDir, diversityMitoOutputDir).canonicalPath
 def diversityMitoInputPath = diversityConfig.mito_input ? resolveOptionalPath(diversityConfig.mito_input, configRoot) : new File(outputDir, 'mito/ASVs/ASV_target.mito.tsv').canonicalPath
 def diversitySampleCol = diversityConfig.sample_col ?: metadataPlotsSampleCol
-def diversityGroupCol = diversityConfig.group_col ?: 'Depth'
+def diversityGroupCol = diversityConfig.group_col ?: (diversityConfig.group1_col ?: metadataPlotsTypeCol)
 def diversityColorCol = diversityConfig.color_col ?: 'Color'
-def diversitySecondaryCol = diversityConfig.secondary_col ?: 'Month'
+def diversitySecondaryCol = diversityConfig.group2_col ?: (diversityConfig.secondary_col ?: 'Month')
 def diversityExcludeGroupsRaw = diversityConfig.exclude_groups
 List<String> diversityExcludeGroups = []
 if( diversityExcludeGroupsRaw instanceof List ) {
@@ -1115,7 +1208,7 @@ if( diversityExcludeGroupsRaw instanceof List ) {
 } else if( diversityExcludeGroupsRaw ) {
     diversityExcludeGroups = diversityExcludeGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
 }
-def diversityGroupOrderRaw = diversityConfig.group_order
+def diversityGroupOrderRaw = diversityConfig.group_order ?: metadataPlotsGroupOrder
 List<String> diversityGroupOrder = []
 if( diversityGroupOrderRaw instanceof List ) {
     diversityGroupOrder = diversityGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
@@ -1127,6 +1220,7 @@ def diversityUmapNeighbors = diversityConfig.umap_neighbors ? (diversityConfig.u
 def diversityUmapMinDist = diversityConfig.umap_min_dist != null ? (diversityConfig.umap_min_dist as double) : 0.01d
 def diversityPermutations = diversityConfig.permanova_perms ? (diversityConfig.permanova_perms as int) : 999
 def diversityRandomState = diversityConfig.random_state ? (diversityConfig.random_state as int) : 42
+def diversityBlockCol = diversityConfig.block_col ? diversityConfig.block_col.toString().trim() : ''
 boolean diversityVerbose = diversityConfig.containsKey('verbose') ? (diversityConfig.verbose as boolean) : true
 
 def indicspeciesConfig = config.indicspecies ?: [:]
@@ -1150,6 +1244,7 @@ boolean indicspeciesEnabled = indicspeciesRequested
 def indicspeciesSampleCol = indicspeciesConfig.sample_col ?: metadataPlotsSampleCol
 def indicspeciesPerms = indicspeciesConfig.perms ? (indicspeciesConfig.perms as int) : 999
 def indicspeciesMinN = indicspeciesConfig.min_n ? (indicspeciesConfig.min_n as int) : 2
+def indicspeciesBlockCol = indicspeciesConfig.block_col ? indicspeciesConfig.block_col.toString().trim() : ''
 def indicspeciesGroup1 = indicspeciesGroupCols[0]
 def indicspeciesGroup2 = indicspeciesGroupCols[1]
 def indicspeciesOutputDirAbs = new File(outputDir, "indicspecies").canonicalPath
@@ -1159,6 +1254,26 @@ def indicspeciesPlotOutputDir = indicspeciesConfig.plot_output_dir ?: 'indicspec
 def indicspeciesPlotOutputDirAbs = new File(outputDir, indicspeciesPlotOutputDir).canonicalPath
 def indicspeciesPlotVennPath = indicspeciesConfig.venn ? resolveOptionalPath(indicspeciesConfig.venn, configRoot) : null
 def indicspeciesPlotTaxonomyPath = indicspeciesConfig.taxonomy ? resolveOptionalPath(indicspeciesConfig.taxonomy, configRoot) : new File(outputDir, 'taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv').canonicalPath
+def indicspeciesColorCol = indicspeciesConfig.color_col ?: metadataPlotsColorCol
+def indicspeciesGroup1Palette = indicspeciesConfig.group1_palette ?: ''
+def indicspeciesGroup2Palette = indicspeciesConfig.group2_palette ?: 'Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3'
+def indicspeciesGroup1OrderRaw = indicspeciesConfig.group1_order ?: metadataPlotsGroupOrder
+List<String> indicspeciesGroup1Order = []
+if( indicspeciesGroup1OrderRaw instanceof List ) {
+    indicspeciesGroup1Order = indicspeciesGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( indicspeciesGroup1OrderRaw ) {
+    indicspeciesGroup1Order = indicspeciesGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def indicspeciesGroup2OrderRaw = indicspeciesConfig.group2_order
+List<String> indicspeciesGroup2Order = []
+if( indicspeciesGroup2OrderRaw instanceof List ) {
+    indicspeciesGroup2Order = indicspeciesGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( indicspeciesGroup2OrderRaw ) {
+    indicspeciesGroup2Order = indicspeciesGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def indicspeciesFocusGroup1Label = indicspeciesConfig.focus_group1_label ? indicspeciesConfig.focus_group1_label.toString().trim() : ''
+def indicspeciesFocusGroup2Label = indicspeciesConfig.focus_group2_label ? indicspeciesConfig.focus_group2_label.toString().trim() : ''
+boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
 
 def clustermapsConfig = config.clustermaps ?: [:]
 boolean clustermapsRequested = clustermapsConfig.containsKey('enabled') ? (clustermapsConfig.enabled as boolean) : false
@@ -1178,9 +1293,15 @@ def clustermapsAsvIdCol = clustermapsConfig.asv_id_col ?: 'ASV_ID'
 def clustermapsGroup1Col = clustermapsConfig.group1_col ?: 'type_group'
 def clustermapsGroup2Col = clustermapsConfig.group2_col ?: 'status'
 def clustermapsGroup3Col = clustermapsConfig.containsKey('group3_col') ? (clustermapsConfig.group3_col ?: '') : 'kit'
-def clustermapsGroup1Order = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: 'Oral Rinse,BAL,Lung Brush')
-def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: 'Skin Brush,Scope Flush')
-def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: 'Oral Rinse=#6A3D9A,BAL+Oral Rinse=#F19CBB,BAL=#0072B2,BAL+Lung Brush=#00FFFF,Lung Brush=#009E73,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000,not_indicator=#D3D3D3')
+def clustermapsGroup1OrderRaw = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: metadataPlotsGroupOrder)
+List<String> clustermapsGroup1Order = []
+if( clustermapsGroup1OrderRaw instanceof List ) {
+    clustermapsGroup1Order = clustermapsGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( clustermapsGroup1OrderRaw ) {
+    clustermapsGroup1Order = clustermapsGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: '')
+def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: '')
 def clustermapsGroup2Palette = clustermapsConfig.group2_palette ?: (clustermapsConfig.status_palette ?: 'Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3')
 def clustermapsGroup3Palette = clustermapsConfig.group3_palette ?: (clustermapsConfig.kit_palette ?: '')
 def clustermapsRanks = clustermapsConfig.ranks ?: 'Phylum,Class,Order,Family,Genus,Species,ASV_ID'
@@ -1247,7 +1368,38 @@ def networkLayoutSeed = spieceasiConfig.layout_seed ? (spieceasiConfig.layout_se
 def networkLayoutScale = spieceasiConfig.layout_scale != null ? (spieceasiConfig.layout_scale as double) : 3.0d
 def networkDegreeScale = spieceasiConfig.degree_scale != null ? (spieceasiConfig.degree_scale as double) : 80.0d
 def networkEdgeWidthScale = spieceasiConfig.edge_width_scale != null ? (spieceasiConfig.edge_width_scale as double) : 5.0d
-def networkIsaScale = spieceasiConfig.isa_scale != null ? (spieceasiConfig.isa_scale as double) : 500.0d
+def networkIsaScale = spieceasiConfig.isa_scale != null ? (spieceasiConfig.isa_scale as double) : 700.0d
+boolean networkModuleBestOnly = spieceasiConfig.containsKey('module_best_only') ? (spieceasiConfig.module_best_only as boolean) : true
+def networkModuleBestMinSize = spieceasiConfig.module_best_min_size ? (spieceasiConfig.module_best_min_size as int) : 5
+def networkModuleBestMinStability = spieceasiConfig.module_best_min_stability != null ? (spieceasiConfig.module_best_min_stability as double) : 0.7d
+boolean networkModuleIsaOnly = spieceasiConfig.containsKey('module_isa_only') ? (spieceasiConfig.module_isa_only as boolean) : false
+boolean networkModuleColorByIsa = spieceasiConfig.containsKey('module_color_by_isa') ? (spieceasiConfig.module_color_by_isa as boolean) : false
+def networkModuleIsaSource = spieceasiConfig.module_isa_source ? spieceasiConfig.module_isa_source.toString().trim().toLowerCase() : 'group1'
+if( !['group1','group2'].contains(networkModuleIsaSource) ) {
+    networkModuleIsaSource = 'group1'
+}
+def networkModuleIsaMinStat = spieceasiConfig.module_isa_min_stat != null ? (spieceasiConfig.module_isa_min_stat as double) : 0.25d
+def networkModuleIsaMaxQ = spieceasiConfig.module_isa_max_q != null ? (spieceasiConfig.module_isa_max_q as double) : 0.05d
+def networkMetadataPath = spieceasiConfig.metadata ? resolveOptionalPath(spieceasiConfig.metadata, configRoot) : metadataPlotsMetadataPath
+def networkColorCol = spieceasiConfig.color_col ?: indicspeciesColorCol
+def networkGroup1Palette = spieceasiConfig.group1_palette ?: indicspeciesGroup1Palette
+def networkGroup2Palette = spieceasiConfig.group2_palette ?: indicspeciesGroup2Palette
+def networkGroup1OrderRaw = spieceasiConfig.group1_order ?: indicspeciesGroup1Order
+List<String> networkGroup1Order = []
+if( networkGroup1OrderRaw instanceof List ) {
+    networkGroup1Order = networkGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( networkGroup1OrderRaw ) {
+    networkGroup1Order = networkGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def networkGroup2OrderRaw = spieceasiConfig.group2_order ?: indicspeciesGroup2Order
+List<String> networkGroup2Order = []
+if( networkGroup2OrderRaw instanceof List ) {
+    networkGroup2Order = networkGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+} else if( networkGroup2OrderRaw ) {
+    networkGroup2Order = networkGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def networkFocusGroup1Label = spieceasiConfig.focus_group1_label ? spieceasiConfig.focus_group1_label.toString().trim() : indicspeciesFocusGroup1Label
+def networkFocusGroup2Label = spieceasiConfig.focus_group2_label ? spieceasiConfig.focus_group2_label.toString().trim() : indicspeciesFocusGroup2Label
 boolean networkModulesEnabled = networkEnabled && (spieceasiConfig.containsKey('modules_enabled') ? (spieceasiConfig.modules_enabled as boolean) : false)
 def networkModuleMethodsRaw = spieceasiConfig.module_methods ?: 'leiden,louvain'
 List<String> networkModuleMethods = []
@@ -1278,6 +1430,29 @@ def networkModuleConsensusThreshold = spieceasiConfig.module_consensus_threshold
 def networkModuleSeed = spieceasiConfig.module_seed ? (spieceasiConfig.module_seed as int) : networkLayoutSeed
 def networkModulesSubPath = spieceasiConfig.modules_sub ? resolveOptionalPath(spieceasiConfig.modules_sub, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_sub.tsv").canonicalPath
 def networkModulesAllPath = spieceasiConfig.modules_all ? resolveOptionalPath(spieceasiConfig.modules_all, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_all.tsv").canonicalPath
+
+def masterSummaryConfig = config.master_summary ?: [:]
+boolean masterSummaryEnabled = masterSummaryConfig.containsKey('enabled') ? (masterSummaryConfig.enabled as boolean) : false
+if( masterSummaryEnabled && !metadataPlotsEnabled ) {
+    exit 1, "master_summary.enabled requires metadata_plots.enabled to be true"
+}
+def masterSummaryOutputDir = masterSummaryConfig.output_dir ?: 'summary/tables'
+def masterSummaryOutputDirAbs = resolveOutputRelative(masterSummaryOutputDir.toString(), outputDir)
+def masterSummaryClustermapsDir = masterSummaryConfig.clustermaps_dir ?: 'clustermaps'
+def masterSummaryClustermapsDirAbs = resolveOutputRelative(masterSummaryClustermapsDir.toString(), outputDir)
+def masterSummaryIndicspeciesDir = masterSummaryConfig.indicspecies_dir ?: 'indicspecies'
+def masterSummaryIndicspeciesDirAbs = resolveOutputRelative(masterSummaryIndicspeciesDir.toString(), outputDir)
+def masterSummarySpieceasiDir = masterSummaryConfig.spieceasi_dir ?: 'spieceasi'
+def masterSummarySpieceasiDirAbs = resolveOutputRelative(masterSummarySpieceasiDir.toString(), outputDir)
+def masterSummaryWhitelistRaw = masterSummaryConfig.whitelist
+List<String> masterSummaryWhitelist = []
+if( masterSummaryWhitelistRaw instanceof List ) {
+    masterSummaryWhitelist = masterSummaryWhitelistRaw.collect { it.toString().trim() }.findAll { it }
+} else if( masterSummaryWhitelistRaw ) {
+    masterSummaryWhitelist = masterSummaryWhitelistRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def masterSummaryWhitelistCsv = masterSummaryWhitelist ? masterSummaryWhitelist.join(',') : ''
+def masterSummaryMaxDirectCols = masterSummaryConfig.max_direct_cols ? (masterSummaryConfig.max_direct_cols as int) : 300
 
 workflow {
     def biochemReady = Channel.value(true)
@@ -1395,11 +1570,12 @@ def asvFinalForSpieceasi = null
         asvFinalForCollectors = batch_stage.asv_corrected_counts_int
         asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int
         umapResultsForTrajectory = batch_stage.umap_results
-        if( bubbleplotterEnabled || umapClusteringEnabled ) {
+        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled ) {
             def corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
                 asvMetaForClustermaps,
                 batch_stage.asv_corrected_counts_int
             )
+            asvMetaForClustermaps = corrected_asv_meta_stage.asv_meta_corrected
             asvMetaForBubbleUmap = corrected_asv_meta_stage.asv_meta_corrected
         }
     }
@@ -1482,8 +1658,9 @@ def asvFinalForSpieceasi = null
             modulesAllForNetwork = modulesAllFile.exists() ? Channel.value(file(networkModulesAllPath)) : Channel.value(file(emptyModulesPath))
         }
     }
+    def graph_network_stage = null
     if( networkEnabled ) {
-        GRAPH_NETWORK(
+        graph_network_stage = GRAPH_NETWORK(
             graphAllForNetwork,
             graphThrForNetwork,
             nodeFeaturesForNetwork,
@@ -1495,13 +1672,27 @@ def asvFinalForSpieceasi = null
             modulesAllForNetwork
         )
     }
+    def sankey_stage = null
     if( sankeyEnabled ) {
-        SANKEY(
+        sankey_stage = SANKEY(
             general_stats_stage.fastq_stats,
             general_stats_stage.filtered_stats,
             asv_counts_for_sankey,
             filter_counts_stage.filtered_decon,
             filter_counts_stage.filtered_micro
+        )
+    }
+    if( masterSummaryEnabled ) {
+        if( !asvMetaForClustermaps || !asvFinalForSpieceasi ) {
+            exit 1, "master_summary.enabled requires ASV_meta and ASV_final inputs from metadata/batch stages"
+        }
+        def masterSummaryNetworkDone = graph_network_stage ? graph_network_stage.done : Channel.value(file(emptyModulesPath))
+        def masterSummarySankeyDone = sankey_stage ? sankey_stage.done : Channel.value(file(emptyModulesPath))
+        MASTER_SUMMARY(
+            asvMetaForClustermaps,
+            asvFinalForSpieceasi,
+            masterSummaryNetworkDone,
+            masterSummarySankeyDone
         )
     }
 }
@@ -2647,6 +2838,7 @@ ${keepTypesArg}  --fastq-stats stats/"${fastq_stats}" \\
   --asv-decon ASVs/"${asv_decon_counts}" \\
   --asv-micro ASVs/"${asv_micro_counts}" \\
   --title "${sankeyTitle}" \\
+  --arrangement "${sankeyArrangement}" \\
   --output-prefix "${sankeyOutputPrefix}" \\
 ${labeledFlag}${unlabeledFlag}  --verbose
 
@@ -2722,12 +2914,16 @@ process PLOT_METADATA {
     def metadataBiochemJoinCsv = metadataPlotsBiochemJoinCols && !metadataPlotsBiochemJoinCols.isEmpty() ? metadataPlotsBiochemJoinCols.join(',') : ''
     def metadataStratTable = metadataPlotsStratificationTimeseriesPath ?: (biochemPreAsvEnabled ? "${biochemStratIndexDirAbs}/stratification_timeseries.tsv" : '')
     def metadataStratIncludeCsv = metadataPlotsStratIncludeCols && !metadataPlotsStratIncludeCols.isEmpty() ? metadataPlotsStratIncludeCols.join(',') : ''
+    def metadataKeepTypesCsv = metadataKeepTypes && !metadataKeepTypes.isEmpty() ? metadataKeepTypes.join(',') : ''
+    def metadataGroupOrderCsv = metadataPlotsGroupOrder && !metadataPlotsGroupOrder.isEmpty() ? metadataPlotsGroupOrder.join(',') : ''
     def metadataMicroFile = "${outputDir}/metadata/metadata_updated_micro.tsv"
     def metadataMitoFile = "${outputDir}/mito/metadata/metadata_updated_mito.tsv"
     def asvMetaMicroFile = "${outputDir}/metadata/ASV_meta_micro.tsv"
     def asvMetaMitoFile = "${outputDir}/mito/metadata/ASV_meta_mito.tsv"
-    def asvFinalMicroFile = "${outputDir}/ASVs/ASV_target.micro.tsv"
-    def asvFinalMitoFile = "${outputDir}/mito/ASVs/ASV_target.mito.tsv"
+    def asvTargetMicroFile = "${outputDir}/ASVs/ASV_target.micro.tsv"
+    def asvTargetMitoFile = "${outputDir}/mito/ASVs/ASV_target.mito.tsv"
+    def asvFinalMicroFile = "${outputDir}/ASVs/ASV_final.micro.tsv"
+    def asvFinalMitoFile = "${outputDir}/mito/ASVs/ASV_final.mito.tsv"
     def asvTaxTable = "${outputDir}/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv"
     """
 set -euo pipefail
@@ -2738,8 +2934,8 @@ cmd=(
   --sub-dir "${metadataPlotsSubDir}"
   --metadata "${metadataPlotsMetadataPath}"
   --taxonomy "${asvTaxTable}"
-  --asv-micro "${asvFinalMicroFile}"
-  --asv-mito "${asvFinalMitoFile}"
+  --asv-micro "${asvTargetMicroFile}"
+  --asv-mito "${asvTargetMitoFile}"
   --sample-id-col "${metadataPlotsSampleCol}"
   --group1-col "${metadataPlotsTypeCol}"
   --color-col "${metadataPlotsColorCol}"
@@ -2749,6 +2945,12 @@ cmd=(
   --verbose
 )
 ${includeRankAppend}
+if [[ -n "${metadataKeepTypesCsv}" ]]; then
+  cmd+=( --keep-types "${metadataKeepTypesCsv}" )
+fi
+if [[ -n "${metadataGroupOrderCsv}" ]]; then
+  cmd+=( --group-order "${metadataGroupOrderCsv}" )
+fi
 
 if [[ -n "${metadataBiochemTable}" ]]; then
   if [[ -f "${metadataBiochemTable}" ]]; then
@@ -2817,7 +3019,8 @@ process PLOT_UPSET {
 
     script:
     def taxonomyArg = plotUpsetTaxonomyPath ? """  --taxonomy-path "${plotUpsetTaxonomyPath}" \\\n""" : ''
-    def subsetGroupsArg = plotUpsetSubsetGroups ? """  --subset-groups "${plotUpsetSubsetGroups}" \\\n""" : ''
+    def groupOrderArg = plotUpsetGroupOrder && !plotUpsetGroupOrder.isEmpty() ? """  --group-order "${plotUpsetGroupOrder.join(',')}" \\\n""" : ''
+    def subsetGroupsArg = plotUpsetSubsetGroups && !plotUpsetSubsetGroups.isEmpty() ? """  --subset-groups "${plotUpsetSubsetGroups.join(',')}" \\\n""" : ''
     def skipVennArg = plotUpsetSkipVenn ? "  --skip-venn \\\n" : ''
     def rawOnlyArg = plotUpsetRawOnly ? "  --raw-only \\\n" : ''
     def finalOnlyArg = plotUpsetFinalOnly ? "  --final-only \\\n" : ''
@@ -2831,7 +3034,8 @@ python "${plotUpsetScriptPath}" \\
 ${taxonomyArg}  --sample-id-col "${plotUpsetSampleIdCol}" \\
   --group-col "${plotUpsetGroupCol}" \\
   --color-col "${plotUpsetColorCol}" \\
-${subsetGroupsArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}  --formats "${plotUpsetFormats}"
+${groupOrderArg}${subsetGroupsArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}  --formats "${plotUpsetFormats}" \\
+  --font-size ${plotUpsetFontSize}
 
 touch plot_upset.done
 """
@@ -2852,6 +3056,8 @@ process BUBBLEPLOTTER {
 
     script:
     def noAutoSizeArg = bubbleplotterNoAutoSize ? "  --no-auto-size \\\n" : ''
+    def bubbleplotterGroup1OrderArg = bubbleplotterGroup1Order && !bubbleplotterGroup1Order.isEmpty() ? """  --group1-order "${bubbleplotterGroup1Order.join(',')}" \\\n""" : ''
+    def bubbleplotterGroup2OrderArg = bubbleplotterGroup2Order && !bubbleplotterGroup2Order.isEmpty() ? """  --group2-order "${bubbleplotterGroup2Order.join(',')}" \\\n""" : ''
     """
 set -euo pipefail
 mkdir -p "${bubbleplotterOutputDirAbs}"
@@ -2859,7 +3065,12 @@ mkdir -p "${bubbleplotterOutputDirAbs}"
 python "${bubbleplotterScriptPath}" \\
   --input "${asv_meta}" \\
   --output-prefix "${bubbleplotterOutputPrefixAbs}" \\
-${noAutoSizeArg}  --formats "${bubbleplotterFormats}" \\
+  --count-col "${bubbleplotterCountCol}" \\
+  --sample-col "${bubbleplotterSampleCol}" \\
+  --group1-col "${bubbleplotterDepthCol}" \\
+  --color-col "${bubbleplotterColorCol}" \\
+  --group2-col "${bubbleplotterMonthCol}" \\
+${bubbleplotterGroup1OrderArg}${bubbleplotterGroup2OrderArg}${noAutoSizeArg}  --formats "${bubbleplotterFormats}" \\
   --figsize "${bubbleplotterFigsize}" \\
   --bubble-scale ${bubbleplotterScale}
 
@@ -2881,6 +3092,9 @@ process UMAP_CLUSTERING {
     path("umap_clustering.done"), emit: done
 
     script:
+    def umapGroup1OrderArg = umapClusteringGroup1Order && !umapClusteringGroup1Order.isEmpty() ? """  --group1-order "${umapClusteringGroup1Order.join(',')}" \\\n""" : ''
+    def umapGroup2OrderArg = umapClusteringGroup2Order && !umapClusteringGroup2Order.isEmpty() ? """  --group2-order "${umapClusteringGroup2Order.join(',')}" \\\n""" : ''
+    def umapNoScaleArg = umapClusteringNoScale ? "  --no-scale \\\n" : ''
     """
 set -euo pipefail
 mkdir -p "${umapClusteringOutputDirAbs}"
@@ -2888,11 +3102,21 @@ mkdir -p "${umapClusteringOutputDirAbs}"
 python "${umapClusteringScriptPath}" \\
   --input "${asv_meta}" \\
   --output-prefix "${umapClusteringOutputPrefixAbs}" \\
-  --formats "${umapClusteringFormats}" \\
+  --count-col "${umapClusteringCountCol}" \\
+  --sample-col "${umapClusteringSampleCol}" \\
+  --group1-col "${umapClusteringDepthCol}" \\
+  --color-col "${umapClusteringColorCol}" \\
+  --group2-col "${umapClusteringSecondaryCol}" \\
+${umapGroup1OrderArg}${umapGroup2OrderArg}  --formats "${umapClusteringFormats}" \\
   --normalize "${umapClusteringNormalize}" \\
   --transform "${umapClusteringTransform}" \\
+  --n-neighbors ${umapClusteringNeighbors} \\
+  --min-dist ${umapClusteringMinDist} \\
+  --umap-metric "${umapClusteringMetric}" \\
   --min-cluster-size ${umapClusteringMinClusterSize} \\
-  --min-samples ${umapClusteringMinSamples}
+  --min-samples ${umapClusteringMinSamples} \\
+  --hdbscan-metric "${umapClusteringHdbscanMetric}" \\
+${umapNoScaleArg}  --random-state ${umapClusteringRandomState}
 
 touch umap_clustering.done
 """
@@ -2916,6 +3140,8 @@ process ASV_BATCH_CORRECTION {
     path("asv_corrected_pseudocount.features_rows.tsv"), emit: asv_corrected_counts_int
     path("batch_correction_countspace_preservation.png"), emit: countspace_plot
     path("batch_correction_countspace_preservation_metrics.tsv"), emit: countspace_metrics
+    path("batch_correction_umap_comparison.png"), emit: umap_plot
+    path("batch_correction_statistics.tsv"), emit: correction_stats
     path("umap_hdbscan_results.tsv"), emit: umap_results
 
     script:
@@ -2932,6 +3158,8 @@ process ASV_BATCH_CORRECTION {
     def asvCorrectedPseudoFeaturesFile = "${batchCorrectionOutputDirAbs}/asv_corrected_pseudocount.features_rows.tsv"
     def countspacePlotFile = "${batchCorrectionOutputDirAbs}/batch_correction_countspace_preservation.png"
     def countspaceMetricsFile = "${batchCorrectionOutputDirAbs}/batch_correction_countspace_preservation_metrics.tsv"
+    def umapComparisonPngFile = "${batchCorrectionOutputDirAbs}/batch_correction_umap_comparison.png"
+    def batchCorrectionStatsFile = "${batchCorrectionOutputDirAbs}/batch_correction_statistics.tsv"
     def umapResultsFile = "${batchCorrectionOutputDirAbs}/umap_hdbscan_results.tsv"
     def asv_final = "ASVs/${asv_counts}"
     def updated_metadata = "metadata/${metadata_table}"
@@ -2944,6 +3172,7 @@ python "${batchCorrectionScriptPath}" \\
   --asv "${asv_final}" \\
   --metadata "${updated_metadata}" \\
   --asv-meta "${asv_metadata}" \\
+  --sample-id-col "${batchCorrectionSampleIdCol}" \\
   --batch-col "${batchCorrectionBatchCol}" \\
   --output-dir "${batchCorrectionOutputDir}" \\
   --asv-orientation "${batchCorrectionOrientation}" \\
@@ -2988,6 +3217,16 @@ if [[ ! -f "${countspaceMetricsFile}" ]]; then
   exit 1
 fi
 ln -sf "${countspaceMetricsFile}" batch_correction_countspace_preservation_metrics.tsv
+if [[ ! -f "${umapComparisonPngFile}" ]]; then
+  echo "Missing batch correction output: ${umapComparisonPngFile}" >&2
+  exit 1
+fi
+ln -sf "${umapComparisonPngFile}" batch_correction_umap_comparison.png
+if [[ ! -f "${batchCorrectionStatsFile}" ]]; then
+  echo "Missing batch correction output: ${batchCorrectionStatsFile}" >&2
+  exit 1
+fi
+ln -sf "${batchCorrectionStatsFile}" batch_correction_statistics.tsv
 if [[ ! -f "${umapResultsFile}" ]]; then
   echo "Missing batch correction output: ${umapResultsFile}" >&2
   exit 1
@@ -3001,7 +3240,7 @@ process ASV_META_FROM_CORRECTED {
     conda "${batchCorrectionCondaEnvPath}"
 
     when:
-    batchCorrectionEnabled && (bubbleplotterEnabled || umapClusteringEnabled)
+    batchCorrectionEnabled && (bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled)
 
     input:
     path(asv_meta)
@@ -3019,9 +3258,10 @@ import sys
 import pandas as pd
 
 asv_meta_path, corrected_counts_path, out_path = sys.argv[1:4]
-sample_col = "sampleID"
+sample_col = "${batchCorrectionSampleIdCol}"
 asv_col = "ASV_ID"
 count_col = "count"
+count_alias_col = "corr_count"
 
 meta = pd.read_csv(asv_meta_path, sep='\\t')
 if sample_col not in meta.columns or asv_col not in meta.columns:
@@ -3035,7 +3275,7 @@ corr_long = corr.stack().rename(count_col).reset_index()
 corr_long.columns = [asv_col, sample_col, count_col]
 corr_long[count_col] = pd.to_numeric(corr_long[count_col], errors='coerce').fillna(0.0).clip(lower=0.0)
 
-candidate_cols = [c for c in meta.columns if c not in {sample_col, asv_col, count_col}]
+candidate_cols = [c for c in meta.columns if c not in {sample_col, asv_col, count_col, count_alias_col}]
 asv_only_cols = []
 sample_only_cols = []
 for col in candidate_cols:
@@ -3052,8 +3292,9 @@ asv_meta_df = meta[[asv_col] + asv_only_cols].drop_duplicates(subset=[asv_col])
 out = corr_long.merge(sample_meta, on=sample_col, how='left')
 out = out.merge(asv_meta_df, on=asv_col, how='left')
 out = out[out[count_col] > 0]
+out[count_alias_col] = out[count_col]
 
-front = [sample_col, asv_col, count_col]
+front = [sample_col, asv_col, count_col, count_alias_col]
 remaining = [c for c in out.columns if c not in front]
 out = out[front + remaining]
 out.to_csv(out_path, sep='\\t', index=False)
@@ -3094,6 +3335,7 @@ python "${outlierCheckerScriptPath}" \\
   --data-dir "${outputDir}" \\
   --asv "${asvClrAfterFile}" \\
   --metadata "${updated_metadata}" \\
+  --sample-id-col "${outlierSampleIdCol}" \\
   --output-dir "${outlierOutputDirAbs}" \\
   --group-cols "${groupColsArg}" \\
   --asv-orientation "${outlierOrientation}" \\
@@ -3123,15 +3365,17 @@ process COLLECTORS_CURVE {
     path(metadata_table)
 
     script:
+    def collectorsGroupOrderArg = collectorsGroupOrder && !collectorsGroupOrder.isEmpty() ? """  --group-order "${collectorsGroupOrder.join(',')}" \\\n""" : ''
     """
 set -euo pipefail
 
 python "${collectorsCurveScriptPath}" \\
   --counts "${asv_counts}" \\
   --meta "${metadata_table}" \\
+  --sample-col "${collectorsSampleCol}" \\
   --group-col "${collectorsGroupCol}" \\
   --color-col "${collectorsColorCol}" \\
-  --permutations ${collectorsPermutations} \\
+${collectorsGroupOrderArg}  --permutations ${collectorsPermutations} \\
   --seed ${collectorsSeed} \\
   --out_prefix "${collectorsOutPrefixAbs}" \\
   --title "${collectorsTitle}" \\
@@ -3161,6 +3405,7 @@ process DIVERSITY_ANALYSIS {
     def secondaryColArg = diversitySecondaryCol ? """  --secondary-col "${diversitySecondaryCol}" \\\n""" : ''
     def excludeGroupsArg = diversityExcludeGroups && !diversityExcludeGroups.isEmpty() ? """  --exclude-groups "${diversityExcludeGroups.join(',')}" \\\n""" : ''
     def groupOrderArg = diversityGroupOrder && !diversityGroupOrder.isEmpty() ? """  --group-order "${diversityGroupOrder.join(',')}" \\\n""" : ''
+    def diversityBlockArg = diversityBlockCol ? """  --block-col "${diversityBlockCol}" \\\n""" : ''
     def verboseFlag = diversityVerbose ? "  --verbose\n" : ''
     def diversityRunMitoFlag = diversityRunMito ? '1' : '0'
     """
@@ -3191,7 +3436,7 @@ ${secondaryColArg}${excludeGroupsArg}${groupOrderArg}  --alpha-table "${diversit
   --output-dir "${diversityOutputDirAbs}" \\
   --umap-neighbors ${diversityUmapNeighbors} \\
   --umap-min-dist ${diversityUmapMinDist} \\
-  --permanova-perms ${diversityPermutations} \\
+${diversityBlockArg}  --permanova-perms ${diversityPermutations} \\
   --random-state ${diversityRandomState} \\
 ${verboseFlag}
 
@@ -3212,7 +3457,7 @@ ${secondaryColArg}${excludeGroupsArg}${groupOrderArg}    --alpha-table "${divers
     --mito-output-dir "${diversityMitoOutputDirAbs}" \\
     --umap-neighbors ${diversityUmapNeighbors} \\
     --umap-min-dist ${diversityUmapMinDist} \\
-    --permanova-perms ${diversityPermutations} \\
+${diversityBlockArg}    --permanova-perms ${diversityPermutations} \\
     --random-state ${diversityRandomState} \\
 ${verboseFlag}
 fi
@@ -3242,6 +3487,7 @@ process INDICSPECIES {
 
     script:
     def indicspeciesGroupColsArg = indicspeciesGroupCols.join(',')
+    def indicspeciesBlockArg = indicspeciesBlockCol ? """  --block-col "${indicspeciesBlockCol}" \\\n""" : ''
     def group1SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}_indicator_species_summary.tsv"
     def group2SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup2}_indicator_species_summary.tsv"
     def group1ResultsPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}_indicator_species_results.tsv"
@@ -3255,7 +3501,7 @@ Rscript "${indicspeciesScriptPath}" \\
   --meta "${metadata_table}" \\
   --sample-col "${indicspeciesSampleCol}" \\
   --group-cols "${indicspeciesGroupColsArg}" \\
-  --perms ${indicspeciesPerms} \\
+${indicspeciesBlockArg}  --perms ${indicspeciesPerms} \\
   --min-n ${indicspeciesMinN} \\
   --outdir "${outputDir}"
 
@@ -3339,6 +3585,17 @@ out_root = Path("${indicspeciesPlotOutputDirAbs}")
 pairs_mode = "${plotPairsMode}"
 plot_tax = Path("${plotTaxPath}") if "${plotTaxPath}" else None
 plot_venn = Path("${plotVennPath}") if "${plotVennPath}" else None
+metadata_path = Path("${metadataPlotsMetadataPath}") if "${metadataPlotsMetadataPath}" else None
+preferred_group1 = "${indicspeciesGroup1}".strip()
+preferred_group2 = "${indicspeciesGroup2}".strip()
+metadata_color_col = "${indicspeciesColorCol}".strip()
+group1_palette_cfg = "${indicspeciesGroup1Palette}"
+group2_palette_cfg = "${indicspeciesGroup2Palette}"
+group1_order_cfg = "${indicspeciesGroup1Order.join(',')}"
+group2_order_cfg = "${indicspeciesGroup2Order.join(',')}"
+focus_group1_cfg = "${indicspeciesFocusGroup1Label}"
+focus_group2_cfg = "${indicspeciesFocusGroup2Label}"
+label_focused_asvs = ${indicspeciesLabelFocusedAsvs ? 'True' : 'False'}
 
 result_files = sorted(Path(".").glob("*_indicator_species*_results.tsv"))
 if len(result_files) < 2:
@@ -3348,11 +3605,6 @@ if len(result_files) < 2:
     )
     raise SystemExit(0)
 
-if pairs_mode == "first_vs_rest":
-    pair_iter = [(result_files[0], f) for f in result_files[1:]]
-else:
-    pair_iter = list(itertools.combinations(result_files, 2))
-
 def clean_group_name(raw_name: str) -> str:
     name = raw_name
     if name.endswith("_results.tsv"):
@@ -3361,6 +3613,25 @@ def clean_group_name(raw_name: str) -> str:
         if name.endswith(suffix):
             name = name[: -len(suffix)]
     return name
+
+def orient_pair(a: Path, b: Path) -> tuple[Path, Path]:
+    an = clean_group_name(a.name)
+    bn = clean_group_name(b.name)
+    if an == preferred_group1 and bn == preferred_group2:
+        return a, b
+    if an == preferred_group2 and bn == preferred_group1:
+        return b, a
+    if an == preferred_group1:
+        return a, b
+    if bn == preferred_group1:
+        return b, a
+    return a, b
+
+if pairs_mode == "first_vs_rest":
+    raw_pairs = [(result_files[0], f) for f in result_files[1:]]
+else:
+    raw_pairs = list(itertools.combinations(result_files, 2))
+pair_iter = [orient_pair(a, b) for a, b in raw_pairs]
 
 def has_col(path: Path, col: str) -> bool:
     if not col:
@@ -3398,6 +3669,12 @@ for g1_file, g2_file in pair_iter:
         "--outdir",
         str(pair_out),
     ]
+    if metadata_path and metadata_path.is_file():
+        cmd.extend(["--metadata", str(metadata_path)])
+        cmd.extend(["--group1-meta-label-col", g1_name])
+        cmd.extend(["--group2-meta-label-col", g2_name])
+        if g1_name == preferred_group1 and metadata_color_col:
+            cmd.extend(["--group1-meta-color-col", metadata_color_col])
 
     if has_col(g1_file, g1_name):
         cmd.extend(["--group1-label-col", g1_name])
@@ -3415,6 +3692,20 @@ for g1_file, g2_file in pair_iter:
 
     if has_col(g2_file, f"{g2_name}_Marker"):
         cmd.extend(["--group2-marker-col", f"{g2_name}_Marker"])
+    if g1_name == preferred_group1 and group1_palette_cfg:
+        cmd.extend(["--group1-palette", group1_palette_cfg])
+    if g2_name == preferred_group2 and group2_palette_cfg:
+        cmd.extend(["--group2-palette", group2_palette_cfg])
+    if g1_name == preferred_group1 and group1_order_cfg:
+        cmd.extend(["--group1-order", group1_order_cfg])
+    if g2_name == preferred_group2 and group2_order_cfg:
+        cmd.extend(["--group2-order", group2_order_cfg])
+    if g1_name == preferred_group1 and focus_group1_cfg:
+        cmd.extend(["--focus-group1-label", focus_group1_cfg])
+    if g2_name == preferred_group2 and focus_group2_cfg:
+        cmd.extend(["--focus-group2-label", focus_group2_cfg])
+    if label_focused_asvs:
+        cmd.append("--label-focused-asvs")
     if plot_tax and plot_tax.is_file():
         cmd.extend(["--taxonomy", str(plot_tax)])
     if plot_venn and plot_venn.is_file():
@@ -3444,6 +3735,7 @@ process CLUSTERMAPS {
     script:
     def group3ColArg = clustermapsGroup3Col ? """  --group3-col "${clustermapsGroup3Col}" \\\n""" : ''
     def group3PaletteArg = clustermapsGroup3Palette ? """  --group3-palette "${clustermapsGroup3Palette}" \\\n""" : ''
+    def clustermapsGroup1OrderArg = clustermapsGroup1Order && !clustermapsGroup1Order.isEmpty() ? """  --group1-order "${clustermapsGroup1Order.join(',')}" \\\n""" : ''
     def clustermapsRunMitoFlag = clustermapsRunMito ? '1' : '0'
     def isaFileArg = clustermapsIsaFile ?: ''
     def isaSigColsArg = clustermapsIsaSignificanceCols ? """  --isa-significance-cols "${clustermapsIsaSignificanceCols}" \\\n""" : ''
@@ -3468,8 +3760,7 @@ if [[ "${clustermapsRunMitoFlag}" == "1" && -f "${clustermapsMitoInputPath}" ]];
     --asv-id-col "${clustermapsAsvIdCol}" \\
     --group1-col "${clustermapsGroup1Col}" \\
     --group2-col "${clustermapsGroup2Col}" \\
-${group3ColArg}    --group1-order "${clustermapsGroup1Order}" \\
-    --exclude-group1 "${clustermapsExcludeGroup1}" \\
+${group3ColArg}${clustermapsGroup1OrderArg}    --exclude-group1 "${clustermapsExcludeGroup1}" \\
     --group1-palette "${clustermapsGroup1Palette}" \\
     --group2-palette "${clustermapsGroup2Palette}" \\
 ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
@@ -3490,8 +3781,7 @@ else
     --asv-id-col "${clustermapsAsvIdCol}" \\
     --group1-col "${clustermapsGroup1Col}" \\
     --group2-col "${clustermapsGroup2Col}" \\
-${group3ColArg}    --group1-order "${clustermapsGroup1Order}" \\
-    --exclude-group1 "${clustermapsExcludeGroup1}" \\
+${group3ColArg}${clustermapsGroup1OrderArg}    --exclude-group1 "${clustermapsExcludeGroup1}" \\
     --group1-palette "${clustermapsGroup1Palette}" \\
     --group2-palette "${clustermapsGroup2Palette}" \\
 ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
@@ -3653,6 +3943,15 @@ process GRAPH_NETWORK {
 
     script:
     def networkModesArg = networkModes && !networkModes.isEmpty() ? """  --modes ${networkModes.collect { "\"${it}\"" }.join(' ')} \\\n""" : ''
+    def networkGroup1PaletteArg = networkGroup1Palette ? """  --group1-palette "${networkGroup1Palette}" \\\n""" : ''
+    def networkGroup2PaletteArg = networkGroup2Palette ? """  --group2-palette "${networkGroup2Palette}" \\\n""" : ''
+    def networkGroup1OrderArg = networkGroup1Order && !networkGroup1Order.isEmpty() ? """  --group1-order "${networkGroup1Order.join(',')}" \\\n""" : ''
+    def networkGroup2OrderArg = networkGroup2Order && !networkGroup2Order.isEmpty() ? """  --group2-order "${networkGroup2Order.join(',')}" \\\n""" : ''
+    def networkFocusGroup1Arg = networkFocusGroup1Label ? """  --focus-group1-label "${networkFocusGroup1Label}" \\\n""" : ''
+    def networkFocusGroup2Arg = networkFocusGroup2Label ? """  --focus-group2-label "${networkFocusGroup2Label}" \\\n""" : ''
+    def networkModuleBestOnlyArg = networkModuleBestOnly ? """  --module-best-only \\\n""" : ''
+    def networkModuleIsaOnlyArg = networkModuleIsaOnly ? """  --module-isa-only \\\n""" : ''
+    def networkModuleColorByIsaArg = networkModuleColorByIsa ? """  --module-color-by-isa \\\n""" : ''
     """
 set -euo pipefail
 mkdir -p "${spieceasiOutputDirAbs}"
@@ -3669,6 +3968,16 @@ python "${graphNetworkScriptPath}" \\
   --group2-summary "${group2_summary}" \\
   --group1-name "${indicspeciesGroup1}" \\
   --group2-name "${indicspeciesGroup2}" \\
+  --metadata "${networkMetadataPath}" \\
+  --sample-col "${indicspeciesSampleCol}" \\
+  --group1-col "${indicspeciesGroup1}" \\
+  --group2-col "${indicspeciesGroup2}" \\
+  --color-col "${networkColorCol}" \\
+${networkGroup1PaletteArg}${networkGroup2PaletteArg}${networkGroup1OrderArg}${networkGroup2OrderArg}${networkFocusGroup1Arg}${networkFocusGroup2Arg}${networkModuleBestOnlyArg}${networkModuleIsaOnlyArg}${networkModuleColorByIsaArg}  --module-best-min-size ${networkModuleBestMinSize} \\
+  --module-best-min-stability ${networkModuleBestMinStability} \\
+  --module-isa-source "${networkModuleIsaSource}" \\
+  --module-isa-min-stat ${networkModuleIsaMinStat} \\
+  --module-isa-max-q ${networkModuleIsaMaxQ} \\
   --modules-sub "${modules_sub}" \\
   --modules-all "${modules_all}" \\
 ${networkModesArg}  --layout-seed ${networkLayoutSeed} \\
@@ -3678,6 +3987,61 @@ ${networkModesArg}  --layout-seed ${networkLayoutSeed} \\
   --isa-scale ${networkIsaScale}
 
 touch network.done
+"""
+}
+
+process MASTER_SUMMARY {
+    cpus 1
+    conda "${masterSummaryCondaEnvPath}"
+
+    when:
+    masterSummaryEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+    path(dep_network)
+    path(dep_sankey)
+
+    output:
+    path("ASV_master_long.tsv"), optional: true, emit: master_long
+    path("ASV_master_count_wide.tsv"), optional: true, emit: master_count
+    path("ASV_master_source_manifest.tsv"), optional: true, emit: master_manifest
+    path("ASV_master_column_mapping.tsv"), optional: true, emit: master_colmap
+    path("ASV_master_column_collisions_original.tsv"), optional: true, emit: master_collisions
+    path("master_summary.done"), emit: done
+
+    script:
+    def whitelistArg = masterSummaryWhitelistCsv ? """  --whitelist "${masterSummaryWhitelistCsv}" \\\n""" : ''
+    """
+set -euo pipefail
+mkdir -p "${masterSummaryOutputDirAbs}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${masterSummaryClustermapsDirAbs}" \\
+  --indicspecies-dir "${masterSummaryIndicspeciesDirAbs}" \\
+  --spieceasi-dir "${masterSummarySpieceasiDirAbs}" \\
+${whitelistArg}  --outdir "${masterSummaryOutputDirAbs}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+link_if_exists() {
+  local src="\$1"
+  local dest="\$2"
+  if [[ -f "\${src}" ]]; then
+    ln -sf "\${src}" "\${dest}"
+  fi
+}
+
+link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_long.tsv" "ASV_master_long.tsv"
+link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_count_wide.tsv" "ASV_master_count_wide.tsv"
+link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_source_manifest.tsv" "ASV_master_source_manifest.tsv"
+link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_column_mapping.tsv" "ASV_master_column_mapping.tsv"
+link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_column_collisions_original.tsv" "ASV_master_column_collisions_original.tsv"
+
+touch master_summary.done
 """
 }
 

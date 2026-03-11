@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
         "--abundance-threshold",
         type=float,
         default=0.005,
-        help="Minimum relative abundance threshold (percent of total reads)"
+        help="Minimum relative abundance threshold (percent within a sample; ASV kept if threshold is met in >=1 sample)"
     )
     filtering.add_argument(
         "--min-consensus",
@@ -254,27 +254,43 @@ def filter_nontarget_asvs(
         print(f"[ERROR] Column '{biofactorial_col}' not found in nontarget table")
         print(f"[INFO] Available columns: {list(nontarget_df.columns)}")
         sys.exit(1)
-    
-    decon_df = nontarget_df.loc[nontarget_df[biofactorial_col] == 1]
-    print(f"[INFO] BioFactorial filtering: {len(nontarget_df)} → {len(decon_df)} ASVs")
-    
-    # Separate microbial vs mitochondrial
-    mito_mask = pd.Series(False, index=decon_df.index)
+
+    # Align nontarget table to all ASVs in count_df.
+    # Missing ASVs are treated as pass (=1) to avoid over-filtering when nontarget annotations are partial.
+    status_df = nontarget_df.reindex(count_df.index)
+    annotated_n = int(status_df[biofactorial_col].notna().sum())
+    coverage = (annotated_n / len(count_df) * 100) if len(count_df) else 0.0
+    print(
+        f"[INFO] Nontarget coverage: {annotated_n}/{len(count_df)} ASVs "
+        f"({coverage:.1f}%) have '{biofactorial_col}' annotations"
+    )
+    if annotated_n < len(count_df):
+        print(
+            "[WARN] Nontarget table is partial; ASVs missing from nontarget table "
+            "are treated as pass (1)."
+        )
+
+    bio_pass = status_df[biofactorial_col].fillna(1).eq(1)
+    decon_keep = bio_pass
+
+    # Separate microbial vs mitochondrial within decontaminated ASVs
+    mito_mask = pd.Series(False, index=count_df.index)
     for col in mito_cols:
-        if col in decon_df.columns:
-            mito_mask |= (decon_df[col] == 0)
+        if col in status_df.columns:
+            mito_mask |= status_df[col].fillna(1).eq(0)
         else:
             print(f"[WARN] Mitochondrial column '{col}' not found, skipping")
-    
-    micro_df = decon_df.loc[~mito_mask]
-    mito_df = decon_df.loc[mito_mask]
-    
-    print(f"[INFO] Separated: {len(micro_df)} microbial, {len(mito_df)} mitochondrial ASVs")
-    
+
+    micro_keep = decon_keep & (~mito_mask)
+    mito_keep = decon_keep & mito_mask
+
+    print(f"[INFO] BioFactorial filtering: {len(count_df)} → {int(decon_keep.sum())} ASVs")
+    print(f"[INFO] Separated: {int(micro_keep.sum())} microbial, {int(mito_keep.sum())} mitochondrial ASVs")
+
     # Filter count tables
-    decon_cnt_df = count_df.loc[count_df.index.isin(decon_df.index)]
-    micro_cnt_df = decon_cnt_df.loc[decon_cnt_df.index.isin(micro_df.index)]
-    mito_cnt_df = decon_cnt_df.loc[decon_cnt_df.index.isin(mito_df.index)]
+    decon_cnt_df = count_df.loc[decon_keep]
+    micro_cnt_df = count_df.loc[micro_keep]
+    mito_cnt_df = count_df.loc[mito_keep]
     
     return decon_cnt_df, micro_cnt_df, mito_cnt_df
 
@@ -284,23 +300,37 @@ def filter_by_abundance(
     threshold_pct: float
 ) -> pd.DataFrame:
     """
-    Filter ASVs by relative abundance threshold.
+    Filter ASVs by per-sample relative abundance threshold.
     
     Args:
         count_df: ASV count dataframe
-        threshold_pct: Minimum percent of total reads
+        threshold_pct: Minimum percent within a sample
     
     Returns:
         Filtered count dataframe
     """
-    total_reads = count_df.sum(axis=1).sum()
-    asv_reads = count_df.sum(axis=1)
-    relative_abundance = (asv_reads / total_reads) * 100
-    
-    filtered_df = count_df.loc[relative_abundance >= threshold_pct]
+    if count_df.empty:
+        print(f"[INFO] Abundance filtering skipped: input table is empty")
+        return count_df
+
+    sample_totals = count_df.sum(axis=0)
+    nonzero_samples = sample_totals > 0
+
+    if not nonzero_samples.any():
+        print("[WARN] All sample totals are zero; abundance filtering removed all ASVs")
+        return count_df.iloc[0:0]
+
+    per_sample_rel_abund = count_df.loc[:, nonzero_samples].div(
+        sample_totals[nonzero_samples], axis=1
+    ) * 100
+    keep_asvs = per_sample_rel_abund.ge(threshold_pct).any(axis=1)
+    filtered_df = count_df.loc[keep_asvs]
     
     removed = len(count_df) - len(filtered_df)
-    print(f"[INFO] Abundance filtering (>= {threshold_pct}%): {len(count_df)} → {len(filtered_df)} ASVs (removed {removed})")
+    print(
+        f"[INFO] Abundance filtering (>= {threshold_pct}% in >=1 sample): "
+        f"{len(count_df)} → {len(filtered_df)} ASVs (removed {removed})"
+    )
     
     return filtered_df
 
@@ -336,9 +366,19 @@ def filter_by_taxonomy(
     
     qual_tax_df = tax_df.loc[tax_filter]
     
-    # Filter count table
-    filtered_df = count_df.loc[count_df.index.isin(qual_tax_df.index)]
-    
+    annotated_n = int(count_df.index.isin(tax_df.index).sum())
+    coverage = (annotated_n / len(count_df) * 100) if len(count_df) else 0.0
+    print(f"[INFO] Taxonomy coverage: {annotated_n}/{len(count_df)} ASVs ({coverage:.1f}%)")
+    if annotated_n < len(count_df):
+        print(
+            "[WARN] Taxonomy table is partial; ASVs missing taxonomy are retained "
+            "and taxonomy filtering is applied only to annotated ASVs."
+        )
+
+    # Apply taxonomy filtering to annotated ASVs; keep unannotated ASVs.
+    keep_mask = (~count_df.index.isin(tax_df.index)) | (count_df.index.isin(qual_tax_df.index))
+    filtered_df = count_df.loc[keep_mask]
+
     removed = len(count_df) - len(filtered_df)
     print(f"[INFO] Taxonomy filtering: {len(count_df)} → {len(filtered_df)} ASVs (removed {removed})")
     

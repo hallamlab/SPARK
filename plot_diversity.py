@@ -23,7 +23,7 @@ python diversity_analytics.py \
   --distance-bray bray.tsv \
   --distance-jaccard jaccard.tsv \
   --exclude-groups "Skin Brush,Scope Flush" \
-  --group-order "Oral Rinse,BAL,Lung Brush" \
+  --group-order "Oral Rinse,BAL,Bronchial Brush" \
   --output-dir diversity_results
 """
 
@@ -43,7 +43,7 @@ import seaborn as sns
 import umap
 from skbio import DistanceMatrix
 from skbio.stats.distance import permanova
-from scipy.stats import ttest_ind
+from scipy.stats import ttest_ind, wilcoxon
 from statsmodels.stats.multitest import multipletests
 from statannotations.Annotator import Annotator
 
@@ -170,6 +170,110 @@ def pairwise_ttests_fdr(df: pd.DataFrame, group_col: str,
     return result_df
 
 
+def _paired_signflip_pvalue(diffs: np.ndarray, n_perm: int = 10000,
+                            random_state: int = 42) -> float:
+    """
+    Two-sided sign-flip permutation p-value for paired differences.
+    """
+    diffs = np.asarray(diffs, dtype=float)
+    diffs = diffs[np.isfinite(diffs)]
+    n = len(diffs)
+    if n == 0:
+        return np.nan
+    if np.allclose(diffs, 0.0):
+        return 1.0
+
+    observed = float(np.abs(np.mean(diffs)))
+    rng = np.random.default_rng(random_state)
+
+    # Exact sign-flip when feasible.
+    if n <= 15:
+        signs = np.array(np.meshgrid(*[[-1.0, 1.0]] * n), dtype=float).T.reshape(-1, n)
+    else:
+        signs = rng.choice([-1.0, 1.0], size=(int(max(1, n_perm)), n), replace=True)
+
+    perm_stats = np.abs((signs * diffs).mean(axis=1))
+    pval = (1.0 + np.sum(perm_stats >= observed)) / (1.0 + len(perm_stats))
+    return float(pval)
+
+
+def pairwise_blocked_alpha_fdr(df: pd.DataFrame, group_col: str,
+                               value_col: str, block_col: str,
+                               random_state: int = 42) -> pd.DataFrame:
+    """
+    Block-aware pairwise alpha testing with FDR correction.
+
+    For each group pair, values are averaged per (block, group) and compared
+    using a paired Wilcoxon signed-rank test across blocks with both groups.
+    If Wilcoxon fails (e.g., degenerate ties), falls back to sign-flip test.
+    """
+    results = []
+    groups = [g for g in df[group_col].dropna().unique()]
+
+    for group1, group2 in combinations(groups, 2):
+        sub = df[df[group_col].isin([group1, group2])].copy()
+        sub = sub[sub[value_col].notna() & sub[block_col].notna()]
+        if sub.empty:
+            continue
+
+        # Average repeated samples within a patient/block and group.
+        block_means = (
+            sub.groupby([block_col, group_col], dropna=True)[value_col]
+            .mean()
+            .unstack(group_col)
+        )
+        if group1 not in block_means.columns or group2 not in block_means.columns:
+            continue
+
+        paired = block_means[[group1, group2]].dropna()
+        n_blocks = int(len(paired))
+        if n_blocks < 2:
+            continue
+
+        diffs = (paired[group1] - paired[group2]).to_numpy(dtype=float)
+        mean1 = float(paired[group1].mean())
+        mean2 = float(paired[group2].mean())
+        median_diff = float(np.median(diffs))
+
+        if np.allclose(diffs, 0.0):
+            stat = 0.0
+            pval = 1.0
+            test_name = "paired_wilcoxon"
+        else:
+            try:
+                w = wilcoxon(diffs, alternative='two-sided', zero_method='wilcox', method='auto')
+                stat = float(w.statistic)
+                pval = float(w.pvalue)
+                test_name = "paired_wilcoxon"
+            except Exception:
+                stat = float(np.mean(diffs))
+                pval = _paired_signflip_pvalue(diffs, random_state=random_state)
+                test_name = "paired_signflip"
+
+        results.append({
+            'group1': group1,
+            'group2': group2,
+            'mean1': mean1,
+            'mean2': mean2,
+            'effect_mean_diff': float(np.mean(diffs)),
+            'effect_median_diff': median_diff,
+            'tstat': stat,
+            'pval': pval,
+            'n1': int((sub[group_col] == group1).sum()),
+            'n2': int((sub[group_col] == group2).sum()),
+            'n_blocks': n_blocks,
+            'test': test_name,
+            'blocked_by': block_col,
+        })
+
+    result_df = pd.DataFrame(results)
+    if not result_df.empty:
+        result_df['qval'] = multipletests(result_df['pval'], method='fdr_bh')[1]
+        result_df['significant'] = result_df['qval'] < 0.05
+
+    return result_df
+
+
 def plot_alpha_boxplot(df: pd.DataFrame, group_col: str, value_col: str,
                        group_order: List[str], palette: Dict[str, str],
                        output_path: Path, title: str = "Alpha Diversity") -> None:
@@ -272,8 +376,86 @@ def plot_alpha_faceted(df: pd.DataFrame, group_col: str, facet_col: str,
 
 # ==================== Beta Diversity Functions ====================
 
-def compute_permanova(dist_matrix: pd.DataFrame, groups: pd.Series,
-                     permutations: int = 999) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _permanova_result_to_dict(result) -> Dict[str, Any]:
+    """Normalize skbio PERMANOVA return object to a plain dict."""
+    if isinstance(result, dict):
+        return dict(result)
+    if hasattr(result, "to_dict"):
+        return dict(result.to_dict())
+    raise TypeError(f"Unexpected PERMANOVA result type: {type(result)}")
+
+
+def _run_permanova_restricted(
+    dm: DistanceMatrix,
+    groups: pd.Series,
+    blocks: pd.Series,
+    permutations: int = 999,
+    random_state: int = 42,
+) -> Dict[str, Any]:
+    """Restricted-permutation PERMANOVA by shuffling labels within blocks."""
+    groups = groups.astype(str)
+    blocks = blocks.astype(str)
+    if groups.name is None:
+        groups.name = "group"
+    ids = pd.Index(dm.ids)
+    groups = groups.loc[ids]
+    blocks = blocks.loc[ids]
+
+    # Observed statistic (no permutations)
+    try:
+        observed_res = permanova(dm, groups, permutations=0)
+    except Exception:
+        # Compatibility fallback for skbio versions that reject permutations=0.
+        observed_res = permanova(dm, groups, permutations=1)
+    observed = _permanova_result_to_dict(observed_res)
+    observed_stat = float(observed.get("test statistic", np.nan))
+
+    if not np.isfinite(observed_stat):
+        observed["p-value"] = np.nan
+        observed["permutations"] = int(max(permutations, 0))
+        observed["method name"] = "PERMANOVA (restricted)"
+        return observed
+
+    rng = np.random.default_rng(random_state)
+    group_vals = groups.to_numpy(dtype=object)
+    block_vals = blocks.to_numpy(dtype=object)
+    block_levels = pd.unique(block_vals)
+    block_indices = [np.where(block_vals == b)[0] for b in block_levels]
+    perm_stats: List[float] = []
+
+    for _ in range(int(max(permutations, 0))):
+        perm = group_vals.copy()
+        for idx in block_indices:
+            if len(idx) > 1:
+                perm[idx] = perm[idx][rng.permutation(len(idx))]
+        perm_series = pd.Series(perm, index=ids, name=groups.name)
+        try:
+            res = permanova(dm, perm_series, permutations=0)
+        except Exception:
+            res = permanova(dm, perm_series, permutations=1)
+        stat = float(_permanova_result_to_dict(res).get("test statistic", np.nan))
+        if np.isfinite(stat):
+            perm_stats.append(stat)
+
+    if len(perm_stats) == 0:
+        p_val = np.nan
+    else:
+        perm_arr = np.asarray(perm_stats, dtype=float)
+        p_val = float((1.0 + np.sum(perm_arr >= observed_stat)) / (1.0 + len(perm_arr)))
+
+    observed["p-value"] = p_val
+    observed["permutations"] = int(max(permutations, 0))
+    observed["method name"] = "PERMANOVA (restricted)"
+    return observed
+
+
+def compute_permanova(
+    dist_matrix: pd.DataFrame,
+    groups: pd.Series,
+    permutations: int = 999,
+    blocks: Optional[pd.Series] = None,
+    random_state: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Compute global and pairwise PERMANOVA.
     
@@ -290,9 +472,19 @@ def compute_permanova(dist_matrix: pd.DataFrame, groups: pd.Series,
     dist_aligned = dist_matrix.loc[common_ids, common_ids]
     groups_aligned = groups.loc[common_ids]
     
+    blocks_aligned = None
+    if blocks is not None:
+        blocks_aligned = blocks.loc[common_ids]
+
     # Global PERMANOVA
     dm = DistanceMatrix(dist_aligned.values.copy(order='C'), ids=dist_aligned.index.tolist())
-    global_result = permanova(dm, groups_aligned, permutations=permutations).to_frame().T
+    if blocks_aligned is not None:
+        global_dict = _run_permanova_restricted(
+            dm, groups_aligned, blocks_aligned, permutations=permutations, random_state=random_state
+        )
+        global_result = pd.DataFrame([global_dict])
+    else:
+        global_result = permanova(dm, groups_aligned, permutations=permutations).to_frame().T
     global_result.insert(0, 'comparison', 'global')
     
     # Pairwise PERMANOVA
@@ -312,8 +504,17 @@ def compute_permanova(dist_matrix: pd.DataFrame, groups: pd.Series,
             ids=subset_ids.tolist()
         )
         
-        pw_result = permanova(subset_dm, groups_aligned.loc[subset_ids], permutations=permutations)
-        pw_dict = pw_result.to_dict()
+        if blocks_aligned is not None:
+            pw_dict = _run_permanova_restricted(
+                subset_dm,
+                groups_aligned.loc[subset_ids],
+                blocks_aligned.loc[subset_ids],
+                permutations=permutations,
+                random_state=random_state,
+            )
+        else:
+            pw_result = permanova(subset_dm, groups_aligned.loc[subset_ids], permutations=permutations)
+            pw_dict = _permanova_result_to_dict(pw_result)
         pw_dict['group1'] = group1
         pw_dict['group2'] = group2
         pairwise_results.append(pw_dict)
@@ -475,6 +676,8 @@ def run_analysis_pipeline(
     style_cols: Optional[List[str]] = None,
     umap_params: Optional[Dict[str, Any]] = None,
     permanova_perms: int = 999,
+    block_col: Optional[str] = None,
+    random_state: int = 42,
     output_prefix: str = "",
     verbose: bool = False
 ) -> None:
@@ -517,7 +720,7 @@ def run_analysis_pipeline(
     
     # Prepare working dataframe
     df = metadata.copy()
-    df[group_col] = df[group_col].astype(int)
+    df[group_col] = df[group_col].astype(str)
 
     # Apply filters
     if filter_col and filter_col in df.columns:
@@ -561,12 +764,26 @@ def run_analysis_pipeline(
             if alpha_metric not in df.columns:
                 continue
             
-            # T-tests
-            ttest_results = pairwise_ttests_fdr(df, group_col, alpha_metric)
+            # Pairwise alpha statistics: block-aware when requested.
+            if block_col and block_col in df.columns:
+                ttest_results = pairwise_blocked_alpha_fdr(
+                    df, group_col, alpha_metric, block_col, random_state=random_state
+                )
+            elif block_col and block_col not in df.columns:
+                warnings.warn(
+                    f"Requested block_col '{block_col}' not found in metadata; "
+                    "falling back to unpaired t-tests for alpha diversity."
+                )
+                ttest_results = pairwise_ttests_fdr(df, group_col, alpha_metric)
+            else:
+                ttest_results = pairwise_ttests_fdr(df, group_col, alpha_metric)
             ttest_path = output_dir / f"{output_prefix}alpha_ttest_{alpha_metric}.tsv"
             ttest_results.to_csv(ttest_path, sep='\t', index=False)
             if verbose:
-                print(f"  Saved t-test results: {ttest_path.name}")
+                if block_col and block_col in df.columns:
+                    print(f"  Saved paired/block-aware alpha results: {ttest_path.name}")
+                else:
+                    print(f"  Saved t-test results: {ttest_path.name}")
             
             # Boxplot
             plot_alpha_boxplot(
@@ -599,8 +816,16 @@ def run_analysis_pipeline(
         groups_series = df.set_index(sample_col).loc[common_samples, group_col]
         
         # Compute PERMANOVA
+        block_series = None
+        if block_col and block_col in df.columns:
+            block_series = df.set_index(sample_col).loc[common_samples, block_col]
+
         global_perm, pairwise_perm = compute_permanova(
-            dist_matrix, groups_series, permutations=permanova_perms
+            dist_matrix,
+            groups_series,
+            permutations=permanova_perms,
+            blocks=block_series,
+            random_state=random_state,
         )
         
         # Save results
@@ -797,6 +1022,10 @@ def parse_args() -> argparse.Namespace:
         help="Number of PERMANOVA permutations"
     )
     params.add_argument(
+        "--block-col", default=None,
+        help="Optional metadata block column for restricted PERMANOVA permutations (e.g., Participant_ID)"
+    )
+    params.add_argument(
         "--random-state", type=int, default=42,
         help="Random seed"
     )
@@ -905,6 +1134,8 @@ def main():
         style_cols=style_cols,
         umap_params=umap_params,
         permanova_perms=args.permanova_perms,
+        block_col=args.block_col,
+        random_state=args.random_state,
         output_prefix="",
         verbose=args.verbose
     )
@@ -952,6 +1183,8 @@ def main():
             style_cols=style_cols,
             umap_params=umap_params,
             permanova_perms=args.permanova_perms,
+            block_col=args.block_col,
+            random_state=args.random_state,
             output_prefix="mito_",
             verbose=args.verbose
         )

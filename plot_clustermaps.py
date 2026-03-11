@@ -77,6 +77,8 @@ def normalize_label(v) -> str:
     if pd.isna(v):
         return "Other"
     text = str(v).strip()
+    if text == "Control":
+        text = "Non-Cancer"
     return text if text else "Other"
 
 
@@ -251,7 +253,9 @@ def col_colors_from_meta(
     for col, palette in color_specs:
         if col not in sub.columns:
             continue
-        bars[col] = sub[col].map(lambda v: palette.get(str(v), "#D3D3D3")).fillna("#D3D3D3")
+        bars[col] = sub[col].map(
+            lambda v: palette.get(str(v), palette.get(normalize_label(v), "#D3D3D3"))
+        ).fillna("#D3D3D3")
     if not bars:
         return pd.DataFrame(index=samples)
     return pd.DataFrame(bars, index=samples)

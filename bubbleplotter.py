@@ -2,22 +2,22 @@
 """
 asv_taxonomy_bubble_plot.py
 ---------------------------
-Generate bubble plots showing ASV counts by taxonomy across depth zones.
+Generate bubble plots showing ASV counts by taxonomy across user-defined groups.
 
 Features:
 - Hierarchical taxonomy visualization (Order > Family > Genus)
 - Bubble sizes represent transformed ASV counts
-- Faceted plots by depth
-- Summary plots: Taxonomy × Depth and Taxonomy × Month
+- Faceted plots by primary group
+- Summary plots: Taxonomy × Group1 and Taxonomy × Group2
 - Automatic taxonomy hierarchy labeling with brackets
-- Color-coded depths from metadata
+- Color-coded Group1 values from metadata
 - Fully configurable via CLI
 
 Example:
 --------
 python asv_taxonomy_bubble_plot.py \
   --input asv_data.tsv \
-  --depth-col Depth \
+  --group1-col type_group \
   --color-col Color \
   --asv-col ASV_ID \
   --count-col count \
@@ -296,6 +296,17 @@ def sort_depths(depths: List) -> List:
     except (ValueError, TypeError):
         # Fall back to string sorting
         return sorted(depths, key=str)
+
+
+def resolve_group_order(values: List, requested: Optional[List[str]] = None) -> List:
+    """Resolve categorical order: requested (filtered) then remaining in canonical order."""
+    present = [str(v) for v in pd.Series(values).dropna().astype(str).unique().tolist()]
+    if not requested:
+        return present
+    specified = [str(v).strip() for v in requested if str(v).strip()]
+    ordered = [v for v in specified if v in present]
+    ordered += [v for v in present if v not in ordered]
+    return ordered
 
 
 def transform_counts(counts: pd.Series, method: str = 'sqrt',
@@ -744,24 +755,30 @@ def plot_summary_bubble(
     formats: List[str],
     dpi: int,
     show_legend: bool,
-    title: str
+    title: str,
+    group_order: Optional[List[str]] = None
 ) -> None:
     """
     Create summary bubble plot showing taxonomy vs depth/month.
     """
+    summary_data = summary_data.copy()
+    summary_data[group_col] = summary_data[group_col].astype(str)
+
     # Add numeric mapping for y-axis
     summary_data['ofg_numeric'] = summary_data['Order_Family_Genus'].map(ofg_mapping)
     
     # Get unique group values and sort
-    if group_col == 'Month':
+    if group_order:
+        groups = resolve_group_order(summary_data[group_col].astype(str).tolist(), group_order)
+    elif group_col == 'Month':
         # Sort months chronologically
         month_order = ['January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December']
-        groups = [m for m in month_order if m in summary_data[group_col].unique()]
+        groups = [m for m in month_order if m in summary_data[group_col].astype(str).unique()]
         if not groups:  # If month names don't match, try numeric
-            groups = sorted(summary_data[group_col].unique(), key=lambda x: int(x) if str(x).isdigit() else 0)
+            groups = sorted(summary_data[group_col].astype(str).unique(), key=lambda x: int(x) if str(x).isdigit() else 0)
     else:
-        groups = sort_depths(summary_data[group_col].unique())
+        groups = sort_depths(summary_data[group_col].astype(str).unique())
     
     n_groups = len(groups)
     n_genera = len(genera_list)
@@ -913,10 +930,17 @@ def parse_args() -> argparse.Namespace:
                       help="Column containing count values")
     cols.add_argument("--sample-col", default="sampleID",
                       help="Column containing sample IDs")
-    cols.add_argument("--depth-col", default="Depth",
-                      help="Column containing depth values")
-    cols.add_argument("--month-col", default="Month",
-                      help="Column containing month values")
+    cols.add_argument("--group1-col", dest="depth_col", default="Depth",
+                      help="Primary grouping column")
+    cols.add_argument("--group2-col", dest="month_col", default="Month",
+                      help="Secondary grouping column")
+    cols.add_argument("--group1-order", default="",
+                      help="Comma-separated order for primary grouping levels.")
+    cols.add_argument("--group2-order", default="",
+                      help="Comma-separated order for secondary grouping levels.")
+    # Backward-compatible aliases
+    cols.add_argument("--depth-col", dest="depth_col", help=argparse.SUPPRESS)
+    cols.add_argument("--month-col", dest="month_col", help=argparse.SUPPRESS)
     cols.add_argument("--color-col", default="Color",
                       help="Column containing color values for depths")
     cols.add_argument("--order-col", default="Order",
@@ -968,6 +992,8 @@ def main():
     # Parse parameters
     formats = [f.strip().lstrip('.') for f in args.formats.split(',')]
     figsize = tuple(map(int, args.figsize.split(',')))
+    group1_order = [x.strip() for x in str(args.group1_order).split(',') if x and x.strip()]
+    group2_order = [x.strip() for x in str(args.group2_order).split(',') if x and x.strip()]
     
     print(f"[INFO] ASV Taxonomy Bubble Plot Generator")
     print(f"[INFO] Input: {args.input}")
@@ -1015,7 +1041,7 @@ def main():
     if args.depths:
         depths = [d.strip() for d in args.depths.split(',')]
     else:
-        depths = sort_depths(grouped_df[args.depth_col].unique())
+        depths = resolve_group_order(grouped_df[args.depth_col].astype(str).tolist(), group1_order) if group1_order else sort_depths(grouped_df[args.depth_col].astype(str).unique())
     
     print(f"[INFO] Plotting depths: {depths}")
     
@@ -1025,7 +1051,7 @@ def main():
     
     for depth in depths:
         print(f"\n[INFO] Generating plot for depth: {depth}")
-        depth_data = grouped_df[grouped_df[args.depth_col] == depth]
+        depth_data = grouped_df[grouped_df[args.depth_col].astype(str) == str(depth)]
         
         if depth_data.empty:
             print(f"[WARN] No data for depth '{depth}', skipping")
@@ -1074,7 +1100,8 @@ def main():
                 formats=formats,
                 dpi=args.dpi,
                 show_legend=not args.no_legend,
-                title='Summary: Taxonomy × Depth (Averaged ASV Counts)'
+                title='Summary: Taxonomy × Depth (Averaged ASV Counts)',
+                group_order=group1_order if group1_order else None
             )
         
         # Summary by Month
@@ -1117,7 +1144,8 @@ def main():
                 formats=formats,
                 dpi=args.dpi,
                 show_legend=not args.no_legend,
-                title='Summary: Taxonomy × Month (Averaged ASV Counts)'
+                title='Summary: Taxonomy × Month (Averaged ASV Counts)',
+                group_order=group2_order if group2_order else None
             )
         else:
             print(f"[INFO] Skipping Month summary (column '{args.month_col}' not found)")

@@ -63,7 +63,8 @@ except ImportError:
     # skbio >=0.7 renamed this helper
     from skbio.stats.composition import multi_replace as multiplicative_replacement
 
-SAMPLE_ID_COL = 'sampleID'
+DEFAULT_SAMPLE_ID_COL = 'sampleID'
+FALLBACK_SAMPLE_ID_COLS = ("sampleID", "sample", "longID")
 
 
 # -----------------------------
@@ -74,11 +75,21 @@ def resolve_path(root: Optional[Path], rel_or_abs: str) -> Path:
     return p if p.is_absolute() or root is None else (root / p)
 
 
-def load_metadata(path: Path, index_col: str) -> pd.DataFrame:
+def load_metadata(path: Path, index_col: str, verbose: bool = False) -> pd.DataFrame:
     df = pd.read_csv(path, sep="\t", header=0)
-    if index_col not in df.columns:
-        raise ValueError(f"Metadata column '{index_col}' not found in columns: {df.columns.tolist()}")
-    df = df.drop_duplicates(subset=[index_col]).set_index(index_col)
+    selected_col = index_col
+    if selected_col not in df.columns:
+        fallback_col = next((c for c in FALLBACK_SAMPLE_ID_COLS if c in df.columns), None)
+        if fallback_col is None:
+            raise ValueError(
+                f"Metadata column '{index_col}' not found in columns: {df.columns.tolist()}"
+            )
+        selected_col = fallback_col
+        if verbose:
+            print(f"[w] Metadata column '{index_col}' not found; using '{selected_col}' instead.")
+
+    df[selected_col] = df[selected_col].astype(str).str.strip()
+    df = df.drop_duplicates(subset=[selected_col]).set_index(selected_col)
     return df
 
 
@@ -103,6 +114,7 @@ def load_asv_table(path: Path, orientation: str) -> pd.DataFrame:
         df = df.T  # make rows=samples
     elif orientation != "samples_rows":
         raise ValueError("--asv-orientation must be 'features_rows' or 'samples_rows'")
+    df.index = df.index.astype(str).str.strip()
     # cast to numeric if needed
     return df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
@@ -283,6 +295,8 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--asv", type=str, required=True, 
                     help="Path to ASV table (TSV). Can be raw counts or batch-corrected CLR data.")
     io.add_argument("--metadata", type=str, required=True, help="Path to metadata TSV")
+    io.add_argument("--sample-id-col", type=str, default=DEFAULT_SAMPLE_ID_COL,
+                    help="Sample identifier column in metadata")
     io.add_argument("--output-dir", type=str, required=True, help="Directory to write outputs")
 
     fmt = p.add_argument_group("Data formatting")
@@ -344,7 +358,7 @@ def main():
         args.transform = "none"
 
     # load data
-    meta = load_metadata(resolve_path(root, args.metadata), SAMPLE_ID_COL)
+    meta = load_metadata(resolve_path(root, args.metadata), args.sample_id_col, verbose=args.verbose)
     asv = load_asv_table(resolve_path(root, args.asv), args.asv_orientation)
     asv = align_and_filter(asv, meta, pre_transformed=args.pre_transformed)
 

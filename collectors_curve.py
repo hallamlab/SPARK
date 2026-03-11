@@ -123,6 +123,12 @@ def parse_group_colors(arg_string):
     return mapping
 
 
+def parse_list_csv(arg: str):
+    if not arg:
+        return []
+    return [x.strip() for x in str(arg).split(",") if x and x.strip()]
+
+
 def validate_color(color_str, group_name):
     try:
         to_rgba(color_str)  # raises if invalid
@@ -323,6 +329,8 @@ def main():
                     help="TSV (optionally .gz) with ASVs as rows and samples as columns.")
     ap.add_argument("--meta", required=True,
                     help="TSV (optionally .gz) metadata file.")
+    ap.add_argument("--sample-col", default=SAMPLE_ID_COL,
+                    help="Metadata sample ID column.")
     ap.add_argument("--group-col", default="sample_type",
                     help="Metadata column for hue/facets (e.g., sample_type).")
     ap.add_argument("--permutations", type=int, default=256,
@@ -335,6 +343,8 @@ def main():
     # Colors & appearance
     ap.add_argument("--color-col", default="Color",
                     help="Color column")
+    ap.add_argument("--group-order", default="",
+                    help="Comma-separated explicit group order for facets/legend.")
     ap.add_argument("--title", default="",
                     help="Optional plot title (overlay and faceted).")
     ap.add_argument("--formats", default="pdf",
@@ -355,17 +365,30 @@ def main():
 
     args = ap.parse_args()
 
-    counts, meta = read_inputs(args.counts, args.meta, SAMPLE_ID_COL, args.group_col)
+    counts, meta = read_inputs(args.counts, args.meta, args.sample_col, args.group_col)
 
-    # Convert group_col to integers for proper sorting
-    meta[args.group_col] = meta[args.group_col].astype(int)
+    # Keep group labels as strings to support values like BAL / Bronchial Brush.
+    meta[args.group_col] = meta[args.group_col].astype(str).str.strip()
 
-    # set palette
-    palette = {k[0]: k[1] for k in zip(meta[args.group_col], meta[args.color_col])}
-    palette = dict(sorted(palette.items()))  # Now sorts numerically
+    # Build color mapping from metadata when available, fallback to palette.
+    user_palette = {}
+    if args.color_col in meta.columns:
+        pal_df = meta[[args.group_col, args.color_col]].dropna(subset=[args.group_col]).drop_duplicates(
+            subset=[args.group_col], keep="first"
+        )
+        user_palette = {
+            str(row[args.group_col]).strip(): row[args.color_col]
+            for _, row in pal_df.iterrows()
+        }
+    else:
+        warnings.warn(
+            f"Color column '{args.color_col}' not found in metadata; using fallback palette."
+        )
 
-    groups_order = list(palette.keys())
-    colors = {k: v for k, v in zip(palette.keys(), palette.values())}
+    requested_order = parse_list_csv(args.group_order)
+    fallback_order = requested_order if requested_order else (list(user_palette.keys()) if user_palette else None)
+    groups_order = resolve_group_order(meta[args.group_col], fallback_order)
+    colors = color_map_for_groups(groups_order, palette_name="tab10", user_map=user_palette)
 
     # Presence/absence threshold
     if args.presence_threshold > 0:
@@ -377,7 +400,7 @@ def main():
     all_groups_order = resolve_group_order(meta[args.group_col], groups_order)
     curves, groups_order = build_group_curves(
         counts, meta,
-        sample_id_col=SAMPLE_ID_COL,
+        sample_id_col=args.sample_col,
         group_col=args.group_col,
         groups_order=all_groups_order,
         n_perm=args.permutations,

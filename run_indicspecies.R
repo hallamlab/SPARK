@@ -15,6 +15,8 @@ option_list <- list(
               help="Column in metadata matching sample IDs [default: %default]"),
   make_option("--group-cols", type="character", default="status,type_group",
               help="Comma-separated grouping columns to analyze [default: %default]"),
+  make_option("--block-col",  type="character", default="",
+              help="Optional metadata blocking column for restricted permutations (e.g., Participant_ID)"),
   make_option("--perms",      type="integer",   default=999,
               help="Permutations for multipatt [default: %default]"),
   make_option("--min-n",      type="integer",   default=2,
@@ -76,9 +78,12 @@ message("ASV table dimensions: ", paste(dim(asv_mat), collapse = " x "))
 message("Metadata dimensions: ", paste(dim(meta), collapse = " x "))
 
 # ---------- helpers ----------
-run_indics <- function(X_samples_by_features, grouping, perms = 999, duleg = FALSE) {
+run_indics <- function(X_samples_by_features, grouping, perms = 999, duleg = FALSE, blocks = NULL) {
   # indicspecies::multipatt expects samples in rows, species/features in columns
   ctrl <- how(nperm = perms)
+  if (!is.null(blocks)) {
+    setBlocks(ctrl) <- as.factor(blocks)
+  }
   suppressWarnings({
     multipatt(x = X_samples_by_features, cluster = grouping, duleg = duleg, control = ctrl)
   })
@@ -120,10 +125,21 @@ for (gcol in group_cols) {
     next
   }
   grouping <- meta[[gcol]] |> as.factor()
+  blocking <- NULL
+  if (!is.null(opt$`block-col`) && nzchar(opt$`block-col`)) {
+    if (!(opt$`block-col` %in% colnames(meta))) {
+      stop("Block column '", opt$`block-col`, "' not found in metadata. Available: ",
+           paste(colnames(meta), collapse = ", "))
+    }
+    blocking <- meta[[opt$`block-col`]] |> as.factor()
+  }
 
   # Drop NAs and small groups
   keep_idx <- !is.na(grouping)
   grouping <- droplevels(grouping[keep_idx])
+  if (!is.null(blocking)) {
+    blocking <- droplevels(blocking[keep_idx])
+  }
   X <- t(asv_mat[, keep_idx, drop = FALSE]) # samples x ASVs
 
   # enforce min-n per group
@@ -134,6 +150,9 @@ for (gcol in group_cols) {
             paste(small, collapse = ", "))
     keep_idx2 <- !(grouping %in% small)
     grouping <- droplevels(grouping[keep_idx2])
+    if (!is.null(blocking)) {
+      blocking <- droplevels(blocking[keep_idx2])
+    }
     X <- X[keep_idx2, , drop = FALSE]
   }
 
@@ -142,14 +161,23 @@ for (gcol in group_cols) {
     next
   }
 
+  if (!is.null(blocking)) {
+    block_tab <- table(blocking)
+    if (all(block_tab < 2)) {
+      warning("All blocks are singletons after filtering for '", gcol, "'. ",
+              "Falling back to unrestricted permutations.")
+      blocking <- NULL
+    }
+  }
+
   message("Running multipatt for '", gcol, "' (single groups, duleg=FALSE) …")
-  fit1 <- run_indics(X, grouping, perms = opt$perms, duleg = FALSE)
+  fit1 <- run_indics(X, grouping, perms = opt$perms, duleg = FALSE, blocks = blocking)
   res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
   res1_full <- summarize_multipatt(fit1)
   write_tables(res1_sign, res1_full, paste0(gcol, "_indicator_species"))
 
   message("Running multipatt for '", gcol, "' (combos allowed, duleg=TRUE) …")
-  fit2 <- run_indics(X, grouping, perms = opt$perms, duleg = TRUE)
+  fit2 <- run_indics(X, grouping, perms = opt$perms, duleg = TRUE, blocks = blocking)
   res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
   res2_full <- summarize_multipatt(fit2)
   write_tables(res2_sign, res2_full, paste0(gcol, "_indicator_species_DULEG"))

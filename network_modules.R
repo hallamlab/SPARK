@@ -8,9 +8,12 @@ suppressPackageStartupMessages({
 })
 
 opt_list <- list(
-  make_option("--graph-sub", type = "character", default = NULL, help = "Thresholded positive GraphML (required)."),
-  make_option("--graph-all", type = "character", default = NULL, help = "All-positive GraphML (optional)."),
-  make_option("--outdir", type = "character", default = NULL, help = "Output directory (required)."),
+  make_option("--graph-sub", type = "character", default = NULL, dest = "graph_sub",
+              help = "Thresholded positive GraphML (required)."),
+  make_option("--graph-all", type = "character", default = NULL, dest = "graph_all",
+              help = "All-positive GraphML (optional)."),
+  make_option("--outdir", type = "character", default = NULL, dest = "outdir",
+              help = "Output directory (required)."),
   make_option("--prefix", type = "character", default = "spieceasi", help = "Output prefix [default %default]."),
   make_option("--methods", type = "character", default = "leiden,louvain", help = "Comma-separated methods [default %default]."),
   make_option("--primary-method", type = "character", default = "leiden", dest = "primary_method",
@@ -29,12 +32,18 @@ usage <- "%prog --graph-sub sub.graphml --outdir outdir [--graph-all all.graphml
 opt <- parse_args(OptionParser(option_list = opt_list, usage = usage))
 
 msg <- function(...) cat(sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), sprintf(...)))
+`%||%` <- function(a, b) if (is.null(a) || (is.character(a) && !nzchar(a))) b else a
 
-if (is.null(opt$graph_sub) || is.null(opt$outdir)) {
+# Robust key access across optparse variants that normalize dashes differently.
+graph_sub <- opt$graph_sub %||% opt$graph.sub %||% opt[["graph-sub"]]
+graph_all <- opt$graph_all %||% opt$graph.all %||% opt[["graph-all"]]
+outdir <- opt$outdir
+
+if (is.null(graph_sub) || is.null(outdir)) {
   stop("Please provide --graph-sub and --outdir", call. = FALSE)
 }
 
-dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 parse_csv_char <- function(x) {
   vals <- unlist(strsplit(as.character(x), ",", fixed = TRUE))
@@ -181,6 +190,7 @@ consensus_partition <- function(g, partitions, primary_method, primary_resolutio
   adj <- coassoc
   adj[adj < consensus_threshold] <- 0
   g_cons <- graph_from_adjacency_matrix(adj, mode = "undirected", weighted = TRUE, diag = FALSE)
+  V(g_cons)$name <- node_names
   g_cons <- sanitize_graph(g_cons)
 
   if (ecount(g_cons) == 0) {
@@ -191,7 +201,7 @@ consensus_partition <- function(g, partitions, primary_method, primary_resolutio
     mem_final <- cp$membership[node_names]
   }
 
-  mem_final <- as.integer(mem_final)
+  mem_final <- setNames(as.integer(mem_final), node_names)
   stab <- rep(NA_real_, n)
   for (i in seq_len(n)) {
     same <- which(mem_final == mem_final[i] & seq_len(n) != i)
@@ -296,7 +306,7 @@ analyze_variant <- function(g, variant, methods, primary_method, reps, resolutio
   assign_df <- tibble(
     Taxon = node_names,
     module_id = as.integer(module_id),
-    module_label = paste0("M", as.integer(module_id)),
+    module_label = ifelse(is.na(module_id), "Unassigned", paste0("M", as.integer(module_id))),
     node_stability = as.numeric(cons$node_stability),
     graph_variant = variant,
     method = primary_method
@@ -307,7 +317,7 @@ analyze_variant <- function(g, variant, methods, primary_method, reps, resolutio
     method = primary_method,
     n_nodes = vcount(g),
     n_edges = ecount(g),
-    n_modules = length(unique(module_id)),
+    n_modules = length(unique(module_id[!is.na(module_id)])),
     modularity_consensus = mod_cons,
     modularity_mean_runs = mean(runs_df$modularity, na.rm = TRUE),
     modularity_sd_runs = sd(runs_df$modularity, na.rm = TRUE),
@@ -337,9 +347,9 @@ msg("Resolutions: %s", paste(resolutions, collapse = ", "))
 msg("Reps per method/resolution: %d", opt$reps)
 msg("Consensus threshold: %.3f", opt$consensus_threshold)
 
-g_sub <- load_graph_safe(opt$graph_sub)
+g_sub <- load_graph_safe(graph_sub)
 if (is.null(g_sub)) stop("Could not load --graph-sub", call. = FALSE)
-g_all <- load_graph_safe(opt$graph_all)
+g_all <- load_graph_safe(graph_all)
 
 sub_res <- analyze_variant(
   g = g_sub,
@@ -368,10 +378,10 @@ if (!is.null(g_all)) {
   )
 }
 
-modules_sub_path <- file.path(opt$outdir, sprintf("%s_modules_sub.tsv", opt$prefix))
-modules_all_path <- file.path(opt$outdir, sprintf("%s_modules_all.tsv", opt$prefix))
-summary_path <- file.path(opt$outdir, sprintf("%s_module_summary.tsv", opt$prefix))
-runs_path <- file.path(opt$outdir, sprintf("%s_module_runs.tsv", opt$prefix))
+modules_sub_path <- file.path(outdir, sprintf("%s_modules_sub.tsv", opt$prefix))
+modules_all_path <- file.path(outdir, sprintf("%s_modules_all.tsv", opt$prefix))
+summary_path <- file.path(outdir, sprintf("%s_module_summary.tsv", opt$prefix))
+runs_path <- file.path(outdir, sprintf("%s_module_runs.tsv", opt$prefix))
 
 write_tsv(sub_res$assignments, modules_sub_path)
 msg("Wrote %s", modules_sub_path)

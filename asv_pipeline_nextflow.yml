@@ -1,13 +1,13 @@
 paths:
-  input_dir: /cephfs/rjm_work/si_asv/V4_ncbi_input
-  output_dir: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output
-  manifest: /cephfs/rjm_work/si_asv/ref_db/sample_manifest.tsv
-  work_dir: /cephfs/rjm_work/si_asv/nf_work
-  conda_cache_dir: /cephfs/rjm_work/si_asv/conda_cache
+  input_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/input_fastqs
+  output_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output
+  manifest: /home/ryan/Projects/UBC/LMP/avery_spark_output/sample_manifest.tsv
+  work_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/nf_work
+  conda_cache_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/input_fastqs/conda_cache
     # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
-  threads: 12          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
+  threads: 6         # per-sample processes (FASTP/MERGE/FILTER) use this many threads
   single_end: false
 
 
@@ -82,7 +82,7 @@ merge:
 
 table_filter:
   min_sample_sum: 5000
-  min_asv_sum: 0.01
+  min_asv_sum: 0
   script: filter_ASV_table.py
 
 filter:
@@ -105,11 +105,13 @@ sina:
   reference_url: https://www.arb-silva.de/fileadmin/silva_databases/release_138_2/ARB_files/SILVA_138.2_SSURef_NR99_03_07_24_opt.arb.gz
   download_subdir: sina_reference
   regions:
+    - V4-V5
+    - V5
     - V4
-  trim_to: V4
+  trim_to: V4-V5
   batch_size: 1000000
   keep_gaps: false
-  threads: 16
+  threads: 6
   verbose: false
 
 taxonomy:
@@ -124,7 +126,7 @@ taxonomy:
   output_tsv: ASV_SILVA_tax.full-length.vsearch.tsv
   stats_tsv: ASV_SILVA_stats.full-length.vsearch.tsv
   uppercase_fasta: ASVs.upper.fasta
-  threads: 16
+  threads: 6
 
 mito:
   enabled: true
@@ -149,18 +151,18 @@ mito:
   style: whitegrid
   dpi: 300
   no_plots: false
-  blast_threads: 16
-  mito_db: /cephfs/rjm_work/si_asv/ref_db/mito_ncbi
-  biof_db: /cephfs/rjm_work/si_asv/ref_db/ssu_pipeline_contaminants
+  blast_threads: 6
+  mito_db: /home/ryan/Projects/UBC/LMP/ref_db/mito_ncbi
+  biof_db: /home/ryan/Projects/UBC/LMP/ref_db/ssu_pipeline_contaminants
 
 filter_counts:
   enabled: true
-  metadata: ../ref_db/asv_cruise_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
   output: ASV_target.tsv
-  group_col: Depth
+  group_col: type_group
   min_group_size: 3
-  abundance_threshold: 0.005
-  sample_id_col: sampleID
+  abundance_threshold: 0.5
+  sample_id_col: sample
   min_consensus: 0.0
   taxon_col: Taxon
   consensus_col: Consensus
@@ -176,12 +178,13 @@ general_stats:
 
 sankey:
   enabled: true
-  metadata: ../ref_db/asv_cruise_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
   sub_dir: .
-  sample_col: sampleID
-  group1_col: Depth
+  sample_col: sample
+  group1_col: type_group
   color_col: Color
   keep_types:
+  arrangement: freeform
   output_prefix: metadata/data_loss_sankey
   title: Data Loss Flow
   make_labeled: true
@@ -189,21 +192,19 @@ sankey:
 
 metadata_plots:
   enabled: true
-  metadata: ../ref_db/asv_cruise_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
   sub_dir: .
-  sample_col: sampleID
-  type_col: Depth
+  sample_col: sample
+  type_col: type_group
   color_col: Color
-  biochem_assignments: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline/env_o2_split_by_gmm/tables/merged_o2_split_by_gmm.csv
-  biochem_sample_col: cruise_year_month_depth
-  biochem_meta_join_cols: Cruise,Depth
-  biochem_join_cols: Cruise,Depth_anchored
-  biochem_include_cols: []
-  stratification_timeseries: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline/env_stratification_index/stratification_timeseries.tsv
-  strat_meta_join_col: Cruise
-  strat_join_col: Cruise
-  strat_include_cols: []
   keep_types:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
+  group_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   include_rank: []
   run_micro: true
   run_mito: true
@@ -211,18 +212,19 @@ metadata_plots:
 batch_correction:
   enabled: false
   output_dir: batch_correction
-  batch_col: plateID
+  sample_id_col: sample
+  batch_col: DNA_plate
   asv_orientation: features_rows
-  biological_covariates: Depth,Season 
-  biological_color_col: Depth,Season 
+  biological_covariates: type_group
+  biological_color_col: type_group
   color_palette_col: Color
-  conqur_mode: libsize
-  conqur_num_core: 12
+  conqur_mode: standard
+  conqur_num_core: 6
   conqur_batch_ref:
-  conqur_logistic_lasso: false
-  conqur_quantile_type: standard
-  conqur_simple_match: false
-  conqur_lambda_quantile: 2p/n
+  conqur_logistic_lasso: true
+  conqur_quantile_type: lasso
+  conqur_simple_match: true
+  conqur_lambda_quantile: 2p/logn
   conqur_interplt: false
   conqur_delta: 0.4999
   conqur_auto_install: true
@@ -237,10 +239,11 @@ batch_correction:
   random_state: 42
 
 outlier_detection:
-  enabled: false
+  enabled: true
   output_dir: outliers_corrected
+  sample_col: sample
   group_cols:
-    - Depth,Season
+    - type_group,Case
   transform: none
   asv_orientation: samples_rows
   pre_transformed: true
@@ -260,9 +263,14 @@ outlier_detection:
   hdbscan_metric: euclidean
 
 collectors_curve:
-  enabled: false
-  group_col: Depth
+  enabled: true
+  sample_col: sample
+  group_col: type_group
   color_col: Color
+  group_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   permutations: 999
   seed: 42
   out_prefix: metadata/collectors_curve
@@ -274,47 +282,79 @@ collectors_curve:
   presence_threshold: 0.0
 
 plot_upset:
-  enabled: false
+  enabled: true
   sub_dir: .
   domain: micro
   taxonomy_path:
-  sample_id_col: sampleID
-  group_col: Depth
+  sample_id_col: sample
+  group_col: type_group
   color_col: Color
+  group_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   subset_groups:
-  skip_venn: true
+  skip_venn: false
   raw_only: false
   final_only: false
   formats: pdf,svg,png
+  font_size: 10
 
 bubbleplotter:
-  enabled: false
+  enabled: true
   output_prefix: metadata/bubble_plot_asv
+  count_col: corr_count
+  sample_col: sample
+  group1_col: type_group
+  group2_col: Case
+  color_col: Color
+  group1_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   formats: pdf,png
   figsize: "32,60"
   bubble_scale: 10
   no_auto_size: true
 
 umap_clustering:
-  enabled: false
+  enabled: true
   output_prefix: metadata/umap_clustering
+  sample_col: sample
+  count_col: corr_count
+  group1_col: type_group
+  group2_col: Case
+  color_col: Color
+  group1_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   formats: pdf,png
   normalize: clr
-  transform: sqrt
-  min_cluster_size: 10
-  min_samples: 5
+  transform: none
+  no_scale: true
+  n_neighbors: 12
+  min_dist: 0.05
+  umap_metric: cosine
+  min_cluster_size: 8
+  min_samples: 4
+  hdbscan_metric: euclidean
 
 diversity:
-  enabled: false
+  enabled: true
   output_dir: diversity
   mito_output_dir: mito/diversity
   mito_input:
-  sample_col: sampleID
-  group_col: Depth
+  sample_col: sample
+  group1_col: type_group
+  group2_col: Case
   color_col: Color
-  secondary_col: Season
+  block_col: Participant_ID
   exclude_groups: []
-  group_order: []
+  group_order:
+    - Oral Rinse
+    - BAL
+    - Bronchial Brush
   run_mito: true
   umap_neighbors: 30
   umap_min_dist: 0.01
@@ -323,42 +363,68 @@ diversity:
   verbose: true
 
 indicspecies:
-  enabled: false
-  sample_col: sampleID
+  enabled: true
+  sample_col: sample
+  color_col: Color
   group_cols:
-    - Season
-    - o2_subcompartment_final
-    - anomaly_type 
+    - type_group
+    - Case
+  group1_order:
+    - Oral Rinse
+    - BAL+Oral Rinse
+    - BAL
+    - BAL+Bronchial Brush
+    - Bronchial Brush
+    - Bronchial Brush+Oral Rinse
+    - BAL+Bronchial Brush+Oral Rinse
+    - not_indicator
+  group2_order:
+    - Non-Cancer
+    - Cancer
+    - Cancer+Non-Cancer
+  group1_palette: Oral Rinse=#6A3D9A,BAL+Oral Rinse=#F19CBB,BAL=#0072B2,BAL+Bronchial Brush=#00FFFF,Bronchial Brush=#009E73,Bronchial Brush+Oral Rinse=#C1EAAD,BAL+Bronchial Brush+Oral Rinse=#000000,not_indicator=#D3D3D3
+  group2_palette: Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3
+  block_col: Participant_ID
   perms: 999
   min_n: 2
+  focus_group1_label: Bronchial Brush
+  label_focused_asvs: true
   plot_enabled: true
   plot_pairs_mode: all
   plot_output_dir: indicspecies/plots
   venn:
-  taxonomy: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
+  taxonomy: /home/ryan/Projects/UBC/LMP/avery_spark_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
 
 clustermaps:
-  enabled: false
+  enabled: true
   output_dir: clustermaps
   mito_output_dir: mito/clustermaps
   mito_input:
-  isa_file: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/indicspecies/
+  isa_file: /home/ryan/Projects/UBC/LMP/avery_spark_output/indicspecies/
   run_mito: true
-  sample_col: sampleID
+  sample_col: sample
   sample_code_col: sample_code
   asv_id_col: ASV_ID
-  group1_col: Depth
-  group2_col: Season
-  group3_col: o2_subcompartment_final
-  group4_col: anomaly_type
+  group1_col: type_group
+  group2_col: Case
+  group3_col:
+  group4_col:
   group1_order:
+    - Oral Rinse
+    - BAL+Oral Rinse
+    - BAL
+    - BAL+Bronchial Brush
+    - Bronchial Brush
+    - Bronchial Brush+Oral Rinse
+    - BAL+Bronchial Brush+Oral Rinse
+    - not_indicator
   exclude_group1:
-  group1_palette: 
-  group2_palette:
+  group1_palette: Oral Rinse=#6A3D9A,BAL+Oral Rinse=#F19CBB,BAL=#0072B2,BAL+Bronchial Brush=#00FFFF,Bronchial Brush=#009E73,Bronchial Brush+Oral Rinse=#C1EAAD,BAL+Bronchial Brush+Oral Rinse=#000000,not_indicator=#D3D3D3
+  group2_palette: Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3
   group3_palette:
   group4_palette:
   ranks: Phylum,Class,Order,Family,Genus,Species,ASV_ID
-  topN: Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000
+  topN: Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=200
   count_col: corr_count
   isa_min_stat: 0.6
   isa_significance_cols:
@@ -366,17 +432,25 @@ clustermaps:
   mito_sample_mode: auto
 
 spieceasi:
-  enabled: false
+  enabled: true
   output_dir: spieceasi
   prefix: spieceasi
   network_enabled: true
   modules_enabled: true
-  module_methods: leiden,louvain
+  module_methods: leiden
   module_primary_method: leiden
-  module_resolutions: 0.5,1.0,1.5
-  module_reps: 25
-  module_consensus_threshold: 0.8
+  module_resolutions: 0.8,1.0,1.2
+  module_reps: 50
+  module_consensus_threshold: 0.95
   module_seed: 42
+  module_best_only: true
+  module_best_min_size: 5
+  module_best_min_stability: 0.7
+  module_isa_only: false
+  module_color_by_isa: false
+  module_isa_source: group1
+  module_isa_min_stat: 0.25
+  module_isa_max_q: 0.05
   modules_sub:
   modules_all:
   graph_pos_all:
@@ -384,9 +458,27 @@ spieceasi:
   node_features:
   network_modes:
     - all
+  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
+  color_col: Color
+  group1_order:
+    - Oral Rinse
+    - BAL+Oral Rinse
+    - BAL
+    - BAL+Bronchial Brush
+    - Bronchial Brush
+    - Bronchial Brush+Oral Rinse
+    - BAL+Bronchial Brush+Oral Rinse
+    - not_indicator
+  group2_order:
+    - Non-Cancer
+    - Cancer
+    - Cancer+Non-Cancer
+  group1_palette: Oral Rinse=#6A3D9A,BAL+Oral Rinse=#F19CBB,BAL=#0072B2,BAL+Bronchial Brush=#00FFFF,Bronchial Brush=#009E73,Bronchial Brush+Oral Rinse=#C1EAAD,BAL+Bronchial Brush+Oral Rinse=#000000,not_indicator=#D3D3D3
+  group2_palette: Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3
+  focus_group1_label: Bronchial Brush
   transpose: true
-  min_rel_abund: 0.0
-  min_prevalence: 0.0
+  min_rel_abund: 0.005
+  min_prevalence: 0.05
   remove_zero_var: true
   method: glasso
   lambda_min_ratio: 0.01
@@ -395,17 +487,37 @@ spieceasi:
   thresh: 0.1
   ncores: 8
   seed: 10010
-  edge_threshold: 0.1
+  edge_threshold: 0.05
   keep_negative: true
   layout_iters: 1000
-  force_filter: false
-  force_spieceasi: false
+  force_filter: true
+  force_spieceasi: true
   force_graphs: true
   layout_seed: 42
   layout_scale: 3.0
   degree_scale: 80.0
-  edge_width_scale: 5.0
-  isa_scale: 500.0
+  edge_width_scale: 10.0
+  isa_scale: 700.0
+
+master_summary:
+  enabled: true
+  output_dir: summary/tables
+  clustermaps_dir: clustermaps
+  indicspecies_dir: indicspecies
+  spieceasi_dir: spieceasi
+  max_direct_cols: 300
+  whitelist:
+    - type_group_ISA_enriched.tsv
+    - case_ISA_enriched.tsv
+    - type_group_case_ISA_results.tsv
+    - type_group_indicator_species_summary.tsv
+    - Case_indicator_species_summary.tsv
+    - type_group_indicator_species_results.tsv
+    - Case_indicator_species_results.tsv
+    - spieceasi_node_features.csv
+    - spieceasi_modules_sub.tsv
+    - spieceasi_modules_all.tsv
+    - clustermap_ASV_ID_plot.tsv
 
 trajectory_analysis:
   enabled: false
@@ -425,7 +537,7 @@ stratification:
   year_col: Year
   depth_col: Depth
   consensus_threshold: 2
-  sample_id_col: sampleID
+  sample_id_col: sample
   trajectory_group_col: cluster_after
   trajectory_summary:
 
@@ -492,3 +604,4 @@ environments:
   spieceasi: envs/advanced.yml
   network_modules: envs/advanced.yml
   network: envs/advanced.yml
+  master_summary: envs/advanced.yml

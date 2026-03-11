@@ -241,7 +241,8 @@ def group_counts_by_group(long_counts: pd.DataFrame, metadata: pd.DataFrame,
 def build_sankey(steps: List[str], counts: List[int],
                  lmp_in: Dict[str, int], lmp_out: Dict[str, int],
                  palette: Dict[str, str], title: str,
-                 output_html: Path, labeled: bool) -> None:
+                 output_html: Path, labeled: bool,
+                 arrangement: str = "snap") -> None:
     """
     Build and save a Plotly HTML sankey.
     """
@@ -257,15 +258,28 @@ def build_sankey(steps: List[str], counts: List[int],
     node_x: List[float] = []
     node_y: List[float] = []
 
+    def even_positions(n: int, low: float = 0.06, high: float = 0.94) -> List[float]:
+        """
+        Evenly space node centers on [low, high].
+        Using inner margins prevents edge crowding and makes snap layout look balanced.
+        """
+        if n <= 0:
+            return []
+        if n == 1:
+            return [0.5]
+        span = high - low
+        return [low + (i * span / (n - 1)) for i in range(n)]
+
+    in_y = even_positions(len(lmp_in))
+    out_y = even_positions(len(lmp_out))
+
     # Input-type nodes (left side, x=0.01)
     n_inputs = len(lmp_in)
     for i, (k, v) in enumerate(lmp_in.items()):
         nodes.append({"label": f"{k} ({v})" if labeled else "", "color": get_color(k)})
         node_idx[(k, "in")] = len(nodes) - 1
         node_x.append(0.01)
-        # Give more vertical space - use power function to spread them out
-        y_pos = (i / max(n_inputs - 1, 1)) ** 0.8  # Exponent < 1 spreads them more
-        node_y.append(y_pos)
+        node_y.append(in_y[i])
 
     # Process nodes (middle, evenly spaced)
     n_steps = len(steps)
@@ -281,7 +295,7 @@ def build_sankey(steps: List[str], counts: List[int],
         nodes.append({"label": f"{k} ({v})" if labeled else "", "color": get_color(k)})
         node_idx[(k, "out")] = len(nodes) - 1
         node_x.append(0.99)
-        node_y.append(i / max(n_outputs - 1, 1))  # Evenly space from 0 to 1
+        node_y.append(out_y[i])
 
     # Links: input -> first step
     first_step = steps[0]
@@ -330,7 +344,7 @@ def build_sankey(steps: List[str], counts: List[int],
         link_colors.append("grey")
 
     fig = go.Figure(data=[go.Sankey(
-        arrangement='snap',
+        arrangement=arrangement,
         node=dict(
             pad=10,
             thickness=20,
@@ -393,6 +407,12 @@ def get_parser() -> argparse.ArgumentParser:
                      help="Output prefix ('.html' appended automatically)")
     out.add_argument("--make-labeled", action="store_true", help="Create labeled-node HTML")
     out.add_argument("--make-unlabeled", action="store_true", help="Create unlabeled-node HTML")
+    out.add_argument(
+        "--arrangement",
+        default="snap",
+        choices=["snap", "perpendicular", "freeform", "fixed"],
+        help="Plotly sankey node arrangement mode (use 'freeform' for draggable nodes).",
+    )
 
     # --- Misc
     p.add_argument("--verbose", action="store_true", help="Verbose logs")
@@ -572,12 +592,14 @@ def main():
     if args.make_labeled:
         build_sankey(
             steps, counts, lmp_in, lmp_out, palette,
-            args.title, out_pref.with_suffix(".label.html"), True
+            args.title, out_pref.with_suffix(".label.html"), True,
+            arrangement=args.arrangement
         )
     if args.make_unlabeled:
         build_sankey(
             steps, counts, lmp_in, lmp_out, palette,
-            args.title, out_pref.with_suffix(".html"), False
+            args.title, out_pref.with_suffix(".html"), False,
+            arrangement=args.arrangement
         )
 
 

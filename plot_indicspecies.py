@@ -25,8 +25,8 @@ python isa_plots_cli.py \
   --taxonomy      /.../metadata/taxonomy_updated.tsv \
   --outdir        /.../indicspecies \
   --p-thresh 0.05 --stat-thresh 0.0 \
-  --group1-index "1=BAL,2=Lung Brush,3=Oral Rinse" \
-  --group1-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" \
+  --group1-index "1=BAL,2=Bronchial Brush,3=Oral Rinse" \
+  --group1-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73" \
   --group2-index "1=Cancer,2=Non-Cancer" \
   --group2-palette "Cancer=#A50026,Non-Cancer=#FFFFFF"
 
@@ -64,7 +64,7 @@ sns.set_style("white")
 
 def parse_mapping(s: str) -> dict:
     """
-    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Lung Brush" into dict.
+    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Bronchial Brush" into dict.
     Returns {} if s is falsy/empty.
     """
     if not s:
@@ -82,6 +82,22 @@ def parse_mapping(s: str) -> dict:
             warnings.warn(f"Ignoring malformed mapping: {item!r}")
             continue
         out[k.strip()] = v.strip()
+    return out
+
+
+def parse_order(s: str) -> list[str]:
+    if not s:
+        return []
+    vals: list[str] = []
+    for x in str(s).split(","):
+        x = x.strip()
+        if not x:
+            continue
+        vals.append(normalize_combo(x))
+    out: list[str] = []
+    for v in vals:
+        if v not in out:
+            out.append(v)
     return out
 
 
@@ -191,7 +207,7 @@ def infer_index_map_from_sign_table(df: pd.DataFrame, idx_col: str, p_col: str, 
             for i in range(1, (1 << n)):
                 members = [groups[b] for b in range(n) if (i >> b) & 1]
                 if members:
-                    label = " + ".join(members) if len(members) > 1 else members[0]
+                    label = "+".join(members) if len(members) > 1 else members[0]
                     mapping[str(i)] = label
                     mapping[i] = label
             return mapping
@@ -234,14 +250,114 @@ def sanitize_stub(name: str, fallback: str) -> str:
 
 def normalize_combo(label: str) -> str:
     """
-    Normalize combo strings like "BAL + Lung Brush" -> "BAL + Lung Brush"
-    (trim spaces around '+', sort parts alphabetically for stable mapping).
+    Normalize combo strings like "BAL + Bronchial Brush" -> "BAL+Bronchial Brush"
+    while preserving component order.
     """
     if not isinstance(label, str):
         return str(label)
     parts = [p.strip() for p in label.split("+")]
     parts = [p for p in parts if p]
-    return " + ".join(sorted(parts)) if len(parts) > 1 else (parts[0] if parts else label)
+    parts = ["Non-Cancer" if p == "Control" else p for p in parts]
+    uniq: list[str] = []
+    for p in parts:
+        if p not in uniq:
+            uniq.append(p)
+    if not uniq:
+        return label
+    return "+".join(uniq)
+
+
+def infer_all_combo_label(labels: list[str]) -> Optional[str]:
+    """Infer the all-group combo as the label with the most components."""
+    norm = [normalize_combo(str(x).strip()) for x in labels if str(x).strip()]
+    norm = [x for x in norm if x and x != "not_indicator"]
+    if not norm:
+        return None
+    combos = []
+    for x in norm:
+        n_parts = len([p for p in x.split("+") if p.strip()])
+        if n_parts > 1:
+            combos.append((n_parts, x))
+    if not combos:
+        return None
+    combos.sort(key=lambda t: (-t[0], t[1]))
+    return combos[0][1]
+
+
+def combo_contains_component(label: object, component: object) -> bool:
+    if label is None or component is None:
+        return False
+    lbl = normalize_combo(str(label).strip())
+    comp = normalize_combo(str(component).strip())
+    if not lbl or not comp:
+        return False
+    lbl_parts = {p.strip() for p in lbl.split("+") if p.strip()}
+    comp_parts = {p.strip() for p in comp.split("+") if p.strip()}
+    if not lbl_parts or not comp_parts:
+        return False
+    return comp_parts.issubset(lbl_parts)
+
+
+def drop_all_group_rows(df: pd.DataFrame, label_col: str, all_label: Optional[str]) -> pd.DataFrame:
+    if not all_label or label_col not in df.columns:
+        return df
+    out = df.copy()
+    labels = out[label_col].map(lambda x: normalize_combo(str(x)) if pd.notna(x) else x)
+    return out.loc[labels != all_label].copy()
+
+
+def normalize_label_mapping_values(mapping: dict) -> dict:
+    out = {}
+    for k, v in mapping.items():
+        out[k] = normalize_combo(str(v).strip())
+    return out
+
+
+def normalize_palette_keys(mapping: dict) -> dict:
+    out = {}
+    for k, v in mapping.items():
+        kk = normalize_combo(str(k).strip())
+        if kk and kk not in out:
+            out[kk] = v
+    return out
+
+
+def normalize_order_list(vals: list[str]) -> list[str]:
+    out: list[str] = []
+    for v in vals:
+        vv = normalize_combo(str(v).strip())
+        if vv and vv not in out:
+            out.append(vv)
+    return out
+
+
+def augment_combo_palette(palette: dict, labels: list[str]) -> dict:
+    out = dict(palette)
+    for raw in labels:
+        label = str(raw).strip()
+        if not label or label in out or "+" not in label:
+            continue
+        parts = [p.strip() for p in re.split(r"\s*\+\s*", label) if p.strip()]
+        if len(parts) < 2:
+            continue
+        colors = []
+        ok = True
+        for p in parts:
+            if p in out:
+                colors.append(out[p])
+            else:
+                ok = False
+                break
+        if not ok:
+            continue
+        try:
+            rgb = np.mean([mcolors.to_rgb(c) for c in colors], axis=0)
+            blend = mcolors.to_hex(rgb)
+            out[label] = blend
+            out.setdefault(normalize_combo(label), blend)
+        except Exception:
+            continue
+    return out
 
 
 def read_taxonomy_table(taxonomy_path: Path) -> pd.DataFrame:
@@ -325,7 +441,8 @@ def compute_sig_table(
         if pd.isna(x):
             return "not_indicator"
         key = str(int(x))
-        return index_map.get(key, index_map.get(int(x), f"index_{int(x)}"))
+        raw = index_map.get(key, index_map.get(int(x), f"index_{int(x)}"))
+        return normalize_combo(raw)
 
     labels = df[idx_col].apply(idx_to_label).astype(str)
     df[f"{prefix}_label"] = labels.where(df[f"{prefix}_significance"], "not_indicator")
@@ -353,6 +470,8 @@ def plot_p_vs_stat_no_overlap(
     y_col: str,
     hue_col: str | None = None,
     style_col: str | None = None,
+    hue_order: list[str] | None = None,
+    style_order: list[str] | None = None,
     color_palette: dict | None = None,
     marker_dict: dict | None = None,
     # Jitter controls (normalized units)
@@ -377,6 +496,10 @@ def plot_p_vs_stat_no_overlap(
     legend_pad_in=0.45,
     legend_vgap_in=0.25,
     legend_fontsize=10,
+    label_col: str | None = None,
+    label_mask_col: str | None = None,
+    label_fontsize: int = 7,
+    label_max: int = 300,
 ):
     """Scatter x_col vs y_col with axis-wise repulsive jitter and fixed data area."""
     dd = df.copy()
@@ -440,14 +563,21 @@ def plot_p_vs_stat_no_overlap(
 
     # Resolve hue palette
     palette = None
+    hue_order_eff = None
     if hue_col is not None:
+        present = [str(v) for v in dd[hue_col].dropna().unique().tolist()]
+        if hue_order:
+            pref = [str(v) for v in hue_order]
+            rem = [v for v in present if v not in pref]
+            hue_order_eff = pref + rem
+        else:
+            hue_order_eff = present
         if color_palette:
             # Use given mapping, but only for categories present. Match keys as strings.
             palette_src = {str(k): v for k, v in color_palette.items()}
-            present = dd[hue_col].dropna().unique().tolist()
             palette = {}
             missing = []
-            for k in present:
+            for k in hue_order_eff:
                 k_str = str(k)
                 if k_str in palette_src:
                     palette[k] = palette_src[k_str]
@@ -465,13 +595,20 @@ def plot_p_vs_stat_no_overlap(
 
     # Resolve style markers
     markers = None
+    style_order_eff = None
     if style_col is not None:
-        cats = dd[style_col].dropna().unique().tolist()
+        cats = [str(v) for v in dd[style_col].dropna().unique().tolist()]
+        if style_order:
+            pref = [str(v) for v in style_order]
+            rem = [v for v in cats if v not in pref]
+            style_order_eff = pref + rem
+        else:
+            style_order_eff = cats
         default_markers = ["o", "s", "D", "X", "^", "v", "P", "*", "h", "H", "8", "p", "<", ">"]
         if marker_dict:
             markers = {str(k): v for k, v in marker_dict.items()}
             # Seaborn requires marker values for all present style levels.
-            missing_cats = [str(c) for c in cats if str(c) not in markers]
+            missing_cats = [str(c) for c in style_order_eff if str(c) not in markers]
             if missing_cats:
                 for i, c in enumerate(missing_cats):
                     markers[c] = default_markers[i % len(default_markers)]
@@ -481,21 +618,30 @@ def plot_p_vs_stat_no_overlap(
                     "auto-filled with default markers."
                 )
         else:
-            markers = {c: default_markers[i % len(default_markers)] for i, c in enumerate(cats)}
+            markers = {c: default_markers[i % len(default_markers)] for i, c in enumerate(style_order_eff)}
 
     # Legend handles
     color_handles = []
     legend_palette = palette if palette is not None else color_palette
-    for name, col in (legend_palette or {}).items():
-        color_handles.append(
-            mlines.Line2D([], [], marker="o", linestyle="None",
-                          markerfacecolor=col, markeredgecolor="black",
-                          markeredgewidth=0.5, markersize=8, label=str(name))
-        )
+    if legend_palette:
+        ordered_color_names = list(legend_palette.keys())
+        if hue_order_eff:
+            ordered_color_names = [n for n in hue_order_eff if n in legend_palette] + [n for n in ordered_color_names if n not in hue_order_eff]
+        for name in ordered_color_names:
+            col = legend_palette[name]
+            color_handles.append(
+                mlines.Line2D([], [], marker="o", linestyle="None",
+                              markerfacecolor=col, markeredgecolor="black",
+                              markeredgewidth=0.5, markersize=8, label=str(name))
+            )
 
     marker_handles = []
     if show_legend and style_col is not None and markers:
-        for name, mk in markers.items():
+        ordered_marker_names = list(markers.keys())
+        if style_order_eff:
+            ordered_marker_names = [n for n in style_order_eff if n in markers] + [n for n in ordered_marker_names if n not in style_order_eff]
+        for name in ordered_marker_names:
+            mk = markers[name]
             marker_handles.append(
                 mlines.Line2D([], [], color="gray", marker=mk, linestyle="None",
                               markeredgewidth=0.5, markersize=8, label=str(name))
@@ -555,11 +701,32 @@ def plot_p_vs_stat_no_overlap(
         data=dd, x="_x_", y="_y_",
         hue=hue_col if hue_col else None,
         style=style_col if style_col else None,
+        hue_order=hue_order_eff if hue_col else None,
+        style_order=style_order_eff if style_col else None,
         palette=palette, markers=markers,
         s=point_size, alpha=alpha,
         linewidth=0.5, edgecolor="black",
         legend=False, ax=ax,
     )
+
+    # Optional labels for focused points (for example, focused ISA ASVs).
+    if label_col and label_col in dd.columns:
+        lbl_df = dd.copy()
+        if label_mask_col and label_mask_col in lbl_df.columns:
+            mask = lbl_df[label_mask_col].fillna(False).astype(bool)
+            lbl_df = lbl_df.loc[mask].copy()
+        lbl_df = lbl_df.dropna(subset=[label_col, "_x_", "_y_"])
+        if not lbl_df.empty:
+            if len(lbl_df) > label_max:
+                lbl_df = lbl_df.head(label_max)
+                warnings.warn(f"Labeling truncated to first {label_max} points for readability.")
+            for _, row in lbl_df.iterrows():
+                txt = str(row[label_col]).strip()
+                if not txt:
+                    continue
+                ax.text(float(row["_x_"]), float(row["_y_"]), txt,
+                        fontsize=label_fontsize, color="black",
+                        ha="left", va="bottom")
     ax.set_xlabel(x_col)
     ax.set_ylabel(y_col)
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
@@ -616,7 +783,7 @@ def main():
     # Index maps
     ap.add_argument("--group1-index", type=str, default="",
                     help='Mapping of indicspecies "index" to labels for group1, e.g. '
-                         '"1=BAL,2=Lung Brush,3=Oral Rinse" (optional if metadata columns provided).')
+                         '"1=BAL,2=Bronchial Brush,3=Oral Rinse" (optional if metadata columns provided).')
     ap.add_argument("--group2-index", type=str, default="",
                     help='Mapping for group2 "index" values, e.g. "1=Cancer,2=Non-Cancer" '
                          '(optional if metadata columns provided).')
@@ -634,7 +801,7 @@ def main():
     # Palettes
     ap.add_argument("--group1-palette", type=str, default="",
                     help='Color map for group1 labels, e.g. '
-                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" '
+                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73" '
                          '(optional if metadata columns provided).')
     ap.add_argument("--group2-palette", type=str, default="",
                     help='Color map for group2 labels, e.g. "Cancer=#A50026,Non-Cancer=#FFFFFF" '
@@ -642,6 +809,16 @@ def main():
     ap.add_argument("--group2-markers", type=str, default="",
                     help='Marker styles for group2, e.g. "Cancer=X,Non-Cancer=D" '
                          '(optional if metadata columns provided).')
+    ap.add_argument("--group1-order", type=str, default="",
+                    help="Optional comma-separated order for group1 labels (legend + plotting order).")
+    ap.add_argument("--group2-order", type=str, default="",
+                    help="Optional comma-separated order for group2 labels (legend + plotting order).")
+    ap.add_argument("--focus-group1-label", type=str, default="",
+                    help="Optional group1 component label to keep colored (for example: Bronchial Brush). Mixed labels containing this component stay colored; other labels become not_indicator.")
+    ap.add_argument("--focus-group2-label", type=str, default="",
+                    help="Optional group2 component label to keep colored; mixed labels containing this component stay colored; other labels become not_indicator.")
+    ap.add_argument("--label-focused-asvs", action="store_true",
+                    help="Label ASV_ID text for focused points in ISA figures.")
 
     meta_opts = ap.add_argument_group("Metadata-derived mappings")
     meta_opts.add_argument("--metadata", type=Path, default=None,
@@ -676,6 +853,8 @@ def main():
     group2_title = args.group2_name
     group1_stub = sanitize_stub(group1_title, "group1")
     group2_stub = sanitize_stub(group2_title, "group2")
+    group1_order = parse_order(args.group1_order)
+    group2_order = parse_order(args.group2_order)
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
@@ -729,6 +908,7 @@ def main():
         )
     if not group1_index_map:
         raise ValueError("Provide group1 index mapping via --group1-index or metadata columns.")
+    group1_index_map = normalize_label_mapping_values(group1_index_map)
     group1_index_map = extend_digit_keys(group1_index_map)
 
     group2_index_map: dict = {}
@@ -753,6 +933,7 @@ def main():
         )
     if not group2_index_map:
         raise ValueError("Provide group2 index mapping via --group2-index or metadata columns.")
+    group2_index_map = normalize_label_mapping_values(group2_index_map)
     group2_index_map = extend_digit_keys(group2_index_map)
 
     group1_palette: dict = {}
@@ -772,6 +953,9 @@ def main():
         )
     if not group1_palette:
         group1_palette.update(auto_palette_for_labels(list(group1_index_map.values())))
+    group1_palette = normalize_palette_keys(group1_palette)
+    group1_palette = augment_combo_palette(group1_palette, [str(v) for v in group1_index_map.values()])
+    group1_palette = normalize_palette_keys(group1_palette)
 
     group2_palette: dict = {}
     if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_color_col:
@@ -790,6 +974,9 @@ def main():
         )
     if not group2_palette:
         group2_palette.update(auto_palette_for_labels(list(group2_index_map.values())))
+    group2_palette = normalize_palette_keys(group2_palette)
+    group2_palette = augment_combo_palette(group2_palette, [str(v) for v in group2_index_map.values()])
+    group2_palette = normalize_palette_keys(group2_palette)
 
     group2_markers: dict = {}
     if palette_meta is not None and args.group2_meta_label_col and args.group2_meta_marker_col:
@@ -810,6 +997,46 @@ def main():
         )
     if not group2_markers:
         group2_markers.update(auto_markers_for_labels(list(group2_palette.keys())))
+    group2_markers = {normalize_combo(str(k)): v for k, v in group2_markers.items()}
+
+    focus_group1_label = normalize_combo(args.focus_group1_label) if args.focus_group1_label else ""
+    focus_group2_label = normalize_combo(args.focus_group2_label) if args.focus_group2_label else ""
+
+    # Remove all-group category from ISA plots (rows + legends), but keep it in TSV outputs.
+    group1_all_label = infer_all_combo_label(
+        group1_order if group1_order else list(group1_palette.keys()) + [str(v) for v in group1_index_map.values()]
+    )
+    group2_all_label = infer_all_combo_label(
+        group2_order if group2_order else list(group2_palette.keys()) + [str(v) for v in group2_index_map.values()]
+    )
+    group1_order_plot = [normalize_combo(x) for x in group1_order if normalize_combo(x) != group1_all_label]
+    group2_order_plot = [normalize_combo(x) for x in group2_order if normalize_combo(x) != group2_all_label]
+    group1_palette_plot = {
+        normalize_combo(str(k)): v
+        for k, v in group1_palette.items()
+        if normalize_combo(str(k)) != group1_all_label
+    }
+    group2_palette_plot = {
+        normalize_combo(str(k)): v
+        for k, v in group2_palette.items()
+        if normalize_combo(str(k)) != group2_all_label
+    }
+    group2_markers_plot = {
+        normalize_combo(str(k)): v
+        for k, v in group2_markers.items()
+        if normalize_combo(str(k)) != group2_all_label
+    }
+
+    def apply_focus_label(df_in: pd.DataFrame, label_col: str, focus_label: str, all_label: Optional[str], flag_col: str) -> pd.DataFrame:
+        df = df_in.copy()
+        if not focus_label or label_col not in df.columns:
+            df[flag_col] = False
+            return df
+        lab_norm = df[label_col].map(lambda x: normalize_combo(str(x)) if pd.notna(x) else "")
+        mask = lab_norm.map(lambda x: combo_contains_component(x, focus_label) and x != (all_label or ""))
+        df[flag_col] = mask.fillna(False)
+        df.loc[~df[flag_col], label_col] = "not_indicator"
+        return df
 
     # ---- Build significance tables ----
     group1_sig = compute_sig_table(
@@ -827,17 +1054,113 @@ def main():
         force_all_sig=False, prefix="group2"
     )
     group2_sig.to_csv(outdir / f"{group2_stub}_ISA_enriched.tsv", sep="\t", index=False)
+    group1_sig_plot = drop_all_group_rows(group1_sig, "group1_label", group1_all_label)
+    group2_sig_plot = drop_all_group_rows(group2_sig, "group2_label", group2_all_label)
+
+    # Keep all-sig and focus-only variants separately.
+    group1_sig_plot_all = group1_sig_plot.copy()
+    group2_sig_plot_all = group2_sig_plot.copy()
+    group1_sig_plot_focus = apply_focus_label(group1_sig_plot, "group1_label", focus_group1_label, group1_all_label, "__focus_group1__")
+    group2_sig_plot_focus = apply_focus_label(group2_sig_plot, "group2_label", focus_group2_label, group2_all_label, "__focus_group2__")
+
+    group1_order_all = list(group1_order_plot) if group1_order_plot else []
+    group2_order_all = list(group2_order_plot) if group2_order_plot else []
+    group1_palette_all = dict(group1_palette_plot)
+    group2_palette_all = dict(group2_palette_plot)
+    group1_palette_all["not_indicator"] = "lightgray"
+    group2_palette_all["not_indicator"] = "lightgray"
+
+    group1_order_focus = list(group1_order_all)
+    group2_order_focus = list(group2_order_all)
+    group1_palette_focus = dict(group1_palette_all)
+    group2_palette_focus = dict(group2_palette_all)
+    group2_markers_focus = dict(group2_markers_plot)
+
+    if focus_group1_label:
+        base_labels = normalize_order_list(
+            (group1_order_all if group1_order_all else []) +
+            list(group1_palette_all.keys()) +
+            group1_sig_plot_focus["group1_label"].dropna().astype(str).tolist()
+        )
+        keep_group1 = [
+            lbl for lbl in base_labels
+            if combo_contains_component(lbl, focus_group1_label) and lbl != (group1_all_label or "")
+        ]
+        if not keep_group1:
+            keep_group1 = [focus_group1_label]
+        group1_order_focus = [lbl for lbl in group1_order_all if lbl in keep_group1] if group1_order_all else keep_group1
+        group1_palette_focus = {
+            lbl: group1_palette_all.get(lbl, group1_palette.get(lbl, "lightgray"))
+            for lbl in keep_group1
+        }
+        group1_palette_focus["not_indicator"] = "lightgray"
+
+    if focus_group2_label:
+        base_labels = normalize_order_list(
+            (group2_order_all if group2_order_all else []) +
+            list(group2_palette_all.keys()) +
+            group2_sig_plot_focus["group2_label"].dropna().astype(str).tolist()
+        )
+        keep_group2 = [
+            lbl for lbl in base_labels
+            if combo_contains_component(lbl, focus_group2_label) and lbl != (group2_all_label or "")
+        ]
+        if not keep_group2:
+            keep_group2 = [focus_group2_label]
+        group2_order_focus = [lbl for lbl in group2_order_all if lbl in keep_group2] if group2_order_all else keep_group2
+        group2_palette_focus = {
+            lbl: group2_palette_all.get(lbl, group2_palette.get(lbl, "lightgray"))
+            for lbl in keep_group2
+        }
+        group2_palette_focus["not_indicator"] = "lightgray"
+        group2_markers_focus = {lbl: group2_markers_plot.get(lbl, "o") for lbl in keep_group2}
 
     # ---- Type plot (ISA) ----
     plot_p_vs_stat_no_overlap(
-        group1_sig,
+        group1_sig_plot_all,
         outdir / f"{group1_stub}_ISA_plot.svg",
         x_col="group1_stat", y_col="group1_log_p",
         hue_col="group1_label",
-        color_palette=group1_palette,
+        hue_order=group1_order_all if group1_order_all else None,
+        color_palette=group1_palette_all,
         plot_size_in=(args.plot_width, args.plot_height),
         legend_color_title=group1_title,
     )
+    plot_p_vs_stat_no_overlap(
+        group1_sig_plot_all,
+        outdir / f"{group1_stub}_ISA_plot_LABELED.svg",
+        x_col="group1_stat", y_col="group1_log_p",
+        hue_col="group1_label",
+        hue_order=group1_order_all if group1_order_all else None,
+        color_palette=group1_palette_all,
+        plot_size_in=(args.plot_width, args.plot_height),
+        legend_color_title=group1_title,
+        label_col="ASV_ID",
+        label_mask_col="group1_significance",
+    )
+    if focus_group1_label:
+        plot_p_vs_stat_no_overlap(
+            group1_sig_plot_focus,
+            outdir / f"{group1_stub}_ISA_plot_FOCUS.svg",
+            x_col="group1_stat", y_col="group1_log_p",
+            hue_col="group1_label",
+            hue_order=group1_order_focus if group1_order_focus else None,
+            color_palette=group1_palette_focus,
+            plot_size_in=(args.plot_width, args.plot_height),
+            legend_color_title=f"{group1_title} ({focus_group1_label})",
+        )
+        plot_p_vs_stat_no_overlap(
+            group1_sig_plot_focus,
+            outdir / f"{group1_stub}_ISA_plot_FOCUS_LABELED.svg",
+            x_col="group1_stat", y_col="group1_log_p",
+            hue_col="group1_label",
+            hue_order=group1_order_focus if group1_order_focus else None,
+            color_palette=group1_palette_focus,
+            plot_size_in=(args.plot_width, args.plot_height),
+            legend_color_title=f"{group1_title} ({focus_group1_label})",
+            label_col="ASV_ID" if args.label_focused_asvs else None,
+            label_mask_col="__focus_group1__" if args.label_focused_asvs else None,
+        )
 
     # ---- Type plot using Venn membership (optional; force all sig for color only) ----
     if venn_df is not None:
@@ -866,27 +1189,55 @@ def main():
         venn_sig["group1_color"] = venn_sig["group1_label"].map(lambda k: group1_palette.get(k, "lightgray"))
 
         venn_sig.to_csv(outdir / f"{group1_stub}_venn_enriched.tsv", sep="\t", index=False)
+        venn_sig_plot = drop_all_group_rows(venn_sig, "group1_label", group1_all_label)
+        venn_sig_plot = apply_focus_label(venn_sig_plot, "group1_label", focus_group1_label, group1_all_label, "__focus_group1__")
         plot_p_vs_stat_no_overlap(
-            venn_sig,
+            venn_sig_plot,
             outdir / f"{group1_stub}_Venn_plot.svg",
             x_col="group1_stat", y_col="group1_log_p",
             hue_col="group1_label",
-            color_palette=group1_palette,
+            hue_order=group1_order_all if group1_order_all else None,
+            color_palette=group1_palette_all,
             plot_size_in=(args.plot_width, args.plot_height),
             legend_color_title=group1_title,
+            label_col="ASV_ID" if args.label_focused_asvs and focus_group1_label else None,
+            label_mask_col="__focus_group1__" if args.label_focused_asvs and focus_group1_label else None,
         )
 
     # ---- Status plot (ISA) ----
     plot_p_vs_stat_no_overlap(
-        group2_sig,
+        group2_sig_plot_all,
         outdir / f"{group2_stub}_ISA_plot.svg",
         x_col="group2_stat", y_col="group2_log_p",
         hue_col="group2_label",
-        color_palette=group2_palette,
+        hue_order=group2_order_all if group2_order_all else None,
+        color_palette=group2_palette_all,
         plot_size_in=(args.plot_width, args.plot_height),
         legend_color_title=group2_title,
     )
-
+    if focus_group2_label:
+        plot_p_vs_stat_no_overlap(
+            group2_sig_plot_focus,
+            outdir / f"{group2_stub}_ISA_plot_FOCUS.svg",
+            x_col="group2_stat", y_col="group2_log_p",
+            hue_col="group2_label",
+            hue_order=group2_order_focus if group2_order_focus else None,
+            color_palette=group2_palette_focus,
+            plot_size_in=(args.plot_width, args.plot_height),
+            legend_color_title=f"{group2_title} ({focus_group2_label})",
+        )
+        plot_p_vs_stat_no_overlap(
+            group2_sig_plot_focus,
+            outdir / f"{group2_stub}_ISA_plot_FOCUS_LABELED.svg",
+            x_col="group2_stat", y_col="group2_log_p",
+            hue_col="group2_label",
+            hue_order=group2_order_focus if group2_order_focus else None,
+            color_palette=group2_palette_focus,
+            plot_size_in=(args.plot_width, args.plot_height),
+            legend_color_title=f"{group2_title} ({focus_group2_label})",
+            label_col="ASV_ID" if args.label_focused_asvs else None,
+            label_mask_col="__focus_group2__" if args.label_focused_asvs else None,
+        )
     # ---- Combined tables/plots: join group1 + group2 on ASV ----
     combined = pd.merge(group1_sig[["ASV_ID", "group1_stat", "group1_p_value", "group1_log_p",
                                     "group1_significance", "group1_label", "group1_color"]],
@@ -894,13 +1245,17 @@ def main():
                                     "group2_significance", "group2_label"]],
                         on="ASV_ID", how="outer")
     combined.to_csv(outdir / f"{group1_stub}_{group2_stub}_ISA_results.tsv", sep="\t", index=False)
+    combined_plot = drop_all_group_rows(combined, "group1_label", group1_all_label)
+    combined_plot = drop_all_group_rows(combined_plot, "group2_label", group2_all_label)
 
     plot_p_vs_stat_no_overlap(
-        combined,
+        combined_plot,
         outdir / "Combined_ISA_plot.svg",
         x_col="group2_stat", y_col="group2_log_p",
         hue_col="group1_label", style_col="group2_label",
-        color_palette=group1_palette, marker_dict=group2_markers,
+        hue_order=group1_order_all if group1_order_all else None,
+        style_order=group2_order_all if group2_order_all else None,
+        color_palette=group1_palette_all, marker_dict=group2_markers_plot,
         legend_color_title=group1_title, legend_marker_title=group2_title,
         plot_size_in=(args.plot_width, args.plot_height),
     )
@@ -909,27 +1264,47 @@ def main():
     if tax_df is not None:
         # For Type ISA
         group1_tax = group1_sig.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
-        phyla = group1_tax["Phylum"].dropna().unique().tolist()
+        group1_tax_plot = drop_all_group_rows(group1_tax, "group1_label", group1_all_label)
+        group1_tax_plot["Phylum_plot"] = np.where(
+            group1_tax_plot["group1_significance"].fillna(False).astype(bool),
+            group1_tax_plot["Phylum"].fillna("not_indicator").astype(str),
+            "not_indicator"
+        )
+        phyla = sorted([p for p in group1_tax_plot["Phylum_plot"].dropna().astype(str).unique().tolist() if p != "not_indicator"])
         phyl_pal = {p: c for p, c in zip(phyla, sns.color_palette('tab20', len(phyla)).as_hex())}
+        phyl_pal["not_indicator"] = "lightgray"
         group1_tax.to_csv(outdir / f"{group1_stub}_ISA_with_taxonomy.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
-            group1_tax,
+            group1_tax_plot,
             outdir / f"{group1_stub}_ISA_plot_Phylum.svg",
             x_col="group1_stat", y_col="group1_log_p",
-            hue_col="Phylum", color_palette=phyl_pal,
+            hue_col="Phylum_plot", color_palette=phyl_pal,
             legend_color_title="Phylum",
             plot_size_in=(args.plot_width, args.plot_height),
+        )
+        plot_p_vs_stat_no_overlap(
+            group1_tax_plot,
+            outdir / f"{group1_stub}_ISA_plot_Phylum_LABELED.svg",
+            x_col="group1_stat", y_col="group1_log_p",
+            hue_col="Phylum_plot", color_palette=phyl_pal,
+            legend_color_title="Phylum",
+            plot_size_in=(args.plot_width, args.plot_height),
+            label_col="ASV_ID",
+            label_mask_col="group1_significance",
         )
 
         # Combined + taxonomy
         comb_tax = combined.merge(tax_df, left_on="ASV_ID", right_index=True, how="left")
+        comb_tax_plot = drop_all_group_rows(comb_tax, "group1_label", group1_all_label)
+        comb_tax_plot = drop_all_group_rows(comb_tax_plot, "group2_label", group2_all_label)
         comb_tax.to_csv(outdir / "Combined_ISA_with_taxonomy.tsv", sep="\t", index=False)
         plot_p_vs_stat_no_overlap(
-            comb_tax,
+            comb_tax_plot,
             outdir / "Combined_ISA_plot_Phylum.svg",
             x_col="group2_stat", y_col="group2_log_p",
             hue_col="Phylum", style_col="group2_label",
-            color_palette=phyl_pal, marker_dict=group2_markers,
+            style_order=group2_order_all if group2_order_all else None,
+            color_palette=phyl_pal, marker_dict=group2_markers_plot,
             legend_color_title="Phylum", legend_marker_title=group2_title,
             plot_size_in=(args.plot_width, args.plot_height),
         )

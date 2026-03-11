@@ -3,7 +3,7 @@
 asv_umap_clustering.py
 ---------------------
 Perform UMAP dimensionality reduction and HDBSCAN clustering on ASV count data.
-Generates scatter plots colored by depth, month, and cluster assignments.
+Generates scatter plots colored by primary group, secondary group, and cluster assignments.
 
 Features:
 - UMAP dimensionality reduction of ASV count matrix
@@ -19,9 +19,9 @@ python asv_umap_clustering.py \
   --asv-col ASV_ID \
   --sample-col sampleID \
   --count-col count \
-  --depth-col Depth \
+  --group1-col type_group \
   --color-col Color \
-  --month-col Month \
+  --group2-col Case \
   --output-prefix umap_clustering \
   --formats pdf,png
 """
@@ -315,6 +315,28 @@ def run_hdbscan(
     return labels
 
 
+def parse_list_csv(arg: str) -> List[str]:
+    if not arg:
+        return []
+    return [x.strip() for x in str(arg).split(",") if x and x.strip()]
+
+
+def resolve_category_order(values: pd.Series, requested: Optional[List[str]] = None, noise_last: bool = False) -> List[str]:
+    present = [str(v) for v in pd.Series(values).dropna().astype(str).unique().tolist()]
+    if requested:
+        specified = [str(v).strip() for v in requested if str(v).strip()]
+        ordered = [v for v in specified if v in present]
+        ordered += [v for v in present if v not in ordered]
+    else:
+        try:
+            ordered = sorted(present, key=lambda x: float(x))
+        except (ValueError, TypeError):
+            ordered = sorted(present, key=str)
+    if noise_last and "-1" in ordered:
+        ordered = [v for v in ordered if v != "-1"] + ["-1"]
+    return ordered
+
+
 def plot_umap_scatter(
     embedding: np.ndarray,
     colors: pd.Series,
@@ -327,7 +349,8 @@ def plot_umap_scatter(
     figsize: Tuple[float, float] = (10, 8),
     dpi: int = 300,
     alpha: float = 0.7,
-    point_size: float = 50
+    point_size: float = 50,
+    value_order: Optional[List[str]] = None,
 ) -> None:
     """
     Create UMAP scatter plot with custom coloring.
@@ -335,19 +358,15 @@ def plot_umap_scatter(
     fig, ax = plt.subplots(figsize=figsize)
     
     # Handle different color types
+    colors = colors.astype(str)
     if color_map is not None:
         # Use provided color map - sort values numerically if possible
-        unique_vals = colors.unique()
-        
-        # Try to sort numerically
-        try:
-            unique_vals_sorted = sorted(unique_vals, key=lambda x: float(x))
-        except (ValueError, TypeError):
-            unique_vals_sorted = sorted(unique_vals, key=str)
+        unique_vals_sorted = resolve_category_order(colors, value_order)
+        cmap = {str(k): v for k, v in color_map.items()} if color_map else {}
         
         for val in unique_vals_sorted:
             mask = colors == val
-            color = color_map.get(val, 'gray')
+            color = cmap.get(str(val), 'gray')
             ax.scatter(
                 embedding[mask, 0],
                 embedding[mask, 1],
@@ -360,17 +379,7 @@ def plot_umap_scatter(
             )
     else:
         # Auto-assign categorical colors
-        unique_vals = colors.unique()
-        
-        # Sort with -1 (noise) at the end
-        if -1 in unique_vals:
-            other_vals = sorted([v for v in unique_vals if v != -1])
-            unique_vals_sorted = other_vals + [-1]
-        else:
-            try:
-                unique_vals_sorted = sorted(unique_vals, key=lambda x: float(x) if x != -1 else float('inf'))
-            except (ValueError, TypeError):
-                unique_vals_sorted = sorted(unique_vals, key=str)
+        unique_vals_sorted = resolve_category_order(colors, value_order, noise_last=True)
         
         palette = sns.color_palette('tab20', n_colors=len(unique_vals_sorted))
         color_dict = dict(zip(unique_vals_sorted, palette))
@@ -378,7 +387,7 @@ def plot_umap_scatter(
         for val in unique_vals_sorted:
             mask = colors == val
             color = color_dict[val]
-            if val == -1:
+            if str(val) == "-1":
                 label = "Noise"
             else:
                 label = str(val)
@@ -387,7 +396,7 @@ def plot_umap_scatter(
                 embedding[mask, 1],
                 c=[color],
                 label=label,
-                alpha=alpha if val != -1 else 0.3,
+                alpha=alpha if str(val) != "-1" else 0.3,
                 s=point_size,
                 edgecolors='black',
                 linewidth=0.5
@@ -562,12 +571,20 @@ def parse_args() -> argparse.Namespace:
                       help="Sample ID column")
     cols.add_argument("--count-col", default="count",
                       help="Count column")
-    cols.add_argument("--depth-col", default="Depth",
-                      help="Depth column for coloring")
-    cols.add_argument("--month-col", default="Month",
-                      help="Month column for coloring")
+    cols.add_argument("--group1-col", dest="depth_col", default="Depth",
+                      help="Primary grouping column for coloring")
+    cols.add_argument("--group2-col", dest="secondary_col", default="Month",
+                      help="Secondary grouping column for coloring")
+    # Backward-compatible aliases
+    cols.add_argument("--depth-col", dest="depth_col", help=argparse.SUPPRESS)
+    cols.add_argument("--secondary-col", dest="secondary_col", help=argparse.SUPPRESS)
+    cols.add_argument("--month-col", dest="secondary_col", help=argparse.SUPPRESS)
     cols.add_argument("--color-col", default="Color",
                       help="Color mapping column for depths")
+    cols.add_argument("--group1-order", default="",
+                      help="Comma-separated explicit order for primary grouping legend.")
+    cols.add_argument("--group2-order", default="",
+                      help="Comma-separated explicit order for secondary grouping legend.")
     
     # Preprocessing
     prep = ap.add_argument_group("Preprocessing")
@@ -633,10 +650,12 @@ def main():
     print(f"Input: {args.input}")
     print(f"Output prefix: {args.output_prefix}")
     print("="*60)
+    group1_order = parse_list_csv(args.group1_order)
+    group2_order = parse_list_csv(args.group2_order)
     
     # Metadata columns to preserve
     metadata_cols = [
-        args.depth_col, args.month_col, args.color_col,
+        args.depth_col, args.secondary_col, args.color_col,
         'Year', 'Cruise', 'Salinity (PSU)', 'sample_code',
         'Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species',
         'plateID', 'Temperature', 'Oxygen',
@@ -728,33 +747,39 @@ def main():
                 figsize=figsize,
                 dpi=args.dpi,
                 alpha=args.alpha,
-                point_size=args.point_size
+                point_size=args.point_size,
+                value_order=group1_order if group1_order else None
             )
     else:
         print(f"[WARN] Skipping depth plot: {args.depth_col} or {args.color_col} not in metadata")
     
-    # Plot 2: Colored by Month
-    if args.month_col in metadata_df.columns:
-        print(f"\n[INFO] Creating UMAP plot colored by {args.month_col}...")
+    # Plot 2: Colored by secondary grouping column
+    if args.secondary_col in metadata_df.columns:
+        print(f"\n[INFO] Creating UMAP plot colored by {args.secondary_col}...")
+        secondary_suffix = ''.join(
+            c if c.isalnum() or c in ('_', '-') else '_'
+            for c in str(args.secondary_col).strip().lower()
+        ) or "secondary"
         
         for fmt in formats:
-            output_file = output_prefix.parent / f"{output_prefix.stem}_month.{fmt}"
+            output_file = output_prefix.parent / f"{output_prefix.stem}_{secondary_suffix}.{fmt}"
             plot_umap_scatter(
                 embedding=embedding,
-                colors=metadata_df[args.month_col],
+                colors=metadata_df[args.secondary_col],
                 color_map=None,  # Auto-assign colors
-                title=f"UMAP Projection Colored by {args.month_col}",
+                title=f"UMAP Projection Colored by {args.secondary_col}",
                 xlabel="UMAP1",
                 ylabel="UMAP2",
-                legend_title=args.month_col,
+                legend_title=args.secondary_col,
                 output_file=output_file,
                 figsize=figsize,
                 dpi=args.dpi,
                 alpha=args.alpha,
-                point_size=args.point_size
+                point_size=args.point_size,
+                value_order=group2_order if group2_order else None
             )
     else:
-        print(f"[WARN] Skipping month plot: {args.month_col} not in metadata")
+        print(f"[WARN] Skipping secondary plot: {args.secondary_col} not in metadata")
     
     # Plot 3: Colored by HDBSCAN clusters
     print("\n[INFO] Creating UMAP plot colored by HDBSCAN clusters...")
