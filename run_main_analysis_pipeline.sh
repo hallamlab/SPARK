@@ -15,15 +15,14 @@ Usage:
     [--case-col Case] \
     [--type-col type_group] \
     [--run-bal-contralateral] \
-    [--skip-legacy-diversity] \
+    [--skip-diversity-plots] \
     [--transform none|rclr] \
     [--keep-contralateral-in-cancer] [--contralateral-sample-types "Bronchial Brush,BAL"]
 
 Notes:
 - Networks are intentionally excluded.
-- This script runs both:
-  1) Legacy-style alpha/beta diversity plotting (for historical figure parity)
-  2) Patient-aware Bray/taxonomy/contralateral workflows (for updated inference)
+- By default, this script runs patient-aware analyses plus alpha/beta diversity plots with patient-aware statistics.
+- Use `--skip-diversity-plots` if you want to omit those diversity figures.
 USAGE
 }
 
@@ -50,7 +49,9 @@ while [[ $# -gt 0 ]]; do
     --case-col) CASE_COL="$2"; shift 2 ;;
     --type-col) TYPE_COL="$2"; shift 2 ;;
     --run-bal-contralateral) RUN_BAL_CONTRA="true"; shift ;;
-    --skip-legacy-diversity) RUN_LEGACY_DIVERSITY="false"; shift ;;
+    --enable-legacy-diversity) RUN_LEGACY_DIVERSITY="true"; shift ;;  # deprecated alias
+    --skip-diversity-plots) RUN_LEGACY_DIVERSITY="false"; shift ;;
+    --skip-legacy-diversity) RUN_LEGACY_DIVERSITY="false"; shift ;;  # deprecated, kept for backwards compatibility
     --transform) TRANSFORM="$2"; shift 2 ;;
     --keep-contralateral-in-cancer) EXCLUDE_CONTRALATERAL="false"; shift ;;
     --contralateral-sample-types) CONTRALATERAL_SAMPLE_TYPES="$2"; shift 2 ;;
@@ -94,7 +95,7 @@ df = pd.read_csv(long_path, sep='\t', low_memory=False)
 if sample_col not in df.columns:
     raise SystemExit(f"Missing sample col: {sample_col}")
 
-keep = [sample_col, "sample_code", "$TYPE_COL", "status", case_col, "lung_code"]
+keep = [sample_col, "sample_code", "$PATIENT_COL", "$TYPE_COL", "status", case_col, "lung_code"]
 keep = [c for c in keep if c in df.columns]
 meta = df[keep].drop_duplicates(subset=[sample_col]).copy()
 meta = meta.rename(columns={sample_col: "sample"})
@@ -169,12 +170,18 @@ python3 "$SCRIPT_DIR/indicator_species/plot_indicspecies_aligned.py" \
   --top-n 25
 
 ################################################################################
-# 2) Legacy alpha/beta diversity outputs + plots (historical figure parity)
+# 2) Alpha/beta diversity outputs + plots
 ################################################################################
 if [[ "$RUN_LEGACY_DIVERSITY" == "true" ]]; then
-  log "Computing legacy diversity metrics (Shannon/Bray/Jaccard)"
+  echo ""
+  echo "ℹ️  INFO: Diversity plotting is enabled."
+  echo "    Statistical tests are PATIENT-AWARE (paired Wilcoxon, blocked PERMANOVA)"
+  echo "    when --patient-col and --count-table are provided (default behavior)."
+  echo "    These outputs use the same patient-level aggregation as the main pipeline."
+  echo ""
+  log "Computing diversity metrics (Shannon/Bray/Jaccard)"
   DIV_METRICS_DIR="$OUTDIR/diversity/metrics"
-  DIV_PLOTS_DIR="$OUTDIR/diversity/legacy_plots"
+  DIV_PLOTS_DIR="$OUTDIR/diversity/plots"
   mkdir -p "$DIV_METRICS_DIR" "$DIV_PLOTS_DIR" "$DIV_PLOTS_DIR/tables" "$DIV_PLOTS_DIR/plots"
 
   python3 "$SCRIPT_DIR/calc_div.py" \
@@ -183,12 +190,14 @@ if [[ "$RUN_LEGACY_DIVERSITY" == "true" ]]; then
     --index-col 0 \
     --outdir "$DIV_METRICS_DIR"
 
-  log "Plotting legacy alpha/beta diversity figures"
+  log "Plotting alpha/beta diversity figures"
   python3 "$SCRIPT_DIR/plot_diversity.py" \
     --metadata "$DIVERSITY_META" \
+    --count-table "$DIVERSITY_WIDE" \
     --alpha "$DIV_METRICS_DIR/shannon.tsv" \
     --bray "$DIV_METRICS_DIR/bray.tsv" \
     --jacc "$DIV_METRICS_DIR/jaccard.tsv" \
+    --patient-col "$PATIENT_COL" \
     --type-order "Oral Rinse,BAL,Bronchial Brush" \
     --outdir "$DIV_PLOTS_DIR"
 fi

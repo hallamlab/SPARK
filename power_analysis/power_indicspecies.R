@@ -540,25 +540,45 @@ bootstrap_patients_true_null <- function(counts, patient_ids, grouping,
   ))
 }
 
-#' Aggregate counts to patient level (sum across samples per patient)
+#' Aggregate to mean relative abundance by group
 #'
 #' @param counts Sample × ASV count matrix
-#' @param patient_ids Patient ID for each sample
-#' @return Patient × ASV count matrix
-aggregate_to_patient_level <- function(counts, patient_ids) {
-  unique_patients <- unique(patient_ids)
-  patient_matrix <- matrix(0, nrow = length(unique_patients), ncol = ncol(counts))
-  rownames(patient_matrix) <- unique_patients
-  colnames(patient_matrix) <- colnames(counts)
+#' @param group_ids Group ID for each sample
+#' @return Group × ASV matrix
+aggregate_mean_relative <- function(counts, group_ids) {
+  counts <- as.matrix(counts)
+  rs <- rowSums(counts, na.rm = TRUE)
+  rs[rs == 0] <- 1
+  rel <- counts / rs
 
-  for (i in seq_along(unique_patients)) {
-    patient <- unique_patients[i]
-    # CRITICAL: convert both to character for type-safe matching
-    patient_mask <- as.character(patient_ids) == as.character(patient)
-    patient_matrix[i, ] <- colSums(counts[patient_mask, , drop = FALSE])
+  unique_groups <- unique(group_ids)
+  group_matrix <- matrix(0, nrow = length(unique_groups), ncol = ncol(counts))
+  rownames(group_matrix) <- unique_groups
+  colnames(group_matrix) <- colnames(counts)
+
+  for (i in seq_along(unique_groups)) {
+    group <- unique_groups[i]
+    group_mask <- as.character(group_ids) == as.character(group)
+    group_matrix[i, ] <- colMeans(rel[group_mask, , drop = FALSE], na.rm = TRUE)
   }
 
-  return(patient_matrix)
+  group_matrix
+}
+
+aggregate_to_patient_level <- function(counts, patient_ids) {
+  aggregate_mean_relative(counts, patient_ids)
+}
+
+aggregate_to_patient_group_level <- function(counts, patient_ids, grouping) {
+  keys <- paste(as.character(patient_ids), as.character(grouping), sep = "|||")
+  group_matrix <- aggregate_mean_relative(counts, keys)
+  key_df <- data.frame(key = rownames(group_matrix), stringsAsFactors = FALSE)
+  parts <- tidyr::separate(key_df, key, into = c("patient", "group"), sep = "\\|\\|\\|")
+  list(
+    counts = group_matrix,
+    patients = parts$patient,
+    grouping = factor(parts$group, levels = levels(grouping))
+  )
 }
 
 #' Bootstrap patients for within-patient designs (preserves sample-level labels)
@@ -768,13 +788,15 @@ run_isa_power_generic <- function(counts, patient_ids, grouping,
       )
     }
 
-    # For BETWEEN-patient: aggregate to patient level
-    # For WITHIN-patient: keep sample level but use blocked permutations
     if (use_blocking) {
-      # Sample-level analysis with patient blocking
-      sample_rel <- apply_matrix_transform(boot_data$counts, transform)
-      sample_grouping <- boot_data$grouping
-      patient_blocks <- factor(boot_data$patients)
+      patient_group_data <- aggregate_to_patient_group_level(
+        boot_data$counts,
+        boot_data$patients,
+        boot_data$grouping
+      )
+      sample_rel <- apply_matrix_transform(patient_group_data$counts, transform)
+      sample_grouping <- droplevels(patient_group_data$grouping)
+      patient_blocks <- droplevels(factor(patient_group_data$patients))
 
       # Run multipatt with blocked permutations
       tryCatch({

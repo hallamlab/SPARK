@@ -147,7 +147,7 @@ def main():
             '--scenarios', args.scenarios
         ]
 
-        if run_command(cmd, "2. Cancer vs Control - Shannon t-tests (Stratified)"):
+        if run_command(cmd, "2. Cancer vs Control - Shannon Mann-Whitney (Stratified)"):
             completed.append("cancer_vs_control_shannon")
         else:
             success = False
@@ -187,7 +187,7 @@ def main():
             '--outdir', str(outdir)
         ]
 
-        if run_command(cmd, "4. Sample Type Comparisons - Shannon ANOVA"):
+        if run_command(cmd, "4. Sample Type Comparisons - Shannon Paired Wilcoxon"):
             completed.append("sample_type_shannon")
         else:
             success = False

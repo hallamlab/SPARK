@@ -89,26 +89,37 @@ def prepare_patient_type_table(
     sample_ids = meta.index.intersection(tax_wide.index)
     meta = meta.loc[sample_ids].copy()
     tax_wide = tax_wide.loc[sample_ids].copy()
-
-    prevalence = (tax_wide > 0).mean(axis=0)
-    keep_taxa = prevalence[prevalence >= min_prevalence].index.tolist()
-    tax_wide = tax_wide[keep_taxa]
-
     patient_by_type: dict[str, pd.DataFrame] = {}
+    sample_rel = pd.DataFrame(
+        relative_abundance(tax_wide.values),
+        index=tax_wide.index,
+        columns=tax_wide.columns,
+    )
+
     for st in sample_types:
         st_samples = meta.index[meta[type_col] == st]
         if len(st_samples) == 0:
             continue
-        st_counts = tax_wide.loc[st_samples].copy()
+        st_rel = sample_rel.loc[st_samples].copy()
         st_patients = meta.loc[st_samples, patient_col].values
 
-        # aggregate to one row per patient for this type
-        patient_counts = st_counts.assign(_patient=st_patients).groupby("_patient").sum()
+        patient_by_type[st] = st_rel.assign(_patient=st_patients).groupby("_patient").mean()
+
+    if not patient_by_type:
+        return {}, []
+
+    pooled = pd.concat(patient_by_type.values(), axis=0)
+    prevalence = (pooled > 0).mean(axis=0)
+    keep_taxa = prevalence[prevalence >= min_prevalence].index.tolist()
+    if len(keep_taxa) == 0:
+        return {}, []
+
+    for st, patient_rel in list(patient_by_type.items()):
+        patient_rel = patient_rel[keep_taxa]
         if transform == "rclr":
-            features = rclr_transform(patient_counts)
+            patient_by_type[st] = rclr_transform(patient_rel)
         else:
-            features = pd.DataFrame(relative_abundance(patient_counts.values), index=patient_counts.index, columns=patient_counts.columns)
-        patient_by_type[st] = features
+            patient_by_type[st] = patient_rel.copy()
 
     return patient_by_type, keep_taxa
 

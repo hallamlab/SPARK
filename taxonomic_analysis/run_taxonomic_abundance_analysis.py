@@ -112,15 +112,21 @@ def run_one_group(
     meta = meta.loc[sample_ids].copy()
     tax_wide = tax_wide.loc[sample_ids].copy()
 
-    prevalence = (tax_wide > 0).mean(axis=0)
+    sample_rel = pd.DataFrame(
+        relative_abundance(tax_wide.values),
+        index=tax_wide.index,
+        columns=tax_wide.columns,
+    )
+
+    # Collapse to one equal-weight profile per patient
+    patient_rel = sample_rel.join(meta[[patient_col]]).groupby(patient_col).mean()
+
+    prevalence = (patient_rel > 0).mean(axis=0)
     keep_taxa = prevalence[prevalence >= min_prevalence].index.tolist()
     if len(keep_taxa) == 0:
         return pd.DataFrame()
 
-    tax_wide = tax_wide[keep_taxa]
-
-    # patient-level aggregation
-    patient_counts = tax_wide.join(meta[[patient_col]]).groupby(patient_col).sum()
+    patient_rel = patient_rel[keep_taxa]
     patient_case = (
         meta[[patient_col, case_col]]
         .drop_duplicates()
@@ -129,18 +135,14 @@ def run_one_group(
         .set_index(patient_col)
     )
 
-    common_patients = patient_counts.index.intersection(patient_case.index)
-    patient_counts = patient_counts.loc[common_patients]
+    common_patients = patient_rel.index.intersection(patient_case.index)
+    patient_rel = patient_rel.loc[common_patients]
     patient_case = patient_case.loc[common_patients]
 
     if transform == "rclr":
-        features = rclr_transform(patient_counts)
+        features = rclr_transform(patient_rel)
     else:
-        features = pd.DataFrame(
-            relative_abundance(patient_counts.values),
-            index=patient_counts.index,
-            columns=patient_counts.columns,
-        )
+        features = patient_rel.copy()
 
     labels = patient_case["case_status"]
     n_cancer = int((labels == "Cancer").sum())

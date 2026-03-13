@@ -3,8 +3,8 @@
 estimate_effects.py
 
 Estimate effect sizes from observed data for power analysis.
-Computes PERMANOVA R², Cohen's d for Shannon diversity, and classifies ASVs
-by prevalence/abundance strata.
+Computes PERMANOVA R², Shannon Cohen's d summaries, taxonomic Cohen's d summaries
+with Mann-Whitney p-values, and classifies ASVs by prevalence/abundance strata.
 
 Outputs:
 - Observed effect sizes with bootstrap 95% CI
@@ -17,7 +17,7 @@ import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from scipy.stats import ttest_ind
+from scipy.stats import mannwhitneyu
 from scipy.spatial.distance import squareform, pdist
 from sklearn.utils import resample
 import json
@@ -109,6 +109,19 @@ def bray_curtis_from_counts(count_matrix, transform='none'):
     return squareform(bc)
 
 
+def mean_relative_by_group(count_matrix, group_ids):
+    """Collapse to equal-weight group profiles by averaging per-sample relative abundance."""
+    sample_rel = apply_transform(count_matrix, transform='none')
+    unique_groups = np.unique(group_ids)
+    group_matrix = np.zeros((len(unique_groups), sample_rel.shape[1]))
+
+    for i, group in enumerate(unique_groups):
+        mask = group_ids == group
+        group_matrix[i, :] = sample_rel[mask, :].mean(axis=0)
+
+    return group_matrix, unique_groups
+
+
 def permanova_r2(dist_matrix, group_labels):
     """
     Compute PERMANOVA R² (proportion of variance explained).
@@ -154,8 +167,12 @@ def bootstrap_permanova_r2(count_matrix, group_labels, patient_ids, n_bootstrap=
             boot_groups.extend(group_labels[patient_samples])
 
         boot_count_matrix = count_matrix[boot_indices, :]
-        boot_dist = bray_curtis_from_counts(boot_count_matrix, transform=transform)
-        boot_r2 = permanova_r2(boot_dist, np.array(boot_groups))
+        boot_group_labels = np.array(boot_groups)
+        patient_matrix, boot_unique_patients = mean_relative_by_group(boot_count_matrix, np.array(boot_patients))
+        patient_group_map = {p: boot_group_labels[np.where(np.array(boot_patients) == p)[0][0]] for p in boot_unique_patients}
+        patient_groups = np.array([patient_group_map[p] for p in boot_unique_patients])
+        boot_dist = bray_curtis_from_counts(patient_matrix, transform=transform)
+        boot_r2 = permanova_r2(boot_dist, patient_groups)
         r2_bootstrap.append(boot_r2)
 
     r2_bootstrap = np.array(r2_bootstrap)
@@ -218,19 +235,22 @@ def jackknife_permanova_r2_patient_level(count_matrix, group_labels, patient_ids
 
 def aggregate_counts_to_patient_level(count_matrix, patient_ids):
     """
-    Aggregate sample-level counts to patient level (sum within patient).
+    Aggregate sample-level data to patient level by mean relative abundance.
 
     Makes "patient is the experimental unit" explicit in distance calculations.
     """
     unique_patients = np.unique(patient_ids)
     n_asvs = count_matrix.shape[1]
-    patient_counts = np.zeros((len(unique_patients), n_asvs))
+    return mean_relative_by_group(count_matrix, patient_ids)
 
-    for i, patient in enumerate(unique_patients):
-        patient_mask = patient_ids == patient
-        patient_counts[i, :] = count_matrix[patient_mask, :].sum(axis=0)
 
-    return patient_counts, unique_patients
+def aggregate_counts_to_patient_sample_type_level(count_matrix, patient_ids, sample_types):
+    """Aggregate to one equal-weight profile per patient × sample type."""
+    keys = np.array([f"{patient}||{stype}" for patient, stype in zip(patient_ids, sample_types)])
+    group_matrix, unique_keys = mean_relative_by_group(count_matrix, keys)
+    agg_patients = np.array([key.split("||", 1)[0] for key in unique_keys])
+    agg_types = np.array([key.split("||", 1)[1] for key in unique_keys])
+    return group_matrix, agg_patients, agg_types
 
 
 # ======================== Shannon Diversity ========================
@@ -396,8 +416,7 @@ def taxonomic_effect_sizes(long_df, metadata, tax_level='Phylum',
 
         d_boot = np.array(d_boot)
 
-        # T-test for p-value (informational)
-        _, pval = ttest_ind(cancer_vals, control_vals, equal_var=False)
+        _, pval = mannwhitneyu(cancer_vals, control_vals, alternative='two-sided')
 
         results.append({
             'Taxon': taxon,
@@ -650,18 +669,20 @@ def main():
 
     # PERMANOVA R² for sample type differences
     print("\n--- PERMANOVA R² (Sample Type Effect) ---")
-    # Use all samples, compute distance by sample type
-    print(f"  Computing patient-level jackknife (LOPO) for sample type effect...")
+    print(f"  Computing patient × sample_type-level jackknife (LOPO)...")
+    patient_type_counts, patient_type_patients, patient_type_types = aggregate_counts_to_patient_sample_type_level(
+        count_matrix, patient_ids, sample_types
+    )
     r2_stype_obs, r2_stype_ci_low, r2_stype_ci_high, r2_stype_p25, r2_stype_p75 = jackknife_permanova_r2_patient_level(
-        count_matrix, sample_types, patient_ids, transform=args.transform)
+        patient_type_counts, patient_type_types, patient_type_patients, transform=args.transform)
 
     print(f"  R² = {r2_stype_obs:.4f} [95% CI: {r2_stype_ci_low:.4f}-{r2_stype_ci_high:.4f}]")
     print(f"  25th/75th: {r2_stype_p25:.4f}/{r2_stype_p75:.4f}")
 
     sample_type_permanova_result = {
         'comparison': 'Sample_Type_Effect',
-        'n_samples': int(count_matrix.shape[0]),
-        'n_patients': int(len(np.unique(patient_ids))),
+        'n_patient_type_profiles': int(patient_type_counts.shape[0]),
+        'n_patients': int(len(np.unique(patient_type_patients))),
         'sample_types': list(np.unique(sample_types)),
         'observed': float(r2_stype_obs),
         'ci_lower_95': float(r2_stype_ci_low),

@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.stats import wilcoxon
 from statsmodels.stats.multitest import multipletests
 from itertools import combinations
 
@@ -38,11 +39,7 @@ def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     agg = long_df.groupby(['sample', tax_level])['count'].sum().reset_index()
     wide = agg.pivot(index='sample', columns=tax_level, values='count').fillna(0)
 
-    # Filter by prevalence
-    prevalence = (wide > 0).sum(axis=0) / wide.shape[0]
-    taxa_keep = prevalence[prevalence >= min_prevalence].index
-
-    return wide[taxa_keep]
+    return wide
 
 
 def relative_abundance(count_matrix):
@@ -102,18 +99,14 @@ def patient_level_abundance_by_type(count_matrix, patient_ids, sample_types):
 
         for patient in unique_patients:
             patient_mask = stype_patients == patient
-            # Sum counts across samples of this type from this patient
-            patient_counts = stype_counts[patient_mask, :].sum(axis=0)
+            patient_counts = relative_abundance(stype_counts[patient_mask, :]).mean(axis=0)
             patient_matrix.append(patient_counts)
             patient_list.append(patient)
 
-        # Convert to relative abundance
-        patient_matrix = np.array(patient_matrix)
-        patient_rel = relative_abundance(patient_matrix)
-
         # Store as dict
+        patient_matrix = np.array(patient_matrix)
         patient_abundances[stype] = {
-            patient_list[i]: patient_rel[i, :]
+            patient_list[i]: patient_matrix[i, :]
             for i in range(len(patient_list))
         }
 
@@ -127,7 +120,7 @@ def run_power_simulation(count_matrix, patient_ids, sample_types, taxa_names,
     Power to detect sample type differences in taxonomic abundance.
 
     For each taxon, test: Does abundance differ between sample types?
-    Uses pairwise t-tests with FDR correction.
+    Uses pairwise Wilcoxon tests with FDR correction.
 
     Returns power to detect at least one significant difference.
     """
@@ -164,8 +157,10 @@ def run_power_simulation(count_matrix, patient_ids, sample_types, taxa_names,
                     vals2 = np.array([patient_abund[stype2][p][taxon_idx]
                                      for p in patients_both])
 
-                    # Paired t-test (same patients, different sites)
-                    _, p = stats.ttest_rel(vals1, vals2)
+                    try:
+                        _, p = wilcoxon(vals1, vals2, zero_method='wilcox', correction=False, alternative='two-sided', mode='auto')
+                    except ValueError:
+                        p = 1.0
                     pairwise_p.append(p)
 
             if len(pairwise_p) > 0:
@@ -236,6 +231,23 @@ def main():
         sample_ids = metadata.index.intersection(tax_wide.index)
         metadata = metadata.loc[sample_ids]
         tax_wide = tax_wide.loc[sample_ids]
+
+        sample_rel = pd.DataFrame(
+            relative_abundance(tax_wide.values.astype(float)),
+            index=tax_wide.index,
+            columns=tax_wide.columns,
+        )
+        patient_rel_by_type = {}
+        for stype in metadata[args.type_col].unique():
+            st_samples = metadata.index[metadata[args.type_col] == stype]
+            if len(st_samples) == 0:
+                continue
+            patient_rel_by_type[stype] = sample_rel.loc[st_samples].assign(
+                _patient=metadata.loc[st_samples, args.patient_col].values
+            ).groupby('_patient').mean()
+        pooled = pd.concat(patient_rel_by_type.values(), axis=0) if patient_rel_by_type else pd.DataFrame()
+        taxa_keep = ((pooled > 0).mean(axis=0) >= 0.1)
+        tax_wide = tax_wide.loc[:, taxa_keep[taxa_keep].index]
 
         count_matrix = tax_wide.values.astype(float)
         taxa_names = tax_wide.columns.tolist()

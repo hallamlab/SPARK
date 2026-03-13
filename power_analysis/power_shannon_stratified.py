@@ -3,7 +3,7 @@
 power_shannon_stratified.py
 
 Shannon diversity power analysis stratified by sample type.
-Uses patient-level aggregation and t-tests.
+Uses patient-level aggregation and Mann-Whitney tests.
 """
 
 import argparse
@@ -11,7 +11,7 @@ import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from scipy import stats
+from scipy.stats import mannwhitneyu
 from simulate_data import bootstrap_patients, filter_by_sample_type
 
 warnings.filterwarnings('ignore')
@@ -147,12 +147,23 @@ def bootstrap_patients_true_null(count_matrix, patient_ids, case_status,
     return boot_counts, boot_patient_ids, boot_case
 
 
+def rank_biserial_from_samples(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n_x = len(x)
+    n_y = len(y)
+    if n_x == 0 or n_y == 0:
+        return np.nan
+    u, _ = mannwhitneyu(x, y, alternative='two-sided')
+    return (2 * u) / (n_x * n_y) - 1
+
+
 def run_power_simulation(count_matrix, patient_ids, case_status,
                          n_cancer, n_control,
                          n_simulations=1000, alpha=0.05, seed=42,
                          use_true_null=False):
     """
-    Run power simulation for Shannon diversity t-test.
+    Run power simulation for Shannon diversity Mann-Whitney testing.
 
     Parameters
     ----------
@@ -160,7 +171,7 @@ def run_power_simulation(count_matrix, patient_ids, case_status,
         If True, uses pool-then-label null (for Type I error calibration)
     """
     significant_count = 0
-    cohens_d_values = []
+    effect_values = []
 
     for i in range(n_simulations):
         if use_true_null:
@@ -193,27 +204,19 @@ def run_power_simulation(count_matrix, patient_ids, case_status,
             else:
                 control_shannon.append(shannon_val)
 
-        # Two-sample t-test
-        t_stat, p_value = stats.ttest_ind(cancer_shannon, control_shannon)
+        if len(cancer_shannon) < 2 or len(control_shannon) < 2:
+            continue
 
-        # Cohen's d
-        pooled_std = np.sqrt(
-            (np.var(cancer_shannon, ddof=1) + np.var(control_shannon, ddof=1)) / 2
-        )
-        if pooled_std > 0:
-            d = (np.mean(cancer_shannon) - np.mean(control_shannon)) / pooled_std
-        else:
-            d = 0.0
-
-        cohens_d_values.append(d)
+        _, p_value = mannwhitneyu(cancer_shannon, control_shannon, alternative='two-sided')
+        effect_values.append(rank_biserial_from_samples(cancer_shannon, control_shannon))
 
         if p_value < alpha:
             significant_count += 1
 
     power = significant_count / n_simulations
-    mean_d = np.mean(cohens_d_values)
+    mean_effect = np.nanmean(effect_values) if effect_values else np.nan
 
-    return power, mean_d, cohens_d_values
+    return power, mean_effect, effect_values
 
 
 def main():
@@ -299,14 +302,17 @@ def main():
 
                 print(f"  n_cancer={n_cancer}, n_control={n_control}...", end=' ', flush=True)
 
-                power, mean_d, d_vals = run_power_simulation(
+                power, mean_effect, effect_vals = run_power_simulation(
                     st_counts, st_patients, st_case,
                     n_cancer, n_control,
                     args.n_simulations, args.alpha, args.seed,
                     use_true_null=scenario['use_true_null']
                 )
 
-                print(f"Power={power:.3f}, d={mean_d:.3f}")
+                effect_ci_lower = np.percentile(effect_vals, 2.5) if effect_vals else np.nan
+                effect_ci_upper = np.percentile(effect_vals, 97.5) if effect_vals else np.nan
+
+                print(f"Power={power:.3f}, rank-biserial={mean_effect:.3f}")
 
                 all_results.append({
                     'Sample_type': sample_type,
@@ -314,9 +320,9 @@ def main():
                     'n_cancer': n_cancer,
                     'n_control': n_control,
                     'Power': power,
-                    'Mean_Cohens_d': mean_d,
-                    'd_CI_lower': np.percentile(d_vals, 2.5),
-                    'd_CI_upper': np.percentile(d_vals, 97.5)
+                    'Mean_rank_biserial': mean_effect,
+                    'effect_CI_lower': effect_ci_lower,
+                    'effect_CI_upper': effect_ci_upper
                 })
 
                 # Early stopping: if power >= 0.995, skip remaining sample sizes

@@ -46,6 +46,8 @@ option_list <- list(
               help="Permutations for multipatt [default: %default]"),
   make_option("--min-n",      type="integer",   default=2,
               help="Minimum samples per group to keep [default: %default]"),
+  make_option("--type-group-require-complete", type="logical", default=FALSE,
+              help="For type_group ISA, only include patients with all sample types (stricter within-patient analysis) [default: %default]"),
   make_option("--outdir",     type="character",
               help="Output directory (will create '<outdir>/indicspecies').")
 )
@@ -252,19 +254,42 @@ write_tables <- function(df_sign_only, df_full, base) {
   }
 }
 
-# Aggregate sample-level matrix to one row per patient (sum counts).
-aggregate_to_patient <- function(X_samples_by_features, patient_ids) {
-  stopifnot(nrow(X_samples_by_features) == length(patient_ids))
-  df <- as.data.frame(X_samples_by_features)
-  df$patient_id___ <- as.character(patient_ids)
+# Convert each sample to relative abundance, then average within groups.
+aggregate_mean_relative <- function(X_samples_by_features, group_ids) {
+  stopifnot(nrow(X_samples_by_features) == length(group_ids))
+  X <- as.matrix(X_samples_by_features)
+  mode(X) <- "numeric"
+  rs <- rowSums(X, na.rm = TRUE)
+  rs[rs == 0] <- 1
+  X_rel <- X / rs
+
+  df <- as.data.frame(X_rel)
+  df$group_id___ <- as.character(group_ids)
   out <- df %>%
-    group_by(patient_id___) %>%
-    summarise(across(everything(), sum), .groups = "drop")
+    group_by(group_id___) %>%
+    summarise(across(everything(), mean), .groups = "drop")
+
   mat <- out %>%
-    tibble::column_to_rownames("patient_id___") %>%
+    tibble::column_to_rownames("group_id___") %>%
     as.matrix()
   mode(mat) <- "numeric"
   mat
+}
+
+aggregate_to_patient_group <- function(X_samples_by_features, patient_ids, group_ids) {
+  stopifnot(nrow(X_samples_by_features) == length(patient_ids))
+  stopifnot(nrow(X_samples_by_features) == length(group_ids))
+
+  keys <- paste(as.character(patient_ids), as.character(group_ids), sep = "|||")
+  X_grouped <- aggregate_mean_relative(X_samples_by_features, keys)
+  split_keys <- tibble(key = rownames(X_grouped)) %>%
+    tidyr::separate(key, into = c("patient_id___", "group_id___"), sep = "\\|\\|\\|", remove = FALSE)
+
+  list(
+    X = X_grouped,
+    patient = split_keys$patient_id___,
+    group = split_keys$group_id___
+  )
 }
 
 # ---------- main loop over grouping columns ----------
@@ -367,7 +392,7 @@ for (gcol in group_cols) {
         next
       }
 
-      X_pat <- aggregate_to_patient(X_site, meta_site[[opt$`patient-col`]])
+      X_pat <- aggregate_mean_relative(X_site, meta_site[[opt$`patient-col`]])
       X_pat <- apply_matrix_transform(X_pat, opt$transform)
       status_map <- meta_site %>%
         transmute(
@@ -442,7 +467,7 @@ for (gcol in group_cols) {
             if (length(unique(grouping_site_nc)) < 2) {
               warning("Skipping Bronchial Brush no-contralateral status ISA after min-n filtering.")
             } else {
-              X_pat_nc <- aggregate_to_patient(X_site_nc, meta_site_nc[[opt$`patient-col`]])
+              X_pat_nc <- aggregate_mean_relative(X_site_nc, meta_site_nc[[opt$`patient-col`]])
               X_pat_nc <- apply_matrix_transform(X_pat_nc, opt$transform)
               status_map_nc <- meta_site_nc %>%
                 transmute(
@@ -499,7 +524,7 @@ for (gcol in group_cols) {
     next
   }
 
-  # Determine if this grouping requires blocked permutations (e.g., type_group)
+  # For other grouping columns (non-type_group, non-status), use blocked permutations if needed
   use_blocking <- gcol %in% blocked_cols
   patient_blocks <- NULL
   if (use_blocking) {
@@ -511,21 +536,67 @@ for (gcol in group_cols) {
     }
   }
 
-  X_for_isa <- apply_matrix_transform(X, opt$transform)
+  X_for_isa <- X
+  grouping_for_isa <- grouping
+  if (use_blocking && !is.null(patient_blocks)) {
+    if (gcol == "type_group" && isTRUE(opt$`type-group-require-complete`)) {
+      needed_types <- unique(as.character(grouping))
+      keep_patients <- meta_keep %>%
+        transmute(
+          patient_id___ = as.character(.data[[opt$`patient-col`]]),
+          group_id___ = as.character(.data[[gcol]])
+        ) %>%
+        distinct() %>%
+        group_by(patient_id___) %>%
+        summarise(n_types = n_distinct(group_id___), .groups = "drop") %>%
+        filter(n_types == length(needed_types)) %>%
+        pull(patient_id___)
+
+      if (length(keep_patients) == 0) {
+        warning("No patients have all sample types for '", gcol, "'; skipping.")
+        next
+      }
+
+      keep_rows <- as.character(meta_keep[[opt$`patient-col`]]) %in% keep_patients
+      X <- X[keep_rows, , drop = FALSE]
+      meta_keep <- meta_keep[keep_rows, , drop = FALSE]
+      grouping <- droplevels(grouping[keep_rows])
+      patient_blocks <- droplevels(factor(meta_keep[[opt$`patient-col`]]))
+    }
+
+    collapsed <- aggregate_to_patient_group(X, meta_keep[[opt$`patient-col`]], grouping)
+    X_for_isa <- collapsed$X
+    grouping_for_isa <- droplevels(factor(collapsed$group))
+    patient_blocks <- droplevels(factor(collapsed$patient))
+
+    tab_pat <- table(grouping_for_isa)
+    small_pat <- names(tab_pat[tab_pat < opt$`min-n`])
+    if (length(small_pat) > 0) {
+      keep_pat <- !(grouping_for_isa %in% small_pat)
+      grouping_for_isa <- droplevels(grouping_for_isa[keep_pat])
+      X_for_isa <- X_for_isa[keep_pat, , drop = FALSE]
+      patient_blocks <- droplevels(patient_blocks[keep_pat])
+    }
+
+    if (length(unique(grouping_for_isa)) < 2) {
+      warning("Grouping column '", gcol, "' has <2 patient-level groups after aggregation; skipping.")
+      next
+    }
+  }
+  X_for_isa <- apply_matrix_transform(X_for_isa, opt$transform)
 
   message("Running multipatt for '", gcol, "' (single groups, duleg=FALSE) …")
-  fit1 <- run_indics(X_for_isa, grouping, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
+  fit1 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
   res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
   res1_full <- summarize_multipatt(fit1)
   write_tables(res1_sign, res1_full, paste0(gcol, "_indicator_species"))
 
   message("Running multipatt for '", gcol, "' (combos allowed, duleg=TRUE) …")
-  fit2 <- run_indics(X_for_isa, grouping, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
+  fit2 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
   res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
   res2_full <- summarize_multipatt(fit2)
   write_tables(res2_sign, res2_full, paste0(gcol, "_indicator_species_DULEG"))
 
-  # Additional legacy aliases used by older SPARK scripts.
   if (gcol == "type_group") {
     write_tables(res1_sign, res1_full, "Type_Group_indicator_species")
     write_tables(res2_sign, res2_full, "Type_Group_indicator_species_DULEG")

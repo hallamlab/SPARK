@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 warnings.filterwarnings('ignore')
@@ -68,26 +69,20 @@ def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     # Pivot to wide format
     wide = agg.pivot(index='sample', columns=tax_level, values='count').fillna(0)
 
-    # Filter by prevalence
-    prevalence = (wide > 0).sum(axis=0) / wide.shape[0]
-    taxa_keep = prevalence[prevalence >= min_prevalence].index
-
-    return wide[taxa_keep]
+    return wide
 
 
 def patient_level_abundance(count_matrix, patient_ids):
     """
-    Aggregate counts to patient level by summing across samples from same patient.
+    Aggregate to patient level by averaging per-sample relative abundance.
     Returns patient × taxa matrix.
     """
+    sample_rel = relative_abundance(count_matrix)
     unique_patients = np.unique(patient_ids)
     patient_matrix = []
-
     for patient in unique_patients:
         patient_mask = patient_ids == patient
-        patient_counts = count_matrix[patient_mask, :].sum(axis=0)
-        patient_matrix.append(patient_counts)
-
+        patient_matrix.append(sample_rel[patient_mask, :].mean(axis=0))
     return np.array(patient_matrix), unique_patients
 
 
@@ -305,7 +300,7 @@ def run_power_simulation(count_matrix, patient_ids, case_status, taxa_names,
             control_vals = patient_rel_abund[patient_case_labels == 'Control', j]
 
             if len(cancer_vals) >= 2 and len(control_vals) >= 2:
-                _, p = stats.ttest_ind(cancer_vals, control_vals)
+                _, p = mannwhitneyu(cancer_vals, control_vals, alternative='two-sided')
                 p_values.append(p)
             else:
                 p_values.append(1.0)
@@ -430,6 +425,16 @@ def main():
             sample_ids = metadata.index.intersection(tax_wide.index)
             metadata = metadata.loc[sample_ids]
             tax_wide = tax_wide.loc[sample_ids]
+
+            sample_rel = pd.DataFrame(
+                relative_abundance(tax_wide.values.astype(float)),
+                index=tax_wide.index,
+                columns=tax_wide.columns,
+            )
+            patient_rel = sample_rel.join(metadata[[args.patient_col]]).groupby(args.patient_col).mean()
+            prevalence = (patient_rel > 0).mean(axis=0)
+            taxa_keep = prevalence[prevalence >= 0.1].index.tolist()
+            tax_wide = tax_wide[taxa_keep]
 
             count_matrix = tax_wide.values.astype(float)
             taxa_names = tax_wide.columns.tolist()

@@ -3,7 +3,7 @@
 power_sample_type_shannon.py
 
 Shannon diversity power analysis for sample type comparisons.
-Tests pairwise comparisons (BAL vs Bronchial Brush vs Oral Rinse) with FDR correction.
+Tests paired Wilcoxon comparisons (BAL vs Bronchial Brush vs Oral Rinse) with FDR correction.
 """
 
 import argparse
@@ -11,7 +11,7 @@ import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from scipy import stats
+from scipy.stats import wilcoxon
 from statsmodels.stats.multitest import multipletests
 from itertools import combinations
 
@@ -92,7 +92,7 @@ def run_power_simulation(count_matrix, patient_ids, sample_types,
 
     For each bootstrap:
     1. Compute patient-level Shannon for each sample type
-    2. Run pairwise t-tests
+    2. Run pairwise Wilcoxon tests
     3. Apply FDR correction
     4. Record if any comparison is significant at alpha
     """
@@ -114,7 +114,7 @@ def run_power_simulation(count_matrix, patient_ids, sample_types,
                 stype_patients = boot_patients[stype_mask]
                 patient_shannon_by_type[stype] = patient_level_shannon(stype_counts, stype_patients)
 
-        # Pairwise t-tests
+        # Pairwise Wilcoxon tests
         p_values = []
         for stype1, stype2 in combinations(sample_type_list, 2):
             if stype1 not in patient_shannon_by_type or stype2 not in patient_shannon_by_type:
@@ -128,8 +128,17 @@ def run_power_simulation(count_matrix, patient_ids, sample_types,
                 shannon1 = np.array([patient_shannon_by_type[stype1][p] for p in patients_both])
                 shannon2 = np.array([patient_shannon_by_type[stype2][p] for p in patients_both])
 
-                # Paired t-test
-                _, p = stats.ttest_rel(shannon1, shannon2)
+                try:
+                    _, p = wilcoxon(
+                        shannon1,
+                        shannon2,
+                        zero_method='wilcox',
+                        correction=False,
+                        alternative='two-sided',
+                        mode='auto',
+                    )
+                except ValueError:
+                    continue
                 p_values.append(p)
 
         # FDR correction

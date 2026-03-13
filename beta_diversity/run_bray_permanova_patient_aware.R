@@ -111,6 +111,21 @@ normalize_tss <- function(mat) {
   mat / rs
 }
 
+aggregate_group_means <- function(mat, group_ids) {
+  group_ids <- as.character(group_ids)
+  keys <- unique(group_ids)
+  out <- matrix(0, nrow = length(keys), ncol = ncol(mat))
+  rownames(out) <- keys
+  colnames(out) <- colnames(mat)
+
+  for (i in seq_along(keys)) {
+    idx <- group_ids == keys[[i]]
+    out[i, ] <- colMeans(mat[idx, , drop = FALSE], na.rm = TRUE)
+  }
+
+  out
+}
+
 rclr_transform <- function(mat) {
   out <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
   for (i in seq_len(nrow(mat))) {
@@ -309,6 +324,7 @@ if (isTRUE(args$exclude_contralateral_in_cancer)) {
 count_matrix <- t(as.matrix(wide_df[, sample_ids, drop = FALSE]))
 storage.mode(count_matrix) <- "numeric"
 rownames(count_matrix) <- sample_ids
+rel_matrix <- normalize_tss(count_matrix)
 
 meta <- meta[match(sample_ids, meta$sample_id), ]
 if (!all(rownames(count_matrix) == meta$sample_id)) {
@@ -322,7 +338,7 @@ cat(sprintf("Cases: %d Cancer / %d Control\n\n",
 
 # Aggregate repeated samples within patient x sample_type
 pt_key <- paste(meta$patient_id, meta$sample_type, sep = "||")
-counts_patient_type <- rowsum(count_matrix, group = pt_key, reorder = FALSE)
+counts_patient_type <- aggregate_group_means(rel_matrix, pt_key)
 
 pt_meta <- meta %>%
   mutate(pt_key = pt_key) %>%
@@ -445,7 +461,7 @@ write.table(sample_type_dist_long,
 cat("Running cancer/control PERMANOVA at patient level (pooled and by sample type)...\n")
 
 # Pooled patient profile across all included sample types
-counts_patient <- rowsum(count_matrix, group = meta$patient_id, reorder = FALSE)
+counts_patient <- aggregate_group_means(rel_matrix, meta$patient_id)
 patient_case <- meta %>%
   select(patient_id, case_status) %>%
   distinct() %>%

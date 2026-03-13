@@ -74,6 +74,16 @@ def bray_curtis_from_counts(count_matrix, transform='none'):
     return squareform(bc)
 
 
+def mean_relative_by_group(count_matrix, group_ids):
+    sample_rel = apply_transform(count_matrix, 'none')
+    unique_groups = np.unique(group_ids)
+    agg = np.zeros((len(unique_groups), sample_rel.shape[1]))
+    for i, group in enumerate(unique_groups):
+        mask = group_ids == group
+        agg[i, :] = sample_rel[mask, :].mean(axis=0)
+    return agg, unique_groups
+
+
 def permanova_r2(dist_matrix, group_labels):
     """Compute PERMANOVA R² (proportion of variance explained)."""
     n = dist_matrix.shape[0]
@@ -198,8 +208,12 @@ def run_power_simulation(count_matrix, patient_ids, case_status, asv_names,
             boot_counts = spike_in_fold_change(boot_counts, boot_case, asv_indices,
                                               spike_fold_change, 'Cancer')
 
-        bc_dist = bray_curtis_from_counts(boot_counts, transform=transform)
-        r2, p_value = permanova_permutation_test(bc_dist, boot_case, boot_patients,
+        patient_counts, unique_patients = mean_relative_by_group(boot_counts, boot_patients)
+        patient_case_map = {p: boot_case[np.where(boot_patients == p)[0][0]] for p in unique_patients}
+        patient_case = np.array([patient_case_map[p] for p in unique_patients])
+
+        bc_dist = bray_curtis_from_counts(patient_counts, transform=transform)
+        r2, p_value = permanova_permutation_test(bc_dist, patient_case, unique_patients,
                                                  n_perm=n_perm, seed=seed+i)
 
         r2_values.append(r2)

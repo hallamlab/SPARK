@@ -48,6 +48,16 @@ def bray_curtis_from_counts(count_matrix, transform='none'):
     return squareform(bc)
 
 
+def mean_relative_by_group(count_matrix, group_ids):
+    sample_rel = apply_transform(count_matrix, 'none')
+    unique_groups = np.unique(group_ids)
+    agg = np.zeros((len(unique_groups), sample_rel.shape[1]))
+    for i, group in enumerate(unique_groups):
+        mask = group_ids == group
+        agg[i, :] = sample_rel[mask, :].mean(axis=0)
+    return agg, unique_groups
+
+
 def permanova_r2(dist_matrix, group_labels):
     """Compute PERMANOVA R² (proportion of variance explained)."""
     n = dist_matrix.shape[0]
@@ -132,27 +142,11 @@ def aggregate_to_patient_sample_type(count_matrix, patient_ids, sample_types):
     Returns one row per (patient, sample_type) combination.
     Matches R script line 236-237.
     """
-    # Create unique keys
-    pt_stype_keys = [f"{pid}||{stype}" for pid, stype in zip(patient_ids, sample_types)]
-    unique_keys = np.unique(pt_stype_keys)
-
-    # Aggregate counts
-    agg_counts = []
-    agg_patients = []
-    agg_stypes = []
-
-    for key in unique_keys:
-        pid, stype = key.split("||")
-        mask = np.array(pt_stype_keys) == key
-
-        # Sum counts for this patient × sample_type
-        agg_counts.append(count_matrix[mask, :].sum(axis=0))
-        agg_patients.append(pid)
-        agg_stypes.append(stype)
-
-    return (np.array(agg_counts),
-            np.array(agg_patients),
-            np.array(agg_stypes))
+    pt_stype_keys = np.array([f"{pid}||{stype}" for pid, stype in zip(patient_ids, sample_types)])
+    agg_counts, unique_keys = mean_relative_by_group(count_matrix, pt_stype_keys)
+    agg_patients = np.array([key.split("||", 1)[0] for key in unique_keys])
+    agg_stypes = np.array([key.split("||", 1)[1] for key in unique_keys])
+    return agg_counts, agg_patients, agg_stypes
 
 
 def bootstrap_patients_sample_types(count_matrix, patient_ids, sample_types,
