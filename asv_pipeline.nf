@@ -3597,18 +3597,20 @@ focus_group1_cfg = "${indicspeciesFocusGroup1Label}"
 focus_group2_cfg = "${indicspeciesFocusGroup2Label}"
 label_focused_asvs = ${indicspeciesLabelFocusedAsvs ? 'True' : 'False'}
 
-result_files = sorted(Path(".").glob("*_indicator_species*_results.tsv"))
-if len(result_files) < 2:
+summary_files = sorted(Path(".").glob("*_indicator_species*_summary.tsv"))
+if len(summary_files) < 2:
     print(
-        f"[w] Need at least 2 indicspecies result tables to build ISA plots; found {len(result_files)}. Skipping.",
+        f"[w] Need at least 2 indicspecies summary tables to build ISA plots; found {len(summary_files)}. Skipping.",
         file=sys.stderr,
     )
     raise SystemExit(0)
 
 def clean_group_name(raw_name: str) -> str:
     name = raw_name
-    if name.endswith("_results.tsv"):
-        name = name[: -len("_results.tsv")]
+    for ending in ("_summary.tsv", "_results.tsv"):
+        if name.endswith(ending):
+            name = name[: -len(ending)]
+            break
     for suffix in ("_indicator_species_DULEG", "_indicator_species"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
@@ -3628,9 +3630,9 @@ def orient_pair(a: Path, b: Path) -> tuple[Path, Path]:
     return a, b
 
 if pairs_mode == "first_vs_rest":
-    raw_pairs = [(result_files[0], f) for f in result_files[1:]]
+    raw_pairs = [(summary_files[0], f) for f in summary_files[1:]]
 else:
-    raw_pairs = list(itertools.combinations(result_files, 2))
+    raw_pairs = list(itertools.combinations(summary_files, 2))
 pair_iter = [orient_pair(a, b) for a, b in raw_pairs]
 
 def has_col(path: Path, col: str) -> bool:

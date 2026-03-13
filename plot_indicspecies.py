@@ -24,7 +24,7 @@ python isa_plots_cli.py \
   --venn          /.../metadata/Three_types_venn_presence_table.tsv \
   --taxonomy      /.../metadata/taxonomy_updated.tsv \
   --outdir        /.../indicspecies \
-  --p-thresh 0.05 --stat-thresh 0.0 \
+  --q-thresh 0.05 --stat-thresh 0.0 \
   --group1-index "1=BAL,2=Bronchial Brush,3=Oral Rinse" \
   --group1-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73" \
   --group2-index "1=Cancer,2=Non-Cancer" \
@@ -401,6 +401,7 @@ def compute_sig_table(
     index_map: dict,
     palette: dict,
     p_col: str = "p.value",
+    q_col: str = "q.value",
     stat_col: str = "stat",
     idx_col: str = "index",
     p_thresh: float = 0.05,
@@ -409,15 +410,16 @@ def compute_sig_table(
     prefix: str = "type",
 ) -> pd.DataFrame:
     """
-    From indicspecies sign table -> tidy table with log p, significance, label, color.
+    From indicspecies summary table -> tidy table with log q, significance, label, color.
     - index_map: numeric string/int -> label (e.g., "1"->"BAL")
     - palette: label -> color
     """
     df = sign_df.copy()
 
-    # coerce/validate key columns
-    ensure_cols(df, [p_col, stat_col, idx_col], "indicspecies sign table")
-    df[ p_col] = pd.to_numeric(df[p_col], errors="coerce")
+    # ISA plotting must use the corrected q-values computed by indicspecies.
+    ensure_cols(df, [p_col, q_col, stat_col, idx_col], "indicspecies summary table")
+    df[p_col] = pd.to_numeric(df[p_col], errors="coerce")
+    df[q_col] = pd.to_numeric(df[q_col], errors="coerce")
     df[stat_col] = pd.to_numeric(df[stat_col], errors="coerce")
     df[idx_col] = pd.to_numeric(df[idx_col], errors="coerce").astype("Int64")
 
@@ -426,15 +428,15 @@ def compute_sig_table(
     keep_cols = base_cols + [c for c in df.columns if c not in base_cols]
     df = df[keep_cols]
 
-    # compute -log10 p
+    # compute -log10 corrected q-value
     with np.errstate(divide="ignore", invalid="ignore"):
-        df[f"{prefix}_log_p"] = (-np.log10(df[p_col])).replace([np.inf, -np.inf], np.nan).round(3)
+        df[f"{prefix}_log_q"] = (-np.log10(df[q_col])).replace([np.inf, -np.inf], np.nan).round(3)
 
     # significance
     if force_all_sig:
         df[f"{prefix}_significance"] = True
     else:
-        df[f"{prefix}_significance"] = (df[p_col] < p_thresh) & (df[stat_col] > stat_thresh)
+        df[f"{prefix}_significance"] = (df[q_col] < p_thresh) & (df[stat_col] > stat_thresh)
 
     # label from index_map
     def idx_to_label(x):
@@ -455,11 +457,84 @@ def compute_sig_table(
     # rename canonical columns for consistency
     df.rename(columns={
         p_col:  f"{prefix}_p_value",
+        q_col:  f"{prefix}_q_value",
         stat_col: f"{prefix}_stat",
         idx_col:  f"{prefix}_index"
     }, inplace=True)
 
     return df
+
+
+def compute_plot_layout(
+    df: pd.DataFrame,
+    *,
+    x_col: str,
+    y_col: str,
+    min_dist_x=0.02,
+    min_dist_y=0.03,
+    step_x=0.35,
+    step_y=0.35,
+    anchor=0.05,
+    iters=200,
+    add_random_eps=(0.0, 0.0),
+    key_col: str = "ASV_ID",
+) -> pd.DataFrame:
+    dd = df.copy()
+    if x_col not in dd.columns or y_col not in dd.columns:
+        raise ValueError(f"x_col={x_col!r} or y_col={y_col!r} not present in DataFrame")
+
+    dd[x_col] = pd.to_numeric(dd[x_col], errors="coerce")
+    dd[y_col] = pd.to_numeric(dd[y_col], errors="coerce")
+    dd = dd.replace([np.inf, -np.inf], np.nan).dropna(subset=[x_col, y_col])
+    if dd.empty:
+        return dd
+
+    x = dd[x_col].to_numpy()
+    y = dd[y_col].to_numpy()
+    xmin, xmax = float(np.nanmin(x)), float(np.nanmax(x))
+    ymin, ymax = float(np.nanmin(y)), float(np.nanmax(y))
+    if xmin == xmax:
+        xmin -= 0.05
+        xmax += 0.05
+    if ymin == ymax:
+        ymin -= 0.05
+        ymax += 0.05
+
+    nxv = (x - xmin) / (xmax - xmin)
+    nyv = (y - ymin) / (ymax - ymin)
+    pos = np.stack([nxv, nyv], axis=1).astype(float)
+    orig = pos.copy()
+
+    n = len(pos)
+    eye_mask = ~np.eye(n, dtype=bool)
+    rng = np.random.default_rng(0)
+    for _ in range(iters):
+        dx = pos[:, None, 0] - pos[None, :, 0]
+        dy = pos[:, None, 1] - pos[None, :, 1]
+        mask = eye_mask & (np.abs(dx) < min_dist_x) & (np.abs(dy) < min_dist_y)
+        if not mask.any():
+            break
+        sign_x = np.sign(dx)
+        sign_y = np.sign(dy)
+        sign_x[sign_x == 0] = rng.choice([-1.0, 1.0], size=(sign_x == 0).sum())
+        sign_y[sign_y == 0] = rng.choice([-1.0, 1.0], size=(sign_y == 0).sum())
+        force_x = np.zeros_like(dx)
+        force_y = np.zeros_like(dy)
+        force_x[mask] = (min_dist_x - np.abs(dx[mask])) * sign_x[mask]
+        force_y[mask] = (min_dist_y - np.abs(dy[mask])) * sign_y[mask]
+        pos[:, 0] += step_x * force_x.sum(axis=1) - anchor * (pos[:, 0] - orig[:, 0])
+        pos[:, 1] += step_y * force_y.sum(axis=1) - anchor * (pos[:, 1] - orig[:, 1])
+        np.clip(pos, 0.0, 1.0, out=pos)
+
+    if add_random_eps != (0.0, 0.0):
+        pos[:, 0] = np.clip(pos[:, 0] + rng.normal(0, add_random_eps[0], n), 0, 1)
+        pos[:, 1] = np.clip(pos[:, 1] + rng.normal(0, add_random_eps[1], n), 0, 1)
+
+    dd["_x_"] = pos[:, 0] * (xmax - xmin) + xmin
+    dd["_y_"] = pos[:, 1] * (ymax - ymin) + ymin
+
+    keep = [c for c in [key_col, x_col, y_col, "_x_", "_y_"] if c in dd.columns]
+    return dd[keep].drop_duplicates(subset=[key_col] if key_col in dd.columns else None)
 
 
 def plot_p_vs_stat_no_overlap(
@@ -500,6 +575,10 @@ def plot_p_vs_stat_no_overlap(
     label_mask_col: str | None = None,
     label_fontsize: int = 7,
     label_max: int = 300,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    layout_df: pd.DataFrame | None = None,
+    layout_key_col: str = "ASV_ID",
 ):
     """Scatter x_col vs y_col with axis-wise repulsive jitter and fixed data area."""
     dd = df.copy()
@@ -523,37 +602,34 @@ def plot_p_vs_stat_no_overlap(
     if ymin == ymax:
         ymin -= 0.05; ymax += 0.05
 
-    # normalize and repulse
-    nx = (x - xmin) / (xmax - xmin)
-    ny = (y - ymin) / (ymax - ymin)
-    pos = np.stack([nx, ny], axis=1).astype(float)
-    orig = pos.copy()
-
-    n = len(pos)
-    eye_mask = ~np.eye(n, dtype=bool)
-    for _ in range(iters):
-        dx = pos[:, None, 0] - pos[None, :, 0]
-        dy = pos[:, None, 1] - pos[None, :, 1]
-        mask = eye_mask & (np.abs(dx) < min_dist_x) & (np.abs(dy) < min_dist_y)
-        if not mask.any():
-            break
-        sign_x = np.sign(dx); sign_y = np.sign(dy)
-        sign_x[sign_x == 0] = np.random.choice([-1.0, 1.0], size=(sign_x == 0).sum())
-        sign_y[sign_y == 0] = np.random.choice([-1.0, 1.0], size=(sign_y == 0).sum())
-        force_x = np.zeros_like(dx); force_y = np.zeros_like(dy)
-        force_x[mask] = (min_dist_x - np.abs(dx[mask])) * sign_x[mask]
-        force_y[mask] = (min_dist_y - np.abs(dy[mask])) * sign_y[mask]
-        pos[:, 0] += step_x * force_x.sum(axis=1) - anchor * (pos[:, 0] - orig[:, 0])
-        pos[:, 1] += step_y * force_y.sum(axis=1) - anchor * (pos[:, 1] - orig[:, 1])
-        np.clip(pos, 0.0, 1.0, out=pos)
-
-    if add_random_eps != (0.0, 0.0):
-        rng = np.random.default_rng(0)
-        pos[:, 0] = np.clip(pos[:, 0] + rng.normal(0, add_random_eps[0], n), 0, 1)
-        pos[:, 1] = np.clip(pos[:, 1] + rng.normal(0, add_random_eps[1], n), 0, 1)
-
-    dd["_x_"] = pos[:, 0] * (xmax - xmin) + xmin
-    dd["_y_"] = pos[:, 1] * (ymax - ymin) + ymin
+    if layout_df is not None:
+        if layout_key_col not in dd.columns or layout_key_col not in layout_df.columns:
+            raise ValueError(f"layout reuse requires '{layout_key_col}' in both plot data and layout_df")
+        dd = dd.drop(columns=[c for c in ["_x_", "_y_"] if c in dd.columns])
+        dd = dd.merge(
+            layout_df[[layout_key_col, "_x_", "_y_"]].drop_duplicates(subset=[layout_key_col]),
+            on=layout_key_col,
+            how="left",
+        )
+        if dd[["_x_", "_y_"]].isna().any().any():
+            raise ValueError(f"Missing reused layout coordinates for {output_file.name}")
+    else:
+        layout_dd = compute_plot_layout(
+            dd,
+            x_col=x_col,
+            y_col=y_col,
+            min_dist_x=min_dist_x,
+            min_dist_y=min_dist_y,
+            step_x=step_x,
+            step_y=step_y,
+            anchor=anchor,
+            iters=iters,
+            add_random_eps=add_random_eps,
+            key_col=layout_key_col,
+        )
+        dd = dd.drop(columns=[c for c in ["_x_", "_y_"] if c in dd.columns])
+        merge_cols = [c for c in [layout_key_col, x_col, y_col, "_x_", "_y_"] if c in layout_dd.columns]
+        dd = dd.merge(layout_dd[merge_cols], on=[c for c in [layout_key_col, x_col, y_col] if c in merge_cols], how="left")
 
     # Normalize category columns to string so palette/marker dict keys are stable.
     if hue_col is not None and hue_col in dd.columns:
@@ -709,17 +785,16 @@ def plot_p_vs_stat_no_overlap(
         legend=False, ax=ax,
     )
 
-    # Optional labels for focused points (for example, focused ISA ASVs).
+    # In labeled plots, label every plotted colored point. Gray/background
+    # "not_indicator" points are not labeled.
     if label_col and label_col in dd.columns:
         lbl_df = dd.copy()
-        if label_mask_col and label_mask_col in lbl_df.columns:
-            mask = lbl_df[label_mask_col].fillna(False).astype(bool)
-            lbl_df = lbl_df.loc[mask].copy()
+        if hue_col and hue_col in lbl_df.columns:
+            lbl_df = lbl_df.loc[
+                lbl_df[hue_col].fillna("not_indicator").astype(str) != "not_indicator"
+            ].copy()
         lbl_df = lbl_df.dropna(subset=[label_col, "_x_", "_y_"])
         if not lbl_df.empty:
-            if len(lbl_df) > label_max:
-                lbl_df = lbl_df.head(label_max)
-                warnings.warn(f"Labeling truncated to first {label_max} points for readability.")
             for _, row in lbl_df.iterrows():
                 txt = str(row[label_col]).strip()
                 if not txt:
@@ -727,8 +802,20 @@ def plot_p_vs_stat_no_overlap(
                 ax.text(float(row["_x_"]), float(row["_y_"]), txt,
                         fontsize=label_fontsize, color="black",
                         ha="left", va="bottom")
-    ax.set_xlabel(x_col)
-    ax.set_ylabel(y_col)
+    if xlabel is None:
+        if x_col.endswith("_stat"):
+            xlabel = "Indicator statistic"
+        else:
+            xlabel = x_col
+    if ylabel is None:
+        if y_col.endswith("_log_q"):
+            ylabel = "-log10(q-value)"
+        elif y_col.endswith("_log_p"):
+            ylabel = "-log10(p-value)"
+        else:
+            ylabel = y_col
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
     ax.set_ylim(ymin - 0.05, ymax + 0.05)
     if invert_y:
@@ -764,9 +851,9 @@ def main():
         description="Refactored ISA plotting pipeline (indicspecies -> tidy tables + figures)."
     )
     ap.add_argument("--group1-results", type=Path, required=True,
-                    help="indicspecies sign table for the first grouping (TSV).")
+                    help="indicspecies summary table for the first grouping (TSV; must include q.value).")
     ap.add_argument("--group2-results", type=Path, required=True,
-                    help="indicspecies sign table for the second grouping (TSV).")
+                    help="indicspecies summary table for the second grouping (TSV; must include q.value).")
     ap.add_argument("--venn", type=Path, default=None,
                     help="Optional Venn presence table (cols: grouping, ASV_ID).")
     ap.add_argument("--taxonomy", type=Path, default=None,
@@ -775,7 +862,7 @@ def main():
                     help="Output directory for enriched TSVs and figures.")
 
     # Thresholds
-    ap.add_argument("--p-thresh", type=float, default=0.05, help="p-value threshold (default: 0.05).")
+    ap.add_argument("--q-thresh", type=float, default=0.05, help="q-value significance threshold (default: 0.05).")
     ap.add_argument("--stat-thresh", type=float, default=0.0, help="stat threshold (default: 0.0).")
     ap.add_argument("--group1-name", default="Group1", help="Friendly name for the first grouping (used in legends/output names).")
     ap.add_argument("--group2-name", default="Group2", help="Friendly name for the second grouping (used in legends/output names).")
@@ -839,7 +926,8 @@ def main():
                            help="Column in metadata providing matplotlib marker codes per group2 label.")
 
     # Column names in sign tables (robustness for variants)
-    ap.add_argument("--p-col", default="p.value", help="Column name for p-values in sign tables (default: p.value).")
+    ap.add_argument("--p-col", default="p.value", help="Column name for raw p-values in indicspecies summary tables (default: p.value).")
+    ap.add_argument("--q-col", default="q.value", help="Column name for corrected q-values in indicspecies summary tables (default: q.value).")
     ap.add_argument("--stat-col", default="stat", help="Column name for stat values in sign tables (default: stat).")
     ap.add_argument("--idx-col", default="index", help="Column name for index in sign tables (default: index).")
 
@@ -1041,16 +1129,16 @@ def main():
     # ---- Build significance tables ----
     group1_sig = compute_sig_table(
         g1_df, index_map=group1_index_map, palette=group1_palette,
-        p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
-        p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
+        p_col=args.p_col, q_col=args.q_col, stat_col=args.stat_col, idx_col=args.idx_col,
+        p_thresh=args.q_thresh, stat_thresh=args.stat_thresh,
         force_all_sig=False, prefix="group1"
     )
     group1_sig.to_csv(outdir / f"{group1_stub}_ISA_enriched.tsv", sep="\t", index=False)
 
     group2_sig = compute_sig_table(
         g2_df, index_map=group2_index_map, palette=group2_palette,
-        p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
-        p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
+        p_col=args.p_col, q_col=args.q_col, stat_col=args.stat_col, idx_col=args.idx_col,
+        p_thresh=args.q_thresh, stat_thresh=args.stat_thresh,
         force_all_sig=False, prefix="group2"
     )
     group2_sig.to_csv(outdir / f"{group2_stub}_ISA_enriched.tsv", sep="\t", index=False)
@@ -1062,6 +1150,8 @@ def main():
     group2_sig_plot_all = group2_sig_plot.copy()
     group1_sig_plot_focus = apply_focus_label(group1_sig_plot, "group1_label", focus_group1_label, group1_all_label, "__focus_group1__")
     group2_sig_plot_focus = apply_focus_label(group2_sig_plot, "group2_label", focus_group2_label, group2_all_label, "__focus_group2__")
+    group1_layout_all = compute_plot_layout(group1_sig_plot_all, x_col="group1_stat", y_col="group1_log_q")
+    group2_layout_all = compute_plot_layout(group2_sig_plot_all, x_col="group2_stat", y_col="group2_log_q")
 
     group1_order_all = list(group1_order_plot) if group1_order_plot else []
     group2_order_all = list(group2_order_plot) if group2_order_plot else []
@@ -1119,17 +1209,18 @@ def main():
     plot_p_vs_stat_no_overlap(
         group1_sig_plot_all,
         outdir / f"{group1_stub}_ISA_plot.svg",
-        x_col="group1_stat", y_col="group1_log_p",
+        x_col="group1_stat", y_col="group1_log_q",
         hue_col="group1_label",
         hue_order=group1_order_all if group1_order_all else None,
         color_palette=group1_palette_all,
         plot_size_in=(args.plot_width, args.plot_height),
         legend_color_title=group1_title,
+        layout_df=group1_layout_all,
     )
     plot_p_vs_stat_no_overlap(
         group1_sig_plot_all,
         outdir / f"{group1_stub}_ISA_plot_LABELED.svg",
-        x_col="group1_stat", y_col="group1_log_p",
+        x_col="group1_stat", y_col="group1_log_q",
         hue_col="group1_label",
         hue_order=group1_order_all if group1_order_all else None,
         color_palette=group1_palette_all,
@@ -1137,22 +1228,24 @@ def main():
         legend_color_title=group1_title,
         label_col="ASV_ID",
         label_mask_col="group1_significance",
+        layout_df=group1_layout_all,
     )
     if focus_group1_label:
         plot_p_vs_stat_no_overlap(
             group1_sig_plot_focus,
             outdir / f"{group1_stub}_ISA_plot_FOCUS.svg",
-            x_col="group1_stat", y_col="group1_log_p",
+            x_col="group1_stat", y_col="group1_log_q",
             hue_col="group1_label",
             hue_order=group1_order_focus if group1_order_focus else None,
             color_palette=group1_palette_focus,
             plot_size_in=(args.plot_width, args.plot_height),
             legend_color_title=f"{group1_title} ({focus_group1_label})",
+            layout_df=group1_layout_all,
         )
         plot_p_vs_stat_no_overlap(
             group1_sig_plot_focus,
             outdir / f"{group1_stub}_ISA_plot_FOCUS_LABELED.svg",
-            x_col="group1_stat", y_col="group1_log_p",
+            x_col="group1_stat", y_col="group1_log_q",
             hue_col="group1_label",
             hue_order=group1_order_focus if group1_order_focus else None,
             color_palette=group1_palette_focus,
@@ -1160,6 +1253,7 @@ def main():
             legend_color_title=f"{group1_title} ({focus_group1_label})",
             label_col="ASV_ID" if args.label_focused_asvs else None,
             label_mask_col="__focus_group1__" if args.label_focused_asvs else None,
+            layout_df=group1_layout_all,
         )
 
     # ---- Type plot using Venn membership (optional; force all sig for color only) ----
@@ -1176,8 +1270,8 @@ def main():
 
         venn_sig = compute_sig_table(
             v_sub, index_map={}, palette={},  # labels come from Venn below
-            p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
-            p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
+            p_col=args.p_col, q_col=args.q_col, stat_col=args.stat_col, idx_col=args.idx_col,
+            p_thresh=args.q_thresh, stat_thresh=args.stat_thresh,
             force_all_sig=True, prefix="group1"
         )
         venn_sig["group1_label"] = venn_sig["ASV_ID"].map(vmap).map(normalize_combo).fillna("not_indicator")
@@ -1194,7 +1288,7 @@ def main():
         plot_p_vs_stat_no_overlap(
             venn_sig_plot,
             outdir / f"{group1_stub}_Venn_plot.svg",
-            x_col="group1_stat", y_col="group1_log_p",
+            x_col="group1_stat", y_col="group1_log_q",
             hue_col="group1_label",
             hue_order=group1_order_all if group1_order_all else None,
             color_palette=group1_palette_all,
@@ -1202,34 +1296,37 @@ def main():
             legend_color_title=group1_title,
             label_col="ASV_ID" if args.label_focused_asvs and focus_group1_label else None,
             label_mask_col="__focus_group1__" if args.label_focused_asvs and focus_group1_label else None,
+            layout_df=group1_layout_all,
         )
 
     # ---- Status plot (ISA) ----
     plot_p_vs_stat_no_overlap(
         group2_sig_plot_all,
         outdir / f"{group2_stub}_ISA_plot.svg",
-        x_col="group2_stat", y_col="group2_log_p",
+        x_col="group2_stat", y_col="group2_log_q",
         hue_col="group2_label",
         hue_order=group2_order_all if group2_order_all else None,
         color_palette=group2_palette_all,
         plot_size_in=(args.plot_width, args.plot_height),
         legend_color_title=group2_title,
+        layout_df=group2_layout_all,
     )
     if focus_group2_label:
         plot_p_vs_stat_no_overlap(
             group2_sig_plot_focus,
             outdir / f"{group2_stub}_ISA_plot_FOCUS.svg",
-            x_col="group2_stat", y_col="group2_log_p",
+            x_col="group2_stat", y_col="group2_log_q",
             hue_col="group2_label",
             hue_order=group2_order_focus if group2_order_focus else None,
             color_palette=group2_palette_focus,
             plot_size_in=(args.plot_width, args.plot_height),
             legend_color_title=f"{group2_title} ({focus_group2_label})",
+            layout_df=group2_layout_all,
         )
         plot_p_vs_stat_no_overlap(
             group2_sig_plot_focus,
             outdir / f"{group2_stub}_ISA_plot_FOCUS_LABELED.svg",
-            x_col="group2_stat", y_col="group2_log_p",
+            x_col="group2_stat", y_col="group2_log_q",
             hue_col="group2_label",
             hue_order=group2_order_focus if group2_order_focus else None,
             color_palette=group2_palette_focus,
@@ -1237,27 +1334,30 @@ def main():
             legend_color_title=f"{group2_title} ({focus_group2_label})",
             label_col="ASV_ID" if args.label_focused_asvs else None,
             label_mask_col="__focus_group2__" if args.label_focused_asvs else None,
+            layout_df=group2_layout_all,
         )
     # ---- Combined tables/plots: join group1 + group2 on ASV ----
-    combined = pd.merge(group1_sig[["ASV_ID", "group1_stat", "group1_p_value", "group1_log_p",
+    combined = pd.merge(group1_sig[["ASV_ID", "group1_stat", "group1_p_value", "group1_q_value", "group1_log_q",
                                     "group1_significance", "group1_label", "group1_color"]],
-                        group2_sig[["ASV_ID", "group2_stat", "group2_p_value", "group2_log_p",
+                        group2_sig[["ASV_ID", "group2_stat", "group2_p_value", "group2_q_value", "group2_log_q",
                                     "group2_significance", "group2_label"]],
                         on="ASV_ID", how="outer")
     combined.to_csv(outdir / f"{group1_stub}_{group2_stub}_ISA_results.tsv", sep="\t", index=False)
     combined_plot = drop_all_group_rows(combined, "group1_label", group1_all_label)
     combined_plot = drop_all_group_rows(combined_plot, "group2_label", group2_all_label)
+    combined_layout_all = compute_plot_layout(combined_plot, x_col="group2_stat", y_col="group2_log_q")
 
     plot_p_vs_stat_no_overlap(
         combined_plot,
         outdir / "Combined_ISA_plot.svg",
-        x_col="group2_stat", y_col="group2_log_p",
+        x_col="group2_stat", y_col="group2_log_q",
         hue_col="group1_label", style_col="group2_label",
         hue_order=group1_order_all if group1_order_all else None,
         style_order=group2_order_all if group2_order_all else None,
         color_palette=group1_palette_all, marker_dict=group2_markers_plot,
         legend_color_title=group1_title, legend_marker_title=group2_title,
         plot_size_in=(args.plot_width, args.plot_height),
+        layout_df=combined_layout_all,
     )
 
     # ---- Phylum-colored variants (if taxonomy provided) ----
@@ -1277,20 +1377,22 @@ def main():
         plot_p_vs_stat_no_overlap(
             group1_tax_plot,
             outdir / f"{group1_stub}_ISA_plot_Phylum.svg",
-            x_col="group1_stat", y_col="group1_log_p",
+            x_col="group1_stat", y_col="group1_log_q",
             hue_col="Phylum_plot", color_palette=phyl_pal,
             legend_color_title="Phylum",
             plot_size_in=(args.plot_width, args.plot_height),
+            layout_df=group1_layout_all,
         )
         plot_p_vs_stat_no_overlap(
             group1_tax_plot,
             outdir / f"{group1_stub}_ISA_plot_Phylum_LABELED.svg",
-            x_col="group1_stat", y_col="group1_log_p",
+            x_col="group1_stat", y_col="group1_log_q",
             hue_col="Phylum_plot", color_palette=phyl_pal,
             legend_color_title="Phylum",
             plot_size_in=(args.plot_width, args.plot_height),
             label_col="ASV_ID",
             label_mask_col="group1_significance",
+            layout_df=group1_layout_all,
         )
 
         # Combined + taxonomy
@@ -1301,12 +1403,13 @@ def main():
         plot_p_vs_stat_no_overlap(
             comb_tax_plot,
             outdir / "Combined_ISA_plot_Phylum.svg",
-            x_col="group2_stat", y_col="group2_log_p",
+            x_col="group2_stat", y_col="group2_log_q",
             hue_col="Phylum", style_col="group2_label",
             style_order=group2_order_all if group2_order_all else None,
             color_palette=phyl_pal, marker_dict=group2_markers_plot,
             legend_color_title="Phylum", legend_marker_title=group2_title,
             plot_size_in=(args.plot_width, args.plot_height),
+            layout_df=combined_layout_all,
         )
 
     print(f"Done. Outputs in: {outdir}")
