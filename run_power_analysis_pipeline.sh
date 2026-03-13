@@ -13,7 +13,7 @@ Usage:
     --data-long <ASV_master_long.tsv> \
     --data-wide <ASV_count_wide.tsv> \
     --outdir <power_output_root> \
-    [--sample-col lmp_id] \
+    [--sample-col sample] \
     [--patient-col Participant_ID] \
     [--case-col Case] \
     [--type-col type_group] \
@@ -32,7 +32,7 @@ USAGE
 DATA_LONG=""
 DATA_WIDE=""
 OUTDIR=""
-SAMPLE_COL="lmp_id"
+SAMPLE_COL="sample"
 PATIENT_COL="Participant_ID"
 CASE_COL="Case"
 TYPE_COL="type_group"
