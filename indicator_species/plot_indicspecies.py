@@ -25,8 +25,8 @@ python isa_plots_cli.py \
   --taxonomy      /.../metadata/taxonomy_updated.tsv \
   --outdir        /.../indicspecies \
   --p-thresh 0.05 --stat-thresh 0.0 \
-  --type-index "1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush" \
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000" \
+  --type-index "1=BAL,2=Bronchial Brush,3=Oral Rinse,4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,7=Oral Rinse+BAL+Bronchial Brush" \
+  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000" \
   --status-index "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer" \
   --status-palette "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"
 """
@@ -60,7 +60,7 @@ SIG_LINE_ALPHA = None
 # ------------------------------- Utilities ----------------------------------
 def parse_mapping(s: str) -> dict:
     """
-    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Lung Brush" into dict.
+    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Bronchial Brush" into dict.
     Returns {} if s is falsy/empty.
     """
     if not s:
@@ -83,7 +83,7 @@ def parse_mapping(s: str) -> dict:
 
 def normalize_combo(label: str) -> str:
     """
-    Normalize combo strings like "BAL + Lung Brush" -> "BAL + Lung Brush"
+    Normalize combo strings like "BAL + Bronchial Brush" -> "BAL + Bronchial Brush"
     (trim spaces around '+', sort parts alphabetically for stable mapping).
     """
     if not isinstance(label, str):
@@ -657,16 +657,16 @@ def main():
     # Index maps
     ap.add_argument("--type-index", type=str, required=True,
                     help='Mapping of indicspecies "index" to labels, e.g. '
-                         '"1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush"')
+                         '"1=BAL,2=Bronchial Brush,3=Oral Rinse,4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,7=Oral Rinse+BAL+Bronchial Brush"')
     ap.add_argument("--status-index", type=str, required=True,
                     help='Mapping for status "index", e.g. "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer"')
 
     # Palettes
     ap.add_argument("--type-palette", type=str, required=True,
                     help='Color map for type labels, e.g. '
-                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,'
-                         'BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,'
-                         'Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000"')
+                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,'
+                         'BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,'
+                         'Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000"')
     ap.add_argument("--status-palette", type=str, required=True,
                     help='Color map for status, e.g. "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"')
     ap.add_argument("--status-markers", type=str, default="Cancer=X,Non-Cancer=D,Cancer+Non-Cancer=o",
@@ -772,8 +772,8 @@ def main():
     LABEL_PVAL_CUTOFF = 100000000000000 #0.05
     LABEL_STAT_CUTOFF = 0 #0.25
     # Restrict type labels to specific groups (set to None to allow all types)
-    # Example: {"BAL", "Lung Brush"}
-    TYPE_LABEL_ALLOWLIST = {"Lung Brush", "BAL+Lung Brush", "Lung Brush+Oral Rinse", "BAL"}
+    # Example: {"BAL", "Bronchial Brush"}
+    TYPE_LABEL_ALLOWLIST = {"Bronchial Brush", "BAL+Bronchial Brush", "Bronchial Brush+Oral Rinse", "BAL"}
     # Force labels for these status groups in combined plots (set to None to disable)
     STATUS_LABEL_ALLOWLIST = {"Cancer", "Non-Cancer"}
 

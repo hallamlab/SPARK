@@ -143,7 +143,7 @@ def main():
     long_df = pd.read_csv(args.data_long, sep='\t')
     
     # Get metadata
-    metadata = long_df[['lmp_id', 'Participant_ID', 'Case']].drop_duplicates().set_index('lmp_id')
+    metadata = long_df[['sample', 'Participant_ID', 'Case']].drop_duplicates().set_index('sample')
     sample_ids = metadata.index.intersection(wide_df.columns)
     
     count_matrix = wide_df[sample_ids].T.values

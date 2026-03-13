@@ -65,8 +65,8 @@ def main() -> None:
     p.add_argument(
         "--sample-type",
         type=str,
-        default="Lung Brush",
-        help="Sample type to filter for (default: 'Lung Brush')",
+        default="Bronchial Brush",
+        help="Sample type to filter for (default: 'Bronchial Brush')",
     )
     p.add_argument(
         "--outdir",

@@ -579,7 +579,7 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--metadata", type=Path, help="TSV with sample metadata")
     io.add_argument("--samp-col", default="lmp_id", help="Sample column name in metadata")
     io.add_argument("--type-col", default="type_group", help="Grouping column in metadata")
-    io.add_argument("--keep-types", default="Oral Rinse,Lung Brush,BAL,Skin Brush,Scope Flush",
+    io.add_argument("--keep-types", default="Oral Rinse,Bronchial Brush,BAL,Skin Brush,Scope Flush",
                     help="Comma-separated list; if empty, keep all types")
 
     io.add_argument("--fastq-stats", default="stats/fastq_stats.tsv",
@@ -606,7 +606,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     # --- Appearance / output
     out = p.add_argument_group("Output")
-    out.add_argument("--palette", default="Scope Flush:#E69F00,Skin Brush:#CC79A7,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
+    out.add_argument("--palette", default="Scope Flush:#E69F00,Skin Brush:#CC79A7,Bronchial Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
                      help="Comma-separated 'Group:#HEX' list")
     out.add_argument("--title", default="Data Loss Flow", help="Plot title")
     out.add_argument("--output-prefix", default="data_loss_sankey",

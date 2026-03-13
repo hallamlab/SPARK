@@ -1667,7 +1667,7 @@ def main():
     sample_plot_path = f"{args.output_prefix}_sample_{meta}_plot.pdf"
     palette = {'Scope Flush': '#0072B2',
            'Skin Brush': '#009E73',
-           'Lung Brush': '#E69F00',
+           'Bronchial Brush': '#E69F00',
            'BAL': '#CC79A7',
            'Oral Rinse': '#D55E00'
            }
@@ -1678,7 +1678,7 @@ def main():
 
     meta = 'Type_Group'
     sample_plot_path = f"{args.output_prefix}_sample_{meta}_subset_plot.png"
-    sub_list = ['Oral Rinse', 'BAL', 'Lung Brush']
+    sub_list = ['Oral Rinse', 'BAL', 'Bronchial Brush']
     plot_sample_clusters(sample_umap, sample_clusters,
                          metadata_df.loc[metadata_df['Type_Group'].isin(sub_list)],
                          sample_plot_path, meta, m_color=False)

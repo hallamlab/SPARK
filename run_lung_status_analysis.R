@@ -7,7 +7,7 @@
 #   B: Contralateral vs Healthy (between-patient, patient-level)
 #   C: TumorSide vs Healthy (between-patient, patient-level)
 #
-# Primary analysis: Lung Brush (n=8 paired cancer patients)
+# Primary analysis: Bronchial Brush (n=8 paired cancer patients)
 # Exploratory: BAL (n=4 paired cancer patients)
 #
 # FDR correction across the 3 contrasts per sample type.

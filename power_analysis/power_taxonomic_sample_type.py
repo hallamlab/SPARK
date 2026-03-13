@@ -3,7 +3,7 @@
 power_taxonomic_sample_type.py
 
 Power analysis for taxonomic abundance differences BETWEEN sample types.
-Tests: "Is Phylum A more abundant in BAL vs Oral Rinse vs Lung Brush?"
+Tests: "Is Phylum A more abundant in BAL vs Oral Rinse vs Bronchial Brush?"
 """
 
 import argparse
@@ -35,8 +35,8 @@ def apply_transform(count_matrix, transform):
 
 def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     """Aggregate ASV counts to taxonomic level."""
-    agg = long_df.groupby(['lmp_id', tax_level])['count'].sum().reset_index()
-    wide = agg.pivot(index='lmp_id', columns=tax_level, values='count').fillna(0)
+    agg = long_df.groupby(['sample', tax_level])['count'].sum().reset_index()
+    wide = agg.pivot(index='sample', columns=tax_level, values='count').fillna(0)
 
     # Filter by prevalence
     prevalence = (wide > 0).sum(axis=0) / wide.shape[0]
@@ -198,7 +198,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patient-col", default="Participant_ID")
     parser.add_argument("--type-col", default="type_group")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()

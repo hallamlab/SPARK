@@ -25,8 +25,8 @@ import json
 warnings.filterwarnings('ignore')
 
 
-def filter_contralateral_long_and_wide(long_df, wide_df, sample_col='lmp_id', case_col='Case', type_col='type_group',
-                                       contralateral_sample_types='Lung Brush,BAL', contralateral_col='lung_status',
+def filter_contralateral_long_and_wide(long_df, wide_df, sample_col='sample', case_col='Case', type_col='type_group',
+                                       contralateral_sample_types='Bronchial Brush,BAL', contralateral_col='lung_status',
                                        cancer_site_col='Cancer_Site', lung_side_col='lung_code', contralateral_value='Contralateral'):
     work = long_df.copy()
     contra = contralateral_col
@@ -70,7 +70,7 @@ def load_data(long_path, wide_path):
     return long_df, wide_df
 
 
-def get_sample_metadata(long_df, sample_col='lmp_id', patient_col='Participant_ID',
+def get_sample_metadata(long_df, sample_col='sample', patient_col='Participant_ID',
                         case_col='Case', type_col='type_group'):
     """Extract sample-level metadata."""
     meta = long_df[[sample_col, patient_col, case_col, type_col]].drop_duplicates()
@@ -312,7 +312,7 @@ def classify_asvs(wide_df, prevalence_thresholds=(0.2, 0.5)):
 
 # ======================== Taxonomic Abundance Effect Sizes ========================
 
-def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', count_col='count', transform='none'):
+def calculate_taxonomic_abundances(long_df, tax_level, sample_col='sample', count_col='count', transform='none'):
     """
     Calculate relative abundances at a given taxonomic level.
     Returns a DataFrame with samples as rows and taxa as columns.
@@ -339,14 +339,14 @@ def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', coun
 
 
 def taxonomic_effect_sizes(long_df, metadata, tax_level='Phylum',
-                          case_col='Case', patient_col='Participant_ID',
+                          case_col='Case', patient_col='Participant_ID', sample_col='sample',
                           n_bootstrap=1000, seed=42, min_prevalence=0.1, transform='none'):
     """
     Compute effect sizes (Cohen's d) for differential abundance at a taxonomic level.
     Uses patient-level aggregation and bootstrap for confidence intervals.
     """
     # Get relative abundances
-    rel_abund = calculate_taxonomic_abundances(long_df, tax_level, transform=transform)
+    rel_abund = calculate_taxonomic_abundances(long_df, tax_level, sample_col=sample_col, transform=transform)
 
     # Filter to samples in metadata
     sample_ids = metadata.index.intersection(rel_abund.index)
@@ -421,7 +421,7 @@ def main():
     parser.add_argument("--data-long", required=True, help="Long format ASV data (TSV)")
     parser.add_argument("--data-wide", required=True, help="Wide format ASV count matrix (TSV)")
     parser.add_argument("--patient-col", default="Participant_ID")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--case-col", default="Case")
     parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--n-bootstrap", type=int, default=1000)
@@ -429,7 +429,7 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
-    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
@@ -628,13 +628,13 @@ def main():
 
     phylum_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Phylum',
-        case_col=args.case_col, patient_col=args.patient_col,
+        case_col=args.case_col, patient_col=args.patient_col, sample_col=args.sample_col,
         n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 
     family_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Family',
-        case_col=args.case_col, patient_col=args.patient_col,
+        case_col=args.case_col, patient_col=args.patient_col, sample_col=args.sample_col,
         n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 
@@ -646,7 +646,7 @@ def main():
 
     # Sample Type Comparisons
     print("\n" + "="*60)
-    print("Sample Type Comparisons (Oral vs BAL vs Lung Brush)")
+    print("Sample Type Comparisons (Oral vs BAL vs Bronchial Brush)")
 
     # PERMANOVA R² for sample type differences
     print("\n--- PERMANOVA R² (Sample Type Effect) ---")

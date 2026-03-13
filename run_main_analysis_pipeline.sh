@@ -17,7 +17,7 @@ Usage:
     [--run-bal-contralateral] \
     [--skip-legacy-diversity] \
     [--transform none|rclr] \
-    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Lung Brush,BAL"]
+    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Bronchial Brush,BAL"]
 
 Notes:
 - Networks are intentionally excluded.
@@ -38,7 +38,7 @@ RUN_BAL_CONTRA="false"
 RUN_LEGACY_DIVERSITY="true"
 TRANSFORM="none"
 EXCLUDE_CONTRALATERAL="true"
-CONTRALATERAL_SAMPLE_TYPES="Lung Brush,BAL"
+CONTRALATERAL_SAMPLE_TYPES="Bronchial Brush,BAL"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -150,9 +150,9 @@ PLOT_ISA_CMD=(
   --outdir "$ISA_DIR"
   --p-thresh 0.05
   --stat-thresh 0.0
-  --type-index "1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush"
+  --type-index "1=BAL,2=Bronchial Brush,3=Oral Rinse,4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,7=Oral Rinse+BAL+Bronchial Brush"
   --status-index "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer"
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000"
+  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000"
   --status-palette "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"
 )
 if [[ -f "$TAXONOMY_TSV" ]]; then
@@ -189,7 +189,7 @@ if [[ "$RUN_LEGACY_DIVERSITY" == "true" ]]; then
     --alpha "$DIV_METRICS_DIR/shannon.tsv" \
     --bray "$DIV_METRICS_DIR/bray.tsv" \
     --jacc "$DIV_METRICS_DIR/jaccard.tsv" \
-    --type-order "Oral Rinse,BAL,Lung Brush" \
+    --type-order "Oral Rinse,BAL,Bronchial Brush" \
     --outdir "$DIV_PLOTS_DIR"
 fi
 
@@ -206,7 +206,7 @@ Rscript "$SCRIPT_DIR/beta_diversity/run_bray_permanova_patient_aware.R" \
   --patient-col "$PATIENT_COL" \
   --case-col "$CASE_COL" \
   --type-col "$TYPE_COL" \
-  --sample-types "Oral Rinse,BAL,Lung Brush" \
+  --sample-types "Oral Rinse,BAL,Bronchial Brush" \
   --permutations 999 \
   --seed 42 \
   --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL" \
@@ -234,7 +234,7 @@ python3 "$SCRIPT_DIR/taxonomic_analysis/run_taxonomic_abundance_analysis.py" \
   --type-col "$TYPE_COL" \
   --count-col count \
   --tax-levels "Phylum,Family" \
-  --sample-types "BAL,Lung Brush,Oral Rinse" \
+  --sample-types "BAL,Bronchial Brush,Oral Rinse" \
   --min-prevalence 0.10 \
   --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES" \
   $( [[ "$EXCLUDE_CONTRALATERAL" == "false" ]] && echo "--keep-contralateral-in-cancer" ) \
@@ -248,7 +248,7 @@ python3 "$SCRIPT_DIR/taxonomic_analysis/run_taxonomic_sample_type_analysis.py" \
   --type-col "$TYPE_COL" \
   --count-col count \
   --tax-levels "Phylum,Family" \
-  --sample-types "BAL,Oral Rinse,Lung Brush" \
+  --sample-types "BAL,Oral Rinse,Bronchial Brush" \
   --min-prevalence 0.10 \
   --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES" \
   $( [[ "$EXCLUDE_CONTRALATERAL" == "false" ]] && echo "--keep-contralateral-in-cancer" ) \
@@ -268,7 +268,7 @@ python3 "$SCRIPT_DIR/taxonomic_analysis/plot_taxonomic_observed_analysis.py" \
   --outdir "$TAX_DIR/figures"
 
 ################################################################################
-# 5) Contralateral workflow + plots (Lung Brush primary; BAL optional)
+# 5) Contralateral workflow + plots (Bronchial Brush primary; BAL optional)
 ################################################################################
 run_contralateral_one() {
   local sample_type="$1"
@@ -299,7 +299,7 @@ run_contralateral_one() {
     --outdir "$C_DIR/figures"
 }
 
-run_contralateral_one "Lung Brush"
+run_contralateral_one "Bronchial Brush"
 if [[ "$RUN_BAL_CONTRA" == "true" ]]; then
   run_contralateral_one "BAL"
 fi

@@ -31,7 +31,7 @@ sample_types = metadata.loc[sample_ids, 'type_group'].values
 shannon = shannon_diversity(count_matrix)
 
 # Aggregate to patient level by sample type
-for stype in ['BAL', 'Lung Brush', 'Oral Rinse']:
+for stype in ['BAL', 'Bronchial Brush', 'Oral Rinse']:
     print(f"\n{'='*60}")
     print(f"{stype}")
     print('='*60)

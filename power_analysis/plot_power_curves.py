@@ -44,7 +44,7 @@ sns.set_style("white")
 
 # Color palettes (matching SPARK style)
 PALETTE_TYPES = {
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
 }
@@ -113,7 +113,7 @@ def plot_cancer_vs_control(results_dir: Path, outdir: Path):
     permanova_df = pd.read_csv(results_dir / 'permanova_power_stratified.tsv', sep='\t')
     shannon_df = pd.read_csv(results_dir / 'shannon_power_stratified.tsv', sep='\t')
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
 
     # ========== FULL VERSION (all scenarios) ==========
     fig, axes = plt.subplots(2, 3, figsize=(12, 7), sharex=True)
@@ -277,7 +277,7 @@ def plot_sample_type_comparison(results_dir: Path, outdir: Path):
     add_power_threshold(ax_perm, 0.8)
     ax_perm.set_xlabel('Patients (n)', fontsize=12)
     ax_perm.set_ylabel('Power', fontsize=12)
-    ax_perm.set_title('PERMANOVA\n(BAL vs Oral Rinse vs Lung Brush)',
+    ax_perm.set_title('PERMANOVA\n(BAL vs Oral Rinse vs Bronchial Brush)',
                      fontsize=13)
     ax_perm.set_ylim(-0.05, 1.05)
     ax_perm.grid(alpha=0.3, linewidth=0.5)
@@ -321,7 +321,7 @@ def plot_taxonomic_abundance(results_dir: Path, outdir: Path):
     tax_cancer_df = pd.read_csv(results_dir / 'taxonomic_abundance_power.tsv', sep='\t')
     tax_stype_df = pd.read_csv(results_dir / 'taxonomic_sample_type_power.tsv', sep='\t')
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
     tax_levels = ['Phylum', 'Family']
 
     # ========== FULL VERSION (all scenarios) ==========
@@ -473,7 +473,7 @@ def generate_summary_table(results_dir: Path, outdir: Path):
 
     summary_rows = []
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
 
     for stype in sample_types:
         # PERMANOVA - Observed scenario

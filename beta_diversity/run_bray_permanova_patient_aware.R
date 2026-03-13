@@ -15,7 +15,7 @@ option_list <- list(
   make_option("--patient-col", type = "character", default = "Participant_ID", help = "Patient ID column"),
   make_option("--case-col", type = "character", default = "Case", help = "Case/control column"),
   make_option("--type-col", type = "character", default = "type_group", help = "Sample type column"),
-  make_option("--sample-types", type = "character", default = "Oral Rinse,BAL,Lung Brush",
+  make_option("--sample-types", type = "character", default = "Oral Rinse,BAL,Bronchial Brush",
               help = "Comma-separated sample types to include"),
   make_option("--exclude-contralateral-in-cancer", type = "logical", default = TRUE,
               help = "For case/control analyses, exclude contralateral cancer samples [default: %default]"),
@@ -27,7 +27,7 @@ option_list <- list(
               help = "Metadata column for sample lung side (used if contralateral column missing) [default: %default]"),
   make_option("--contralateral-value", type = "character", default = "Contralateral",
               help = "Value in contralateral column marking contralateral samples [default: %default]"),
-  make_option("--contralateral-sample-types", type = "character", default = "Lung Brush,BAL",
+  make_option("--contralateral-sample-types", type = "character", default = "Bronchial Brush,BAL",
               help = "Comma-separated sample types where contralateral exclusion applies [default: %default]"),
   make_option("--transform", type = "character", default = "none",
               help = "Distance input transform: none (TSS+Bray) or rclr (Euclidean) [default: %default]"),
@@ -98,7 +98,7 @@ canonicalize_sample_type <- function(x) {
     return("BAL")
   }
   if (x_clean %in% c("lung brush", "bronchial brush", "brochial brush", "brush")) {
-    return("Lung Brush")
+    return("Bronchial Brush")
   }
   x
 }

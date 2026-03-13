@@ -18,7 +18,7 @@ from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 
-def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Lung Brush,BAL',
+def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Bronchial Brush,BAL',
                                  contralateral_col='lung_status', cancer_site_col='Cancer_Site',
                                  lung_side_col='lung_code', contralateral_value='Contralateral'):
     work = df.copy()
@@ -63,10 +63,10 @@ def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
     Returns: DataFrame with samples × taxa
     """
     # Group by sample and taxon
-    agg = long_df.groupby(['lmp_id', tax_level])['count'].sum().reset_index()
+    agg = long_df.groupby(['sample', tax_level])['count'].sum().reset_index()
 
     # Pivot to wide format
-    wide = agg.pivot(index='lmp_id', columns=tax_level, values='count').fillna(0)
+    wide = agg.pivot(index='sample', columns=tax_level, values='count').fillna(0)
 
     # Filter by prevalence
     prevalence = (wide > 0).sum(axis=0) / wide.shape[0]
@@ -354,11 +354,11 @@ def main():
     parser.add_argument("--patient-col", default="Participant_ID")
     parser.add_argument("--case-col", default="Case")
     parser.add_argument("--type-col", default="type_group")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
-    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
                        help="Comma-separated: observed, null, weak, moderate, strong")
     args = parser.parse_args()

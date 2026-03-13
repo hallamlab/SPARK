@@ -6,7 +6,7 @@ Matches power-analysis taxonomy levels and paired structure.
 For each taxon at each taxonomic level:
 - Omnibus (optional): Friedman test across sample types for patients with all types
 - Pairwise planned comparisons (paired Wilcoxon signed-rank):
-  BAL vs Oral Rinse, BAL vs Lung Brush, Oral Rinse vs Lung Brush
+  BAL vs Oral Rinse, BAL vs Bronchial Brush, Oral Rinse vs Bronchial Brush
 - BH-FDR correction across taxa per contrast (and for omnibus separately)
 """
 
@@ -202,7 +202,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Taxonomic abundance analysis across sample types on observed data")
     p.add_argument("--data-long", required=True)
     p.add_argument("--tax-levels", default="Phylum,Family")
-    p.add_argument("--sample-types", default="BAL,Oral Rinse,Lung Brush")
+    p.add_argument("--sample-types", default="BAL,Oral Rinse,Bronchial Brush")
     p.add_argument("--sample-col", default="lmp_id")
     p.add_argument("--patient-col", default="Participant_ID")
     p.add_argument("--case-col", default="Case")
@@ -215,7 +215,7 @@ def main() -> None:
     p.add_argument("--cancer-site-col", default="Cancer_Site")
     p.add_argument("--lung-side-col", default="lung_code")
     p.add_argument("--contralateral-value", default="Contralateral")
-    p.add_argument("--contralateral-sample-types", default="Lung Brush,BAL", help="Comma-separated sample types where contralateral exclusion applies")
+    p.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL", help="Comma-separated sample types where contralateral exclusion applies")
     p.set_defaults(exclude_contralateral_in_cancer=True)
     p.add_argument("--skip-omnibus", action="store_true")
     p.add_argument("--transform", choices=["none", "rclr"], default="none")

@@ -32,15 +32,15 @@ sns.set_style("white")
 
 
 LEGACY_TYPE_INDEX = (
-    "1=BAL,2=Lung Brush,3=Oral Rinse,"
-    "4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,"
-    "7=Oral Rinse+BAL+Lung Brush"
+    "1=BAL,2=Bronchial Brush,3=Oral Rinse,"
+    "4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,"
+    "7=Oral Rinse+BAL+Bronchial Brush"
 )
 LEGACY_STATUS_INDEX = "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer"
 LEGACY_TYPE_PALETTE = (
-    "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,"
-    "BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,"
-    "Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000"
+    "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,"
+    "BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,"
+    "Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000"
 )
 LEGACY_STATUS_PALETTE = "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"
 
@@ -233,7 +233,7 @@ def plot_indicspecies(df: pd.DataFrame, outdir: Path) -> None:
     # Bar plot: type_group indicator counts split by indicator label
     type_df = df[(df["grouping_col"] == "type_group") & (df["significant"])].copy()
     if not type_df.empty:
-        singles = {"BAL", "Lung Brush", "Oral Rinse"}
+        singles = {"BAL", "Bronchial Brush", "Oral Rinse"}
         type_df["label_class"] = np.where(type_df["index_label"].isin(singles), "single-site", "combination")
         type_df["count_one"] = 1
         order = (
@@ -295,6 +295,9 @@ def load_power(path: Path) -> pd.DataFrame:
     df["analysis_label"] = make_analysis_label(df)
     df["duleg_label"] = np.where(df["duleg"], "duleg=TRUE", "duleg=FALSE")
     df["scenario"] = df["scenario"].astype(str)
+    # Create n_size from n_cancer if it doesn't exist
+    if "n_size" not in df.columns and "n_cancer" in df.columns:
+        df["n_size"] = df["n_cancer"]
     df["n_size"] = pd.to_numeric(df["n_size"], errors="coerce")
     for c in ("power", "sensitivity", "fdr", "fdr_conditional"):
         if c in df.columns:

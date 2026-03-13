@@ -23,10 +23,10 @@ option_list <- list(
   make_option("--blocked-cols", type="character", default="type_group",
               help="Comma-separated grouping columns requiring blocked permutations [default: %default]"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
-              help="For Lung Brush status analysis, add extra run excluding contralateral cancer samples [default: %default]"),
+              help="For Bronchial Brush status analysis, add extra run excluding contralateral cancer samples [default: %default]"),
   make_option("--status-exclude-contralateral", type="logical", default=TRUE,
               help="Exclude contralateral cancer samples for selected status sample types [default: %default]"),
-  make_option("--status-contralateral-sites", type="character", default="Lung Brush,BAL",
+  make_option("--status-contralateral-sites", type="character", default="Bronchial Brush,BAL",
               help="Comma-separated type_group values where contralateral exclusion applies [default: %default]"),
   make_option("--contralateral-col", type="character", default="lung_status",
               help="Metadata column identifying contralateral samples [default: %default]"),
@@ -38,8 +38,8 @@ option_list <- list(
               help="Value in --contralateral-col marking contralateral samples [default: %default]"),
   make_option("--cancer-label", type="character", default="Cancer",
               help="Label in status column for cancer samples [default: %default]"),
-  make_option("--lung-brush-label", type="character", default="Lung Brush",
-              help="Value in type_group identifying Lung Brush samples [default: %default]"),
+  make_option("--lung-brush-label", type="character", default="Bronchial Brush",
+              help="Value in type_group identifying Bronchial Brush samples [default: %default]"),
   make_option("--transform",  type="character", default="none",
               help="Abundance transform before multipatt: none|rclr [default: %default]"),
   make_option("--perms",      type="integer",   default=999,
@@ -406,11 +406,11 @@ for (gcol in group_cols) {
       pooled_status_sign_duleg[[length(pooled_status_sign_duleg) + 1]] <- res2_sign %>% mutate(type_group = site)
       pooled_status_full_duleg[[length(pooled_status_full_duleg) + 1]] <- res2_full %>% mutate(type_group = site)
 
-      # Extra status analysis for Lung Brush: remove contralateral samples from cancer patients.
+      # Extra status analysis for Bronchial Brush: remove contralateral samples from cancer patients.
       if (isTRUE(opt$`status-extra-no-contralateral`) && !isTRUE(opt$`status-exclude-contralateral`) &&
           identical(as.character(site), as.character(opt$`lung-brush-label`))) {
         if (!(effective_contralateral_col %in% colnames(meta_site))) {
-          warning("Skipping extra Lung Brush no-contralateral analysis: column '",
+          warning("Skipping extra Bronchial Brush no-contralateral analysis: column '",
                   effective_contralateral_col, "' not found.")
         } else {
           is_cancer <- as.character(meta_site[[gcol]]) == as.character(opt$`cancer-label`)
@@ -419,7 +419,7 @@ for (gcol in group_cols) {
           keep_no_contra <- !(is_cancer & is_contralateral)
 
           n_removed <- sum(!keep_no_contra, na.rm = TRUE)
-          message("Lung Brush extra status analysis: excluding ", n_removed,
+          message("Bronchial Brush extra status analysis: excluding ", n_removed,
                   " contralateral cancer sample(s) using ",
                   effective_contralateral_col, " == '", opt$`contralateral-value`, "'.")
 
@@ -428,7 +428,7 @@ for (gcol in group_cols) {
           grouping_site_nc <- droplevels(as.factor(meta_site_nc[[gcol]]))
 
           if (length(unique(grouping_site_nc)) < 2) {
-            warning("Skipping Lung Brush no-contralateral status ISA (<2 status groups after filtering).")
+            warning("Skipping Bronchial Brush no-contralateral status ISA (<2 status groups after filtering).")
           } else {
             tab_site_nc <- table(grouping_site_nc)
             small_site_nc <- names(tab_site_nc[tab_site_nc < opt$`min-n`])
@@ -440,7 +440,7 @@ for (gcol in group_cols) {
             }
 
             if (length(unique(grouping_site_nc)) < 2) {
-              warning("Skipping Lung Brush no-contralateral status ISA after min-n filtering.")
+              warning("Skipping Bronchial Brush no-contralateral status ISA after min-n filtering.")
             } else {
               X_pat_nc <- aggregate_to_patient(X_site_nc, meta_site_nc[[opt$`patient-col`]])
               X_pat_nc <- apply_matrix_transform(X_pat_nc, opt$transform)
@@ -458,7 +458,7 @@ for (gcol in group_cols) {
               grouping_pat_nc <- droplevels(factor(status_vec_nc))
 
               if (length(unique(grouping_pat_nc)) < 2) {
-                warning("Skipping Lung Brush no-contralateral status ISA after patient aggregation.")
+                warning("Skipping Bronchial Brush no-contralateral status ISA after patient aggregation.")
               } else {
                 message("Running multipatt for 'status' within type_group='", site,
                         "' excluding contralateral cancer samples (duleg=FALSE) …")

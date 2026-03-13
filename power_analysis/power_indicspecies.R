@@ -32,7 +32,7 @@ option_list <- list(
               help="Long format data file (ASV_master_long.tsv)"),
   make_option("--data-wide", type="character",
               help="Wide count matrix (ASV_master_count_wide.tsv)"),
-  make_option("--sample-col", type="character", default="lmp_id",
+  make_option("--sample-col", type="character", default="sample",
               help="Column in long data for sample IDs [default: %default]"),
   make_option("--patient-col", type="character", default="Participant_ID",
               help="Column for patient IDs [default: %default]"),
@@ -41,10 +41,10 @@ option_list <- list(
   make_option("--status-sites", type="character", default="",
               help="Optional comma-separated type_group levels for status power (default: all sites)"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
-              help="For Lung Brush status power, exclude contralateral cancer samples [default: %default]"),
+              help="For Bronchial Brush status power, exclude contralateral cancer samples [default: %default]"),
   make_option("--status-exclude-contralateral", type="logical", default=TRUE,
               help="Exclude contralateral cancer samples for selected status sample types [default: %default]"),
-  make_option("--status-contralateral-sites", type="character", default="Lung Brush,BAL",
+  make_option("--status-contralateral-sites", type="character", default="Bronchial Brush,BAL",
               help="Comma-separated type_group values where contralateral exclusion applies [default: %default]"),
   make_option("--contralateral-col", type="character", default="lung_status",
               help="Metadata column identifying contralateral samples [default: %default]"),
@@ -56,8 +56,8 @@ option_list <- list(
               help="Value in contralateral column marking contralateral samples [default: %default]"),
   make_option("--cancer-label", type="character", default="Cancer",
               help="Label in status column for cancer samples [default: %default]"),
-  make_option("--lung-brush-label", type="character", default="Lung Brush",
-              help="Value in type_group identifying Lung Brush samples [default: %default]"),
+  make_option("--lung-brush-label", type="character", default="Bronchial Brush",
+              help="Value in type_group identifying Bronchial Brush samples [default: %default]"),
   make_option("--sample-sizes", type="character", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100",
               help="Fallback sample sizes if cancer/stype grids are not provided [default: %default]"),
   make_option("--sample-sizes-cancer", type="character", default="",
@@ -111,7 +111,7 @@ if (is.null(args$`sample-sizes-stype`)) args$`sample-sizes-stype` <- ""
 if (is.null(args$scenarios)) args$scenarios <- "observed,null"
 if (is.null(args$`group-cols`)) args$`group-cols` <- "status,type_group"
 if (is.null(args$`status-sites`)) args$`status-sites` <- ""
-if (is.null(args$`status-contralateral-sites`)) args$`status-contralateral-sites` <- "Lung Brush,BAL"
+if (is.null(args$`status-contralateral-sites`)) args$`status-contralateral-sites` <- "Bronchial Brush,BAL"
 
 if (!(args$transform %in% c("none", "rclr"))) {
   stop("--transform must be one of: none, rclr")
@@ -160,7 +160,7 @@ if (isTRUE(args$`status-extra-no-contralateral`) && ("status" %in% group_cols_ve
     warning(
       "Optional column '", args$`contralateral-col`, "' not found and cannot derive from ",
       args$`cancer-site-col`, "/", args$`lung-side-col`,
-      "; Lung Brush no-contralateral power filter will be skipped."
+      "; Bronchial Brush no-contralateral power filter will be skipped."
     )
   }
 }
@@ -564,7 +564,7 @@ aggregate_to_patient_level <- function(counts, patient_ids) {
 #' Bootstrap patients for within-patient designs (preserves sample-level labels)
 #'
 #' Samples patients with replacement and keeps their original per-sample grouping
-#' labels (e.g., BAL/Lung Brush/Oral Rinse) intact.
+#' labels (e.g., BAL/Bronchial Brush/Oral Rinse) intact.
 #' Optionally generates a true null by shuffling labels within each bootstrap patient.
 #'
 #' @param counts Sample × ASV count matrix
@@ -966,12 +966,12 @@ for (gcol in group_cols) {
         }
       }
 
-      # Optional: exclude contralateral samples from cancer patients in Lung Brush.
+      # Optional: exclude contralateral samples from cancer patients in Bronchial Brush.
       site_label_for_output <- site
       if (isTRUE(args$`status-extra-no-contralateral`) &&
           identical(as.character(site), as.character(args$`lung-brush-label`))) {
         if (!(effective_contralateral_col %in% colnames(meta_site))) {
-          warning("Skipping no-contralateral filter for Lung Brush status power: column '",
+          warning("Skipping no-contralateral filter for Bronchial Brush status power: column '",
                   effective_contralateral_col, "' not found.")
         } else {
           is_cancer <- as.character(meta_site[[gcol]]) == as.character(args$`cancer-label`)

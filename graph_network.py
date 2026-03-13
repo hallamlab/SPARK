@@ -205,10 +205,10 @@ def build_type_palette() -> Dict[str, str]:
         'Oral Rinse': '#6A3D9A',
         'BAL+Oral Rinse': '#F19CBB',
         'BAL': '#0072B2',
-        'BAL+Lung Brush': '#00FFFF',
-        'Lung Brush': '#009E73',
-        'Lung Brush+Oral Rinse': '#C1EAAD',
-        'BAL+Lung Brush+Oral Rinse': 'lightgray'
+        'BAL+Bronchial Brush': '#00FFFF',
+        'Bronchial Brush': '#009E73',
+        'Bronchial Brush+Oral Rinse': '#C1EAAD',
+        'BAL+Bronchial Brush+Oral Rinse': 'lightgray'
     }
 
 
@@ -220,11 +220,11 @@ def venn_type_map() -> Dict[str, str]:
     return {
         'Oral Rinse': 'Oral Rinse',
         'BAL': 'BAL',
-        'Lung Brush': 'Lung Brush',
+        'Bronchial Brush': 'Bronchial Brush',
         'Oral Rinse + BAL': 'BAL+Oral Rinse',
-        'Oral Rinse + Lung Brush': 'Lung Brush+Oral Rinse',
-        'BAL + Lung Brush': 'BAL+Lung Brush',
-        'Oral Rinse + BAL + Lung Brush': 'BAL+Lung Brush+Oral Rinse'
+        'Oral Rinse + Bronchial Brush': 'Bronchial Brush+Oral Rinse',
+        'BAL + Bronchial Brush': 'BAL+Bronchial Brush',
+        'Oral Rinse + BAL + Bronchial Brush': 'BAL+Bronchial Brush+Oral Rinse'
     }
 
 
@@ -938,9 +938,9 @@ def main():
     # maps from integer index to group labels:
     status_index = {1: 'Cancer', 2: 'Non-Cancer', 3: 'Cancer+Non-Cancer'}
     type_index = {
-        1: 'BAL', 2: 'Lung Brush', 3: 'Oral Rinse',
-        4: 'BAL+Lung Brush', 5: 'BAL+Oral Rinse', 6: 'Lung Brush+Oral Rinse',
-        7: 'BAL+Lung Brush+Oral Rinse'
+        1: 'BAL', 2: 'Bronchial Brush', 3: 'Oral Rinse',
+        4: 'BAL+Bronchial Brush', 5: 'BAL+Oral Rinse', 6: 'Bronchial Brush+Oral Rinse',
+        7: 'BAL+Bronchial Brush+Oral Rinse'
     }
     type_palette = build_type_palette()
     status_palette = build_status_palette()

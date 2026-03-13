@@ -39,7 +39,7 @@ sns.set_theme()
 sns.set_style("white")
 
 PALETTE_TYPES = {
-    "Lung Brush": "#009E73",
+    "Bronchial Brush": "#009E73",
     "BAL": "#0072B2",
     "Oral Rinse": "#6A3D9A",
 }
@@ -80,7 +80,7 @@ def canonical_pair_matrix(pair_df: pd.DataFrame, value_col: str) -> pd.DataFrame
     mat = m.pivot(index="group1", columns="group2", values=value_col)
     mat = mat.combine_first(mat.T)
 
-    order = [x for x in ["Oral Rinse", "BAL", "Lung Brush"] if x in mat.index or x in mat.columns]
+    order = [x for x in ["Oral Rinse", "BAL", "Bronchial Brush"] if x in mat.index or x in mat.columns]
     if order:
         mat = mat.reindex(index=order, columns=order)
     return mat
@@ -264,7 +264,7 @@ def plot_box_case_by_type(case_by_type_dist: pd.DataFrame, outdir: Path) -> None
     if not needed.issubset(set(d.columns)):
         return
     order = [x for x in ["Control-Control", "Cancer-Control", "Cancer-Cancer"] if x in d["group_pair"].unique()]
-    col_order = [x for x in ["Oral Rinse", "BAL", "Lung Brush"] if x in d["sample_type"].unique()]
+    col_order = [x for x in ["Oral Rinse", "BAL", "Bronchial Brush"] if x in d["sample_type"].unique()]
     if not col_order:
         col_order = sorted(d["sample_type"].dropna().unique())
     g = sns.catplot(

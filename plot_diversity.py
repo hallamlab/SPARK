@@ -24,7 +24,7 @@ python beta_alpha_analytics.py \
   --outliers-all  spark_combined_output/metadata/outliers_table.tsv \
   --outliers-type spark_combined_output/metadata/outliers_type_group.tsv \
   --exclude-types "Skin Brush,Scope Flush" \
-  --type-order "Oral Rinse,BAL,Lung Brush" \
+  --type-order "Oral Rinse,BAL,Bronchial Brush" \
   --outdir spark_combined_output/diversity
 
 # With mito
@@ -68,12 +68,12 @@ sns.set_style("white")
 PALETTE_TYPES = {
     'Scope Flush': '#E69F00',
     'Skin Brush':  '#CC79A7',
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
     'Failed-QC':   'lightgray',
 }
-PALETTE_THREE = {k: PALETTE_TYPES[k] for k in ('Lung Brush', 'BAL', 'Oral Rinse')}
+PALETTE_THREE = {k: PALETTE_TYPES[k] for k in ('Bronchial Brush', 'BAL', 'Oral Rinse')}
 PALETTE_STATUS = {'Non-Cancer': 'white', 'Cancer': '#A50026', 'methods': 'lightgray'}
 
 # -------------------------- utils --------------------------
@@ -315,7 +315,7 @@ def run_one_pass(name: str,
 
         # Faceted by status (boxed with alpha’d palette)
         if "status" in df.columns:
-            TYPE_ORDER = ["Oral Rinse", "BAL", "Lung Brush"]
+            TYPE_ORDER = ["Oral Rinse", "BAL", "Bronchial Brush"]
 
             g = sns.FacetGrid(
                 df,

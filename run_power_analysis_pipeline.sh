@@ -23,8 +23,9 @@ Usage:
     [--alpha 0.05] [--seed 42] \
     [--skip-estimate] [--skip-plot] \
     [--transform none|rclr] \
+    [--scenarios observed,null,weak,moderate,strong] \
     [--indicspecies-dir <main_analysis_output/indicspecies>] \
-    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Lung Brush,BAL"]
+    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Bronchial Brush,BAL"]
 USAGE
 }
 
@@ -45,9 +46,10 @@ SEED="42"
 SKIP_ESTIMATE="false"
 SKIP_PLOT="false"
 TRANSFORM="none"
+SCENARIOS=""
 INDICSPECIES_DIR=""
 EXCLUDE_CONTRALATERAL="true"
-CONTRALATERAL_SAMPLE_TYPES="Lung Brush,BAL"
+CONTRALATERAL_SAMPLE_TYPES="Bronchial Brush,BAL"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -68,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --skip-estimate) SKIP_ESTIMATE="true"; shift ;;
     --skip-plot) SKIP_PLOT="true"; shift ;;
     --transform) TRANSFORM="$2"; shift 2 ;;
+    --scenarios) SCENARIOS="$2"; shift 2 ;;
     --indicspecies-dir) INDICSPECIES_DIR="$2"; shift 2 ;;
     --keep-contralateral-in-cancer) EXCLUDE_CONTRALATERAL="false"; shift ;;
     --contralateral-sample-types) CONTRALATERAL_SAMPLE_TYPES="$2"; shift 2 ;;
@@ -109,21 +112,26 @@ if [[ "$SKIP_ESTIMATE" == "false" ]]; then
 fi
 
 log "Running power_analysis/power_main.py"
-python3 "$SCRIPT_DIR/power_analysis/power_main.py" \
-  --data-wide "$DATA_WIDE" \
-  --data-long "$DATA_LONG" \
-  --effect-sizes-dir "$EFFECT_DIR" \
-  --sample-sizes-cancer "$SAMPLE_SIZES_CANCER" \
-  --sample-sizes-stype "$SAMPLE_SIZES_STYPE" \
-  --n-control "$N_CONTROL" \
-  --n-simulations "$N_SIMULATIONS" \
-  --n-perm "$N_PERM" \
-  --alpha "$ALPHA" \
-  --seed "$SEED" \
-  --outdir "$RESULTS_DIR" \
-  --transform "$TRANSFORM" \
-  --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL" \
+POWER_CMD=(
+  python3 "$SCRIPT_DIR/power_analysis/power_main.py"
+  --data-wide "$DATA_WIDE"
+  --data-long "$DATA_LONG"
+  --effect-sizes-dir "$EFFECT_DIR"
+  --sample-sizes-cancer "$SAMPLE_SIZES_CANCER"
+  --sample-sizes-stype "$SAMPLE_SIZES_STYPE"
+  --n-simulations "$N_SIMULATIONS"
+  --n-perm "$N_PERM"
+  --alpha "$ALPHA"
+  --seed "$SEED"
+  --outdir "$RESULTS_DIR"
+  --transform "$TRANSFORM"
+  --exclude-contralateral-in-cancer "$EXCLUDE_CONTRALATERAL"
   --contralateral-sample-types "$CONTRALATERAL_SAMPLE_TYPES"
+)
+if [[ -n "$SCENARIOS" ]]; then
+  POWER_CMD+=(--scenarios "$SCENARIOS")
+fi
+"${POWER_CMD[@]}"
 
 if [[ "$SKIP_PLOT" == "false" ]]; then
   log "Plotting power curves"

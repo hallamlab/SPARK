@@ -36,7 +36,7 @@ sns.set_theme()
 sns.set_style("white")
 
 PALETTE_STATUS = {"Control": "#bdbdbd", "Cancer": "#A50026"}
-PALETTE_TYPES = {"BAL": "#0072B2", "Lung Brush": "#009E73", "Oral Rinse": "#6A3D9A"}
+PALETTE_TYPES = {"BAL": "#0072B2", "Bronchial Brush": "#009E73", "Oral Rinse": "#6A3D9A"}
 BOXPLOT_HEIGHT = 4.8
 AXIS_LABEL_SIZE = 10
 AXIS_TICK_SIZE = 9
@@ -249,7 +249,7 @@ def plot_cancer_boxplots(
             continue
         order = order_taxa_by_desc_median(d, chosen)
 
-        fig, ax = plt.subplots(figsize=(max(1.5, len(order) * 0.18), BOXPLOT_HEIGHT))
+        fig, ax = plt.subplots(figsize=(max(4.5, len(order) * 0.45), BOXPLOT_HEIGHT))
         sns.boxplot(
             data=d,
             x="taxon",
@@ -329,7 +329,7 @@ def plot_sample_type_three_group_boxplots(
         return
 
     # Keep only patients with all three sample types for clean paired comparability
-    needed_types = {"BAL", "Oral Rinse", "Lung Brush"}
+    needed_types = {"BAL", "Oral Rinse", "Bronchial Brush"}
     patient_types = d.groupby(patient_col)[type_col].apply(lambda x: set(x.dropna().unique()))
     keep_patients = patient_types[patient_types.apply(lambda s: needed_types.issubset(s))].index
     d = d[d[patient_col].isin(keep_patients)]
@@ -337,7 +337,7 @@ def plot_sample_type_three_group_boxplots(
         return
     order = order_taxa_by_desc_median(d, chosen)
 
-    hue_order = [x for x in ["BAL", "Oral Rinse", "Lung Brush"] if x in d[type_col].unique()]
+    hue_order = [x for x in ["BAL", "Oral Rinse", "Bronchial Brush"] if x in d[type_col].unique()]
     fig, ax = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
     sns.boxplot(
         data=d,
@@ -455,7 +455,7 @@ def plot_sample_type_three_group_boxplots_significant(
     if d.empty:
         return
 
-    needed_types = {"BAL", "Oral Rinse", "Lung Brush"}
+    needed_types = {"BAL", "Oral Rinse", "Bronchial Brush"}
     patient_types = d.groupby(patient_col)[type_col].apply(lambda x: set(x.dropna().unique()))
     keep_patients = patient_types[patient_types.apply(lambda s: needed_types.issubset(s))].index
     d = d[d[patient_col].isin(keep_patients)]
@@ -463,7 +463,7 @@ def plot_sample_type_three_group_boxplots_significant(
         return
     order = order_taxa_by_desc_median(d, chosen)
 
-    hue_order = [x for x in ["BAL", "Oral Rinse", "Lung Brush"] if x in d[type_col].unique()]
+    hue_order = [x for x in ["BAL", "Oral Rinse", "Bronchial Brush"] if x in d[type_col].unique()]
     fig, ax = plt.subplots(figsize=(max(9, len(order) * 0.85), BOXPLOT_HEIGHT))
     sns.boxplot(
         data=d,
@@ -577,7 +577,7 @@ def plot_cancer_boxplots_significant_panels(
     if not chosen:
         return
 
-    sample_types = [x for x in ["BAL", "Lung Brush", "Oral Rinse"] if x in sub["sample_type"].dropna().unique()]
+    sample_types = [x for x in ["BAL", "Bronchial Brush", "Oral Rinse"] if x in sub["sample_type"].dropna().unique()]
     if not sample_types:
         return
 
@@ -589,7 +589,7 @@ def plot_cancer_boxplots_significant_panels(
         if d.empty:
             continue
         order = order_taxa_by_desc_median(d, chosen)
-        fig, ax = plt.subplots(figsize=(max(1.5, len(order) * 0.18), BOXPLOT_HEIGHT))
+        fig, ax = plt.subplots(figsize=(max(4.5, len(order) * 0.45), BOXPLOT_HEIGHT))
 
         sns.boxplot(
             data=d,

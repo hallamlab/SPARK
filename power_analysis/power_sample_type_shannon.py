@@ -3,7 +3,7 @@
 power_sample_type_shannon.py
 
 Shannon diversity power analysis for sample type comparisons.
-Tests pairwise comparisons (BAL vs Lung Brush vs Oral Rinse) with FDR correction.
+Tests pairwise comparisons (BAL vs Bronchial Brush vs Oral Rinse) with FDR correction.
 """
 
 import argparse
@@ -158,7 +158,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patient-col", default="Participant_ID")
     parser.add_argument("--type-col", default="type_group")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--outdir", required=True)
     args = parser.parse_args()
 
