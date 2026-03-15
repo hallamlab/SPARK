@@ -774,7 +774,7 @@ def main():
     asv_strata.to_csv(outdir / 'asv_stratification.tsv', sep='\t', index=False)
     with open(outdir / 'spike_scenario_asvs.json', 'w') as f:
         json.dump(spike_scenarios, f, indent=2)
-    
+
     patient_shannon_df = pd.DataFrame([
         {'Patient_ID': p, 'Shannon': shannon, 'Case': patient_case_map.get(p, 'Unknown')}
         for p, shannon in patient_shannon.items()
