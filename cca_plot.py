@@ -488,28 +488,28 @@ status_palette = {'Non-Cancer':'white',
                   'Cancer+Non-Cancer': 'lightgray'
                   }
 type_index = {1: 'BAL',
-              2: 'Lung Brush',
+              2: 'Bronchial Brush',
               3: 'Oral Rinse',
-              4: 'BAL+Lung Brush',
+              4: 'BAL+Bronchial Brush',
               5: 'BAL+Oral Rinse',
-              6: 'Lung Brush+Oral Rinse',
-              7: 'BAL+Lung Brush+Oral Rinse'
+              6: 'Bronchial Brush+Oral Rinse',
+              7: 'BAL+Bronchial Brush+Oral Rinse'
               }
 type_palette = {'Oral Rinse': '#6A3D9A',
                 'BAL+Oral Rinse': '#F19CBB',
                 'BAL': '#0072B2',
-                'BAL+Lung Brush': '#00FFFF',
-                'Lung Brush': '#009E73',
-                'Lung Brush+Oral Rinse': '#C1EAAD',
-                'BAL+Lung Brush+Oral Rinse': 'lightgray'
+                'BAL+Bronchial Brush': '#00FFFF',
+                'Bronchial Brush': '#009E73',
+                'Bronchial Brush+Oral Rinse': '#C1EAAD',
+                'BAL+Bronchial Brush+Oral Rinse': 'lightgray'
                 }
 venn_type = {'Only Oral Rinse': 'Oral Rinse',
              'Only BAL': 'BAL',
-             'Only Lung Brush': 'Lung Brush',
+             'Only Bronchial Brush': 'Bronchial Brush',
              'Oral + BAL': 'BAL+Oral Rinse',
-             'Oral + Lung': 'Lung Brush+Oral Rinse',
-             'BAL + Lung': 'BAL+Lung Brush',
-             'All Three': 'BAL+Lung Brush+Oral Rinse'
+             'Oral + Lung': 'Bronchial Brush+Oral Rinse',
+             'BAL + Lung': 'BAL+Bronchial Brush',
+             'All Three': 'BAL+Bronchial Brush+Oral Rinse'
              }
 
 status_summary_file = os.path.join(data_dir, "vsearch_output/indicspecies/status_indicator_species_summary.tsv")

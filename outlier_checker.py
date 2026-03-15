@@ -1,101 +1,363 @@
-import pandas as pd
+#!/usr/bin/env python3
+"""
+asv_outliers_ensemble.py
+Ensemble outlier detection over ASV tables with CLR (optional), per-group training,
+and consensus voting across IsolationForest, OneClassSVM, and HDBSCAN.
+
+Quickstart (matches your current workflow):
+  python asv_outliers_ensemble.py \
+    --data-dir /home/ryan/SeqData/SeqData/UBC/LMP_priority1 \
+    --asv spark_combined_output/ASVs/ASV_final.micro.tsv \
+    --metadata spark_combined_output/metadata/metadata_updated.tsv \
+    --meta-index-col sample \
+    --group-cols none,type_group \
+    --output-dir spark_combined_output/metadata \
+    --transform clr --hdbscan-min-cluster-size 5 --svm-nu 0.1 \
+    --vote-threshold 3 --verbose
+
+Notes
+-----
+- By default the ASV file is assumed to be features (ASVs) in rows and samples in columns;
+  pass --asv-orientation samples_rows if yours is already samples x features.
+- For compositional data, `--transform clr` applies multiplicative replacement then CLR.
+- Grouping:
+    --group-cols can include 'none' (treat all samples together) and/or metadata column names.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+from typing import List, Optional, Tuple
+
 import numpy as np
+import pandas as pd
+
 from sklearn.ensemble import IsolationForest
 from sklearn.svm import OneClassSVM
 from sklearn.preprocessing import StandardScaler
+
 import hdbscan
 from hdbscan import approximate_predict
-import os
+
+# Optional compositional transforms (CLR)
 from skbio.stats.composition import clr, multiplicative_replacement
 
-def ensemble_outlier_detection(asv_table, sample_metadata, group_col):
-    results = []
-    if not group_col:
-        sample_metadata['no_group'] = True
-        group_col = 'no_group'
-    for group in sample_metadata[group_col].unique():
-        # Subset samples for this group
-        group_samples = list(sample_metadata[sample_metadata[group_col] == group].index)
-        spark_samples = list(sample_metadata[((sample_metadata[group_col] == group) &
-                                              (sample_metadata['kit'] == 'SPARK-ZYMO'))
-                                              ].index)
-        methods_samples = list(sample_metadata[((sample_metadata[group_col] == group) &
-                                                (sample_metadata['kit'] != 'SPARK-ZYMO'))
-                                                ].index)
-        train_samples = asv_table.loc[group_samples]
-        test_samples = asv_table.loc[group_samples]
-        #train_samples = asv_table.loc[spark_samples]
-        #test_samples = asv_table.loc[methods_samples]
-        
-        X_train = train_samples.values
-        X_test = test_samples.values
 
-        # Isolation Forest
-        iso = IsolationForest(contamination='auto', random_state=42)
-        iso_out = iso.fit(X_train)
-        iso_out = iso_out.predict(X_test)
+# -----------------------------
+# Helpers
+# -----------------------------
+def resolve_path(root: Optional[Path], rel_or_abs: str) -> Path:
+    p = Path(rel_or_abs)
+    return p if p.is_absolute() or root is None else (root / p)
 
-        # One-Class SVM
-        svm = OneClassSVM(kernel='rbf', gamma='scale', nu=0.1)
-        svm_out = svm.fit(X_train)
-        svm_out = svm_out.predict(X_test)
 
-        # HDBSCAN (fit on train, predict on test)
-        hdb = hdbscan.HDBSCAN(min_cluster_size=5, prediction_data=True)
-        hdb.fit(X_train)
-        hdb_out, strengths = approximate_predict(hdb, X_test)
-        hdb_out = np.where(hdb_out == -1, -1, 1)  # convert to -1 for outliers
+def load_metadata(path: Path, index_col: str) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t", header=0)
+    if index_col not in df.columns:
+        raise ValueError(f"--meta-index-col '{index_col}' not found in metadata columns: {df.columns.tolist()}")
+    df = df.drop_duplicates(subset=[index_col]).set_index(index_col)
+    return df
 
-        # Combine results
-        df = pd.DataFrame({
-            'sample': test_samples.index,  # assuming it's a DataFrame
-            'group': group,
-            'IsolationForest': iso_out,
-            'OneClassSVM': svm_out,
-            'HDBSCAN': hdb_out
-        }).set_index('sample')
 
-        # Consensus voting
-        df['outlier_votes'] = (df == -1).sum(axis=1)
-        df['is_outlier'] = df['outlier_votes'] == 3
+def load_asv_table(path: Path, orientation: str) -> pd.DataFrame:
+    """
+    Returns samples x features (rows=samples).
+    """
+    df = pd.read_csv(path, sep="\t", header=0, index_col=0)
+    if orientation == "features_rows":
+        df = df.T  # make rows=samples
+    elif orientation != "samples_rows":
+        raise ValueError("--asv-orientation must be 'features_rows' or 'samples_rows'")
+    # cast to numeric if needed
+    return df.apply(pd.to_numeric, errors="coerce").fillna(0)
 
-        results.append(df)
 
-    return pd.concat(results)
+def align_and_filter(asv: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    shared = asv.index.intersection(meta.index)
+    if len(shared) == 0:
+        raise ValueError("No overlapping samples between ASV table and metadata.")
+    asv = asv.loc[shared]
+    # drop all-zero features and all-zero samples
+    asv = asv.loc[(asv != 0).any(axis=1), (asv != 0).any(axis=0)]
+    # drop samples that became all-zero after feature drop
+    asv = asv.loc[(asv != 0).any(axis=1)]
+    return asv
 
-### MAGIC VALUES ###    
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-output_dir = os.path.join(data_dir, "spark_combined_output/metadata")
-if output_dir and not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-    print(f"Created output directory: {output_dir}")
 
-metadata_table_path = os.path.join(data_dir, 'spark_combined_output/metadata/metadata_updated.tsv')
-metadata_df = pd.read_csv(metadata_table_path, header=0, sep='\t')
-metadata_df.set_index('sample', inplace=True)
-metadata_df['status'] = ['Non-Cancer' if x == 'Control' else x for x in metadata_df['Case']]
+def apply_transform(asv_samples_x_features: pd.DataFrame, transform: str) -> pd.DataFrame:
+    if transform == "none":
+        return asv_samples_x_features.copy()
+    if transform == "clr":
+        # multiplicative replacement expects ndarray; works on samples x features
+        arr = multiplicative_replacement(asv_samples_x_features.values)
+        emb = clr(arr)
+        return pd.DataFrame(emb, index=asv_samples_x_features.index, columns=asv_samples_x_features.columns)
+    raise ValueError("--transform must be 'none' or 'clr'")
 
-asv_path = os.path.join(data_dir, 'spark_combined_output/ASVs/ASV_final.micro.tsv')
-asv_df = pd.read_csv(asv_path, header=0, sep='\t', index_col=0).T
 
-# Subset and align both tables
-shared_samples = asv_df.index.intersection(metadata_df.index)
-asv_table = asv_df.loc[shared_samples]
-asv_table = asv_table.loc[:, (asv_table != 0).any(axis=0)]
-asv_table_nonzero = asv_table[(asv_table != 0).any(axis=1)]
-shared_samples = asv_table_nonzero.index.intersection(metadata_df.index)
+def maybe_scale(train: np.ndarray, test: np.ndarray, do_scale: bool) -> Tuple[np.ndarray, np.ndarray]:
+    if not do_scale:
+        return train, test
+    scaler = StandardScaler(with_mean=True, with_std=True)
+    train_s = scaler.fit_transform(train)
+    test_s = scaler.transform(test)
+    return train_s, test_s
 
-# Add pseudocounts via multiplicative replacement
-asv_array = multiplicative_replacement(asv_table_nonzero.values)
-# Apply centered log-ratio
-clr_transformed = clr(asv_array)
-# Optional: convert back to DataFrame
-clr_df = pd.DataFrame(clr_transformed, index=asv_table_nonzero.index, columns=asv_table_nonzero.columns)
 
-sample_metadata = metadata_df.loc[shared_samples]
+def fit_predict_group(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    samples_test: List[str],
+    use_iso: bool,
+    use_svm: bool,
+    use_hdb: bool,
+    iso_kwargs: dict,
+    svm_kwargs: dict,
+    hdb_kwargs: dict,
+) -> pd.DataFrame:
+    cols = []
+    preds = {}
 
-outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col=None).reset_index()
-outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_table.tsv'), sep='\t', index=False)
+    if use_iso:
+        iso = IsolationForest(**iso_kwargs)
+        iso.fit(X_train)
+        preds["IsolationForest"] = iso.predict(X_test)  # 1 inliers, -1 outliers
+        cols.append("IsolationForest")
 
-outliers_df = ensemble_outlier_detection(clr_df, sample_metadata, group_col='type_group').reset_index()
-outliers_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/outliers_type_group.tsv'), sep='\t', index=False)
+    if use_svm:
+        svm = OneClassSVM(**svm_kwargs)
+        svm.fit(X_train)
+        preds["OneClassSVM"] = svm.predict(X_test)  # 1 / -1
+        cols.append("OneClassSVM")
+
+    if use_hdb:
+        # Train HDBSCAN; predict for test via approximate_predict
+        # If fit fails due to insufficient points, mark all as inliers
+        try:
+            hdb = hdbscan.HDBSCAN(prediction_data=True, **hdb_kwargs)
+            hdb.fit(X_train)
+            labels, strengths = approximate_predict(hdb, X_test)
+            preds["HDBSCAN"] = np.where(labels == -1, -1, 1)
+            preds["HDBSCAN_strength"] = strengths
+            cols.append("HDBSCAN")
+        except Exception:
+            # Fall back: mark as inliers
+            preds["HDBSCAN"] = np.ones(len(samples_test), dtype=int)
+            preds["HDBSCAN_strength"] = np.zeros(len(samples_test), dtype=float)
+            cols.append("HDBSCAN")
+
+    df = pd.DataFrame({"sample": samples_test})
+    for k, v in preds.items():
+        df[k] = v
+    # consensus on only the binary predictors
+    bin_cols = [c for c in ["IsolationForest", "OneClassSVM", "HDBSCAN"] if c in df.columns]
+    df["outlier_votes"] = (df[bin_cols] == -1).sum(axis=1)
+    return df.set_index("sample")
+
+
+def run_for_group(
+    group_name: str,
+    asv_df: pd.DataFrame,      # transformed samples x features (only group samples will be taken)
+    meta_df: pd.DataFrame,     # metadata indexed by sample
+    scale: bool,
+    model_flags: Tuple[bool, bool, bool],
+    iso_kwargs: dict,
+    svm_kwargs: dict,
+    hdb_kwargs: dict,
+    vote_threshold: int,
+) -> pd.DataFrame:
+    # select group samples
+    group_samples = list(meta_df.index)
+    if len(group_samples) < 2:
+        # not enough to train; mark all as inliers with 0 votes
+        base = pd.DataFrame(index=group_samples)
+        base["group"] = group_name
+        for c in ["IsolationForest", "OneClassSVM", "HDBSCAN"]:
+            base[c] = 1
+        base["outlier_votes"] = 0
+        base["is_outlier"] = False
+        return base
+
+    train_samples = [a for a in asv_df.index if a in group_samples]
+    test_samples = [a for a in asv_df.index if a in group_samples]
+
+    X_train = asv_df.loc[train_samples].values
+    X_test = asv_df.loc[test_samples].values
+
+    X_train, X_test = maybe_scale(X_train, X_test, scale)
+
+    use_iso, use_svm, use_hdb = model_flags
+    preds = fit_predict_group(
+        X_train, X_test, test_samples,
+        use_iso, use_svm, use_hdb,
+        iso_kwargs, svm_kwargs, hdb_kwargs
+    )
+    preds["group"] = group_name
+    preds["is_outlier"] = preds["outlier_votes"] >= vote_threshold
+    return preds
+
+
+# -----------------------------
+# CLI
+# -----------------------------
+def get_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Ensemble outlier detection over ASV tables with optional CLR and per-group training.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    io = p.add_argument_group("I/O")
+    io.add_argument("--data-dir", type=Path, required=True, help="Project root to resolve relative paths")
+    io.add_argument("--asv", type=str, required=True, help="Path to ASV table (TSV). Default orientation: features in rows.")
+    io.add_argument("--metadata", type=str, required=True, help="Path to metadata TSV")
+    io.add_argument("--meta-index-col", default="sample", help="Column in metadata to use as index (sample ID)")
+    io.add_argument("--output-dir", type=str, required=True, help="Directory to write outputs")
+
+    fmt = p.add_argument_group("Data formatting")
+    fmt.add_argument("--asv-orientation", choices=["features_rows", "samples_rows"], default="features_rows",
+                     help="How the ASV file is laid out on disk")
+    fmt.add_argument("--transform", choices=["none", "clr"], default="clr", help="Feature transform before modeling")
+    fmt.add_argument("--scale", action="store_true", help="Z-score features (fit on train, apply to test)")
+
+    grp = p.add_argument_group("Grouping & training")
+    grp.add_argument("--group-cols", default="none",
+                     help="Comma-sep list of grouping columns from metadata; include 'none' to pool all samples")
+
+    mdl = p.add_argument_group("Models & voting")
+    mdl.add_argument("--use-iso", action="store_true", help="Include IsolationForest")
+    mdl.add_argument("--use-svm", action="store_true", help="Include OneClassSVM")
+    mdl.add_argument("--use-hdb", action="store_true", help="Include HDBSCAN")
+    mdl.add_argument("--vote-threshold", type=int, default=3, help="Votes ≥ threshold => outlier")
+
+    iso = p.add_argument_group("IsolationForest")
+    iso.add_argument("--iso-contamination", default="auto", help="Contamination for IsolationForest (e.g. 0.05 or 'auto')")
+    iso.add_argument("--iso-estimators", type=int, default=100, help="Number of trees")
+    iso.add_argument("--iso-random-state", type=int, default=42, help="Random state")
+
+    svm = p.add_argument_group("OneClassSVM")
+    svm.add_argument("--svm-kernel", default="rbf", help="Kernel")
+    svm.add_argument("--svm-gamma", default="scale", help="Gamma")
+    svm.add_argument("--svm-nu", type=float, default=0.1, help="Nu parameter (upper bound on outlier fraction)")
+
+    hdb = p.add_argument_group("HDBSCAN")
+    hdb.add_argument("--hdbscan-min-cluster-size", type=int, default=5, help="HDBSCAN min_cluster_size")
+    hdb.add_argument("--hdbscan-min-samples", type=int, default=None, help="HDBSCAN min_samples (optional)")
+    hdb.add_argument("--hdbscan-metric", default="euclidean", help="Distance metric")
+
+    misc = p.add_argument_group("Misc")
+    misc.add_argument("--verbose", action="store_true", help="Verbose logs")
+
+    return p
+
+
+def main():
+    args = get_parser().parse_args()
+
+    root = args.data_dir
+    out_dir = resolve_path(root, args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # defaults: if no model flags given, enable all three
+    if not (args.use_iso or args.use_svm or args.use_hdb):
+        args.use_iso = args.use_svm = args.use_hdb = True
+
+    # load data
+    meta = load_metadata(resolve_path(root, args.metadata), args.meta_index_col)
+    asv = load_asv_table(resolve_path(root, args.asv), args.asv_orientation)
+    asv = align_and_filter(asv, meta)
+
+    if args.verbose:
+        print(f"[i] ASV matrix (samples x features) after filtering: {asv.shape}")
+        print(f"[i] Metadata rows (unique samples): {meta.shape[0]}")
+
+    # transform & (optionally) scale later per train/test
+    feat = apply_transform(asv, args.transform)
+
+    # group list
+    group_cols = [g.strip() for g in args.group_cols.split(",") if g.strip()]
+    outputs = []
+
+    # model kwargs
+    iso_kwargs = dict(
+        contamination=args.iso_contamination,
+        n_estimators=args.iso_estimators,
+        random_state=args.iso_random_state,
+        n_jobs=-1,
+    )
+    svm_kwargs = dict(kernel=args.svm_kernel, gamma=args.svm_gamma, nu=args.svm_nu)
+    hdb_kwargs = dict(min_cluster_size=args.hdbscan_min_cluster_size, metric=args.hdbscan_metric)
+    if args.hdbscan_min_samples is not None:
+        hdb_kwargs["min_samples"] = args.hdbscan_min_samples
+
+    for gcol in group_cols:
+        if gcol.lower() == "none":
+            # treat all samples as a single group
+            preds = run_for_group(
+                group_name="all",
+                asv_df=feat,
+                meta_df=meta,  # all rows
+                scale=args.scale,
+                model_flags=(args.use_iso, args.use_svm, args.use_hdb),
+                iso_kwargs=iso_kwargs,
+                svm_kwargs=svm_kwargs,
+                hdb_kwargs=hdb_kwargs,
+                vote_threshold=args.vote_threshold,
+            )
+            preds["group_col"] = "none"
+        else:
+            if gcol not in meta.columns:
+                raise ValueError(f"Grouping column '{gcol}' not found in metadata.")
+            # process each level separately, then concat
+            per_levels = []
+            for level, sub_meta in meta.groupby(gcol):
+                sub_feat = feat.loc[sub_meta.index.intersection(feat.index)]
+                if sub_feat.shape[0] < 2:
+                    continue
+                pred = run_for_group(
+                    group_name=str(level),
+                    asv_df=sub_feat,
+                    meta_df=sub_meta,
+                    scale=args.scale,
+                    model_flags=(args.use_iso, args.use_svm, args.use_hdb),
+                    iso_kwargs=iso_kwargs,
+                    svm_kwargs=svm_kwargs,
+                    hdb_kwargs=hdb_kwargs,
+                    vote_threshold=args.vote_threshold,
+                )
+                per_levels.append(pred)
+            if not per_levels:
+                if args.verbose:
+                    print(f"[!] No usable groups for '{gcol}'")
+                continue
+            preds = pd.concat(per_levels).sort_index()
+            preds["group_col"] = gcol
+
+        preds = preds.sort_index()
+        outputs.append((gcol, preds))
+
+        # write per-group-col file
+        tag = "all" if gcol.lower() == "none" else gcol
+        out_path = out_dir / f"outliers_{tag}.tsv"
+        preds.reset_index().rename(columns={"index": "sample"}).to_csv(out_path, sep="\t", index=False)
+        if args.verbose:
+            n_out = int(preds["is_outlier"].sum())
+            print(f"[✓] Wrote {out_path}  (outliers={n_out}, n={len(preds)})")
+    
+    # convenience: also write a combined file if >1 grouping requested
+    if len(outputs) > 1:
+        combo = []
+        for gcol, df in outputs:
+            tag = "all" if gcol.lower() == "none" else gcol
+            tmp = df.copy()
+            tmp["grouping"] = tag
+            combo.append(tmp)
+        combo = pd.concat(combo).reset_index().rename(columns={"index": "sample"})
+        combo.to_csv(out_dir / "outliers_all_groupings.tsv", sep="\t", index=False)
+        if args.verbose:
+            print(f"[✓] Wrote {out_dir / 'outliers_all_groupings.tsv'}")
+
+
+if __name__ == "__main__":
+    main()

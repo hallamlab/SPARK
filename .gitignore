@@ -2,3 +2,30 @@
 .Rhistory
 .RData
 .Ruserdata
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.controller_env/
+.venv/
+venv/
+env/
+.env
+.env.*
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Nextflow
+.nextflow/
+.nextflow.log*
+work/
+
+# Editor
+.vscode/

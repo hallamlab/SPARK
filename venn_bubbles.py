@@ -1,172 +1,205 @@
-import pandas as pd
-import numpy as np
-import sys
-import umap
+#!/usr/bin/env python3
+"""
+bubble_from_venn.py
+Build per-intersection genus-level bubble plots from ASV presence tables.
+
+Inputs
+------
+- ASV_meta.tsv: long table with columns including:
+  ASV_ID, type_group, Family, Genus, corr_count (or count)
+- Venn presence table(s): rows: grouping, ASV_ID
+  e.g. Three_types_venn_presence_table.tsv
+
+Outputs
+-------
+- One bubble plot per intersection label (SVG/PDF/PNG as requested)
+- Combined tidy TSV with all plotted rows per mode:
+  <out-prefix>_presence_tax.tsv
+"""
+
 import os
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
-from matplotlib.ticker import FuncFormatter
-from matplotlib.colors import PowerNorm
-from matplotlib import gridspec
-from matplotlib import font_manager as fm, rcParams
-from matplotlib.patches import Patch
+from pathlib import Path
+import argparse
+import numpy as np
+import pandas as pd
 import matplotlib as mpl
+import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import ttest_ind
-from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
-from itertools import combinations
-from statsmodels.stats.multitest import multipletests
-from statannotations.Annotator import Annotator
-import math
-from itertools import cycle
-import colorsys
 
-
-# Global settings — at the top of script or notebook cell
-mpl.rcParams['pdf.fonttype'] = 42   # Keep text as text in PDF
-mpl.rcParams['svg.fonttype'] = 'none'  # Keep text as text in SVG
-plt.rcParams.update({'font.size': 12})  # Set your desired size
-mpl.rcParams['savefig.dpi'] = 600   # Optional — affects raster fallback
-pd.set_option('display.max_columns', None)
-# Set font globally
-plt.rcParams['font.family'] = 'Source Sans Pro'
-sns.set_theme()  # re-applies style with updated rcParams
+# ---------- Global style ----------
+mpl.rcParams['pdf.fonttype'] = 42        # keep text as text
+mpl.rcParams['svg.fonttype'] = 'none'    # keep text as text
+mpl.rcParams['savefig.dpi'] = 600
+plt.rcParams.update({'font.size': 12, 'font.family': 'Source Sans Pro'})
+sns.set_theme()
 sns.set_style("white")
 
 
-### MAGIC VALUES ###    
-data_dir = '/home/ryan/SeqData/SeqData/UBC/LMP_priority1/'
-sub_dir = "spark_old_output"
-###  END  MAGIC  ###
+# ---------- Palettes (defaults match your originals) ----------
+TYPE_PALETTE_DEFAULT = {
+    'Scope Flush': '#E69F00',
+    'Skin Brush':  '#CC79A7',
+    'Bronchial Brush':  '#009E73',
+    'BAL':         '#0072B2',
+    'Oral Rinse':  '#6A3D9A',
+    'Failed-QC':   'lightgray',
+}
+THREE_PALETTE_DEFAULT = {
+    'Bronchial Brush':  '#009E73',
+    'BAL':         '#0072B2',
+    'Oral Rinse':  '#6A3D9A',
+}
+
+# ---------- Helpers ----------
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+def safe_name(x: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in str(x))
+
+def load_asv_meta(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t")
+    # prefer corrected counts when available
+    if 'corr_count' not in df.columns and 'count' in df.columns:
+        df['corr_count'] = df['count']
+    if 'Family' not in df.columns:
+        df['Family'] = 'Unassigned'
+    if 'Genus' not in df.columns:
+        df['Genus'] = 'Unassigned'
+    return df
+
+def load_presence_table(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t")
+    if not {'grouping','ASV_ID'}.issubset(df.columns):
+        raise ValueError(f"Presence table {path} must contain columns: grouping, ASV_ID")
+    return df
+
+def fam_genus_col(fam, gen):
+    f = 'Unassigned' if pd.isna(fam) or fam == '' else str(fam)
+    g = 'Unassigned' if pd.isna(gen) or gen == '' else str(gen)
+    return f"{f} {g}"
+
+def bubble_each_intersection(pres_df: pd.DataFrame,
+                             asv_meta_df: pd.DataFrame,
+                             group_col: str,
+                             order: list[str],
+                             palette: dict[str, str],
+                             out_dir: Path,
+                             out_prefix: str,
+                             formats: list[str]) -> pd.DataFrame:
+    """
+    For each 'grouping' in presence table, aggregate genus-level counts by group_col
+    and draw a bubble plot.
+    Returns a concatenated tidy DataFrame of all plotted rows.
+    """
+    plotted = []
+    present_groups = set(asv_meta_df.get(group_col, pd.Series([], dtype=str)).dropna().unique())
+    # restrict order/palette to what’s actually present (avoid seaborn warnings)
+    order_eff  = [g for g in order if g in present_groups]
+    pal_eff    = {g: palette[g] for g in order_eff if g in palette}
+
+    for vgrp in pres_df['grouping'].dropna().unique():
+        v_asvs = pres_df.loc[pres_df['grouping'] == vgrp, 'ASV_ID'].astype(str).tolist()
+        sub = asv_meta_df[asv_meta_df['ASV_ID'].astype(str).isin(v_asvs)].copy()
+        if sub.empty:
+            # nothing to plot for this label
+            continue
+
+        agg = (sub.groupby([group_col, 'Family', 'Genus'], dropna=False)['corr_count']
+                   .sum()
+                   .reset_index())
+        agg[group_col] = pd.Categorical(agg[group_col], categories=order_eff, ordered=True)
+        agg['Family Genus'] = [fam_genus_col(f, g) for f, g in zip(agg['Family'], agg['Genus'])]
+        # zero-sized bubbles are invisible; set to NaN so sizes range behaves
+        agg['corr_count'] = agg['corr_count'].replace(0, np.nan)
+
+        # keep a tidy copy for export
+        tidy = agg.rename(columns={'corr_count': 'size'}).assign(grouping=vgrp)
+        plotted.append(tidy)
+
+        # figure height scales with distinct taxa (with sane bounds)
+        n_taxa = agg['Family Genus'].nunique()
+        fig_h  = max(4, min(0.4 * n_taxa, 15))
+
+        fig, ax = plt.subplots(figsize=(12, fig_h), constrained_layout=True)
+        sns.scatterplot(
+            data=agg,
+            x=group_col,
+            y='Family Genus',
+            hue=group_col,
+            hue_order=order_eff,
+            palette=pal_eff,
+            size='corr_count',
+            sizes=(8, 500),
+            alpha=0.75,
+            ax=ax
+        )
+        sns.despine(top=True, right=True)
+        ax.margins(y=0.2)
+        ax.legend(title=('Sample Type' if group_col == 'type_group' else group_col),
+                  bbox_to_anchor=(1.01, 1), loc='upper left', borderaxespad=0, frameon=False)
+        plt.xticks(rotation=45)
+
+        base = out_dir / f"{out_prefix}_{safe_name(vgrp)}_Genus_bubbleplot"
+        for ext in formats:
+            fig.savefig(f"{base}.{ext}", bbox_inches="tight")
+        plt.close(fig)
+
+    return pd.concat(plotted, ignore_index=True) if plotted else pd.DataFrame()
 
 
-
-# Load ASV metadata
-metastat_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/metadata/master_table.tsv'), sep='\t')
-asv_meta_df = pd.read_csv(os.path.join(data_dir, 'spark_combined_output/metadata/ASV_meta.tsv'), sep='\t', header=0)
-# Load venn diagram data
-venn_df = pd.read_csv(os.path.join(data_dir, "spark_combined_output/metadata/Three_types_venn_presence_table.tsv"), sep="\t", header=0)
-#venn_kit_df = pd.read_csv(os.path.join(data_dir, "spark_combined_output/metadata/venn3_presence_table_kit.tsv"), sep="\t", header=0)
-all_type_palette = {'Scope Flush': '#E69F00',
-           'Skin Brush': '#CC79A7',
-           'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A',
-           'Failed-QC': 'lightgray'
-           }
-
-three_palette = {'Lung Brush': '#009E73',
-           'BAL': '#0072B2',
-           'Oral Rinse': '#6A3D9A'
-           }
-
-kit_pallete = {'HostZERO-DEP': 'black',
-               'HostZERO-NODEP': 'gray',
-               'SPARK-ZYMO': 'skyblue',
-               }
-
-status_palette = {'Non-Cancer':'white',
-                  'Cancer':'#A50026',
-                  'methods':'lightgray'
-                  }
-                  
-# Bubbles for the Venn Groups
-sub_df = metastat_df.loc[metastat_df['pass_filter'] != 'Failed-QC']
-
-ordered_type = ['Oral Rinse', 'BAL', 'Lung Brush']
-venn_tax_dfs = []
-for vgrp in venn_df['grouping'].unique():
-    print(f"Processing Venn group: {vgrp}")
-    vgrp_str = vgrp.replace(' ', '_')
-    v_asvs = venn_df.loc[venn_df['grouping'] == vgrp]['ASV_ID'].tolist()
-    v_spp_df = asv_meta_df.loc[asv_meta_df['ASV_ID'].isin(v_asvs)
-                                   ].groupby(['type_group', 'Family', 'Genus'], dropna=False)['corr_count'].sum().reset_index(
-                                    )
-
-    v_spp_df['type_group'] = pd.Categorical(v_spp_df['type_group'], ordered_type)
-    v_spp_df['Family Genus'] = [f'{x} {y}' for x,y in 
-             zip(v_spp_df['Family'], v_spp_df['Genus'])
-             ]
-    v_spp_df.replace(0, np.nan, inplace=True)
-    venn_tax_dfs.append(v_spp_df)
-
-    num_rows = len(v_spp_df['Family Genus'].unique())
-    fig_height = max(4, min(0.4 * num_rows, 15))  # auto-scale with sane bounds
-    fig, ax = plt.subplots(figsize=(12, fig_height), constrained_layout=True)
-    sns.scatterplot(data=v_spp_df, x='type_group', y='Family Genus',
-                    size='corr_count', sizes=(5, 500), palette=all_type_palette,
-                    hue_order=ordered_type, hue='type_group', alpha=0.75
-                    )
-    sns.despine(top=True, right=True)
-
-    ax = plt.gca()
-    ax.margins(y=0.2)          # remove top/bottom padding
-    
-    # Move legend outside
-    ax.legend(
-        title='Sample Type',
-        bbox_to_anchor=(1.01, 1),
-        loc='upper left',
-        borderaxespad=0,
-        frameon=False
-    )
-    plt.xticks(rotation=45)
-
-    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot.svg'))
-    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot.pdf'))
-    plt.close()
-venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/Three_types_venn_presence_tax.tsv'), sep='\t')
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="Genus-level bubble plots from Venn presence tables.")
+    ap.add_argument("--data-dir", default="/home/ryan/SeqData/SeqData/UBC/LMP_priority1/",
+                    help="Project root directory")
+    ap.add_argument("--subdir", default="spark_combined_output",
+                    help="Output subdirectory root")
+    ap.add_argument("--asv-meta", default=None,
+                    help="Path to ASV_meta.tsv (default: <data-dir>/<subdir>/metadata/ASV_meta.tsv)")
+    ap.add_argument("--presence", default=None,
+                    help="Three-types presence TSV (default: metadata/Three_types_venn_presence_table.tsv)")
+    ap.add_argument("--type-order", default="Oral Rinse,BAL,Bronchial Brush",
+                    help="Comma list order for type_group axis")
+    ap.add_argument("--formats", default="svg,pdf",
+                    help="Comma-separated image formats (svg,pdf,png)")
+    return ap.parse_args()
 
 
+def main():
+    args = parse_args()
+    data_dir = Path(args.data_dir)
+    subdir   = args.subdir
+    meta_dir = data_dir / subdir / "metadata"
+    ensure_dir(meta_dir)
 
+    asv_meta_path = Path(args.asv_meta) if args.asv_meta else (meta_dir / "ASV_meta.tsv")
+    presence_path = Path(args.presence) if args.presence else (meta_dir / "Three_types_venn_presence_table.tsv")
+    formats = [f.strip().lstrip(".") for f in args.formats.split(",") if f.strip()]
+    type_order = [t.strip() for t in args.type_order.split(",") if t.strip()]
 
+    # Load ASV meta (single source for both modes)
+    asv_meta_df = load_asv_meta(asv_meta_path)
 
+    # ----- Three-types (by type_group) -----
+    if presence_path.exists():
+        pres_df = load_presence_table(presence_path)
+        out_prefix = "Three_types"
+        plotted_df = bubble_each_intersection(
+            pres_df, asv_meta_df,
+            group_col="type_group",
+            order=type_order,
+            palette=TYPE_PALETTE_DEFAULT,
+            out_dir=meta_dir,
+            out_prefix=out_prefix,
+            formats=formats
+        )
+        if not plotted_df.empty:
+            plotted_df.to_csv(meta_dir / f"{out_prefix}_presence_tax.tsv", sep="\t", index=False)
+            print(f"[OK] Wrote {out_prefix}_presence_tax.tsv and bubble plots")
+        else:
+            print("[WARN] No rows to plot for three-types presence table.")
+    else:
+        print(f"[WARN] Presence table not found: {presence_path}")
 
-
-flurp
-ordered_type = ['HostZERO-DEP', 'HostZERO-NODEP', 'SPARK-ZYMO']
-venn_tax_dfs = []
-for vgrp in venn_kit_df['grouping'].unique():
-    vgrp_str = vgrp.replace(' ', '_')
-    v_asvs = venn_kit_df.loc[venn_kit_df['grouping'] == vgrp]['ASV_ID'].tolist()
-    v_spp_df = asv_meta_df.loc[asv_meta_df['ASV_ID'].isin(v_asvs)
-                                   ].groupby(['kit', 'Family', 'Genus'])['corr_count'].sum().reset_index(
-                                    )
-    v_spp_df['kit'] = pd.Categorical(v_spp_df['kit'], ordered_type)
-    v_spp_df['Family Genus'] = [f'{x} {y}' for x,y in
-                                zip(v_spp_df['Family'], v_spp_df['Genus'])]
-    v_spp_df.replace(0, np.nan, inplace=True)
-    venn_tax_dfs.append(v_spp_df)
-
-    num_rows = len(v_spp_df['Family Genus'].unique())
-    fig_height = max(4, min(0.4 * num_rows, 15))  # auto-scale with sane bounds
-    fig, ax = plt.subplots(figsize=(12, fig_height), constrained_layout=True)
-    sns.scatterplot(data=v_spp_df, x='kit', y='Family Genus',
-                    size='corr_count', sizes=(5, 500), palette=kit_pallete,
-                    hue_order=ordered_type, hue='kit', alpha=0.75
-                    )
-    sns.despine(top=True, right=True)
-
-    ax = plt.gca()
-    ax.margins(y=0.2)          # remove top/bottom padding
-    
-    # Move legend outside
-    ax.legend(
-        title='Sample Type',
-        bbox_to_anchor=(1.01, 1),
-        loc='upper left',
-        borderaxespad=0,
-        frameon=False
-    )
-    plt.xticks(rotation=45)
-
-    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.svg'))
-    plt.savefig(os.path.join(data_dir, f'spark_combined_output/metadata/{vgrp_str}_Genus_bubbleplot_kit.pdf'))
-    plt.close()
-venn_tax_df = pd.concat(venn_tax_dfs)
-venn_tax_df.to_csv(os.path.join(data_dir, 'spark_combined_output/metadata/venn3_presence_table_kit_tax.tsv'), sep='\t')
-
-
-
-
+if __name__ == "__main__":
+    main()
