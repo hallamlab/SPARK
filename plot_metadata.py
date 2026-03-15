@@ -10,11 +10,11 @@ Quickstart (mirrors your current layout):
     --sub-dir spark_combined_output \
     --metadata ref_db/spark_metadata.tsv \
     --meta-sample-col sample \
-    --keep-types "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
+    --keep-types "Skin Brush,Scope Flush,Oral Rinse,BAL,Bronchial Brush" \
     --fastq-stats stats/fastq_stats.tsv --fastq-id-suffix-underscores 4 \
     --asv-micro ASVs/ASV_target.micro.tsv --asv-mito mito/ASVs/ASV_target.mito.tsv \
     --taxonomy taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv \
-    --type-palette "Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
+    --type-palette "Skin Brush:#CC79A7,Scope Flush:#E69F00,Bronchial Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray" \
     --status-palette "Non-Cancer:white,Cancer:#A50026,methods:lightgray" \
     --make-micro --make-mito
 
@@ -545,9 +545,9 @@ def get_parser() -> argparse.ArgumentParser:
     cols = p.add_argument_group("Columns / Groups")
     cols.add_argument("--meta-sample-col", default="sample", help="Sample column name in metadata")
     cols.add_argument("--type-col", default="type_group", help="Sample type column in metadata")
-    cols.add_argument("--keep-types", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush",
+    cols.add_argument("--keep-types", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Bronchial Brush",
                       help="Comma-separated list of types to keep (order honored)")
-    cols.add_argument("--violin-groups", default="Oral Rinse,BAL,Lung Brush", help="Order for violin plot groups")
+    cols.add_argument("--violin-groups", default="Oral Rinse,BAL,Bronchial Brush", help="Order for violin plot groups")
 
     reads = p.add_argument_group("Read Stats & ID Parsing")
     reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
@@ -563,7 +563,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     vis = p.add_argument_group("Palettes / Visual")
     vis.add_argument("--type-palette",
-                     default="Skin Brush:#CC79A7,Scope Flush:#E69F00,Lung Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
+                     default="Skin Brush:#CC79A7,Scope Flush:#E69F00,Bronchial Brush:#009E73,BAL:#0072B2,Oral Rinse:#6A3D9A,Failed-QC:lightgray",
                      help="Comma-separated 'Group:#HEX'")
     vis.add_argument("--status-palette",
                      default="Non-Cancer:white,Cancer:#A50026,methods:lightgray",

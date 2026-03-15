@@ -23,8 +23,8 @@ python asv_overlap.py \
 python asv_overlap.py \
   --data-dir /data/run1 \
   --domain both \
-  --five-groups "Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush" \
-  --three-groups "Oral Rinse,BAL,Lung Brush" \
+  --five-groups "Skin Brush,Scope Flush,Oral Rinse,BAL,Bronchial Brush" \
+  --three-groups "Oral Rinse,BAL,Bronchial Brush" \
   --formats png
 
 python asv_overlap.py --data-dir /data/run1 --domain micro
@@ -611,7 +611,7 @@ def run_domain(
 
     # ---------------- Composite Oral/Lung vs Skin vs Scope (raw) ------------
     if do_composite_oral_lung:
-        comp_map = {'Oral Rinse': 'Oral/Lung', 'BAL': 'Oral/Lung', 'Lung Brush': 'Oral/Lung'}
+        comp_map = {'Oral Rinse': 'Oral/Lung', 'BAL': 'Oral/Lung', 'Bronchial Brush': 'Oral/Lung'}
         comp_palette = {
             'Skin Brush': '#CC79A7',
             'Scope Flush': '#E69F00',
@@ -649,9 +649,9 @@ def parse_args() -> argparse.Namespace:
                     help="Optional path to taxonomy_updated.tsv (defaults to <subdir>/metadata/taxonomy_updated.tsv)")
     ap.add_argument("--formats", default="svg,pdf",
                     help="Comma-separated figure formats: e.g., svg,pdf,png")
-    ap.add_argument("--five-groups", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Lung Brush",
+    ap.add_argument("--five-groups", default="Skin Brush,Scope Flush,Oral Rinse,BAL,Bronchial Brush",
                     help="Comma list for the 5-group suite (raw ASVs)")
-    ap.add_argument("--three-groups", default="Oral Rinse,BAL,Lung Brush",
+    ap.add_argument("--three-groups", default="Oral Rinse,BAL,Bronchial Brush",
                     help="Comma list for the 3-group suite (final ASVs)")
     ap.add_argument("--do-composite-oral-lung", action="store_true",
                     help="Also make Skin vs Scope vs Oral/Lung composite (raw)")
@@ -678,12 +678,12 @@ def main() -> None:
         'Scope Flush': args.color_scope,
         'Oral Rinse': args.color_oral,
         'BAL': args.color_bal,
-        'Lung Brush': args.color_lung,
+        'Bronchial Brush': args.color_lung,
     }
     palette_3 = {
         'Oral Rinse': args.color_oral,
         'BAL': args.color_bal,
-        'Lung Brush': args.color_lung,
+        'Bronchial Brush': args.color_lung,
     }
 
     domains = ["micro", "mito"] if args.domain == "both" else [args.domain]

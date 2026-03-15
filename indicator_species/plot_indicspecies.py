@@ -25,8 +25,8 @@ python isa_plots_cli.py \
   --taxonomy      /.../metadata/taxonomy_updated.tsv \
   --outdir        /.../indicspecies \
   --p-thresh 0.05 --stat-thresh 0.0 \
-  --type-index "1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush" \
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000" \
+  --type-index "1=BAL,2=Bronchial Brush,3=Oral Rinse,4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,7=Oral Rinse+BAL+Bronchial Brush" \
+  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000" \
   --status-index "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer" \
   --status-palette "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"
 """
@@ -53,11 +53,14 @@ plt.rcParams['font.family'] = 'Source Sans Pro'
 sns.set_theme()
 sns.set_style("white")
 
+# Global significance alpha used for horizontal threshold lines in log-p plots.
+SIG_LINE_ALPHA = None
+
 
 # ------------------------------- Utilities ----------------------------------
 def parse_mapping(s: str) -> dict:
     """
-    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Lung Brush" into dict.
+    Parse "A=#fff,B:#123,C=steelblue" or "1=BAL,2=Bronchial Brush" into dict.
     Returns {} if s is falsy/empty.
     """
     if not s:
@@ -80,7 +83,7 @@ def parse_mapping(s: str) -> dict:
 
 def normalize_combo(label: str) -> str:
     """
-    Normalize combo strings like "BAL + Lung Brush" -> "BAL + Lung Brush"
+    Normalize combo strings like "BAL + Bronchial Brush" -> "BAL + Bronchial Brush"
     (trim spaces around '+', sort parts alphabetically for stable mapping).
     """
     if not isinstance(label, str):
@@ -131,6 +134,7 @@ def compute_sig_table(
     index_map: dict,
     palette: dict,
     p_col: str = "p.value",
+    q_col: str = "q.value",
     stat_col: str = "stat",
     idx_col: str = "index",
     p_thresh: float = 0.05,
@@ -148,6 +152,8 @@ def compute_sig_table(
     # coerce/validate key columns
     ensure_cols(df, [p_col, stat_col, idx_col], "indicspecies sign table")
     df[ p_col] = pd.to_numeric(df[p_col], errors="coerce")
+    if q_col in df.columns:
+        df[q_col] = pd.to_numeric(df[q_col], errors="coerce")
     df[stat_col] = pd.to_numeric(df[stat_col], errors="coerce")
     df[idx_col] = pd.to_numeric(df[idx_col], errors="coerce").astype("Int64")
 
@@ -156,15 +162,17 @@ def compute_sig_table(
     keep_cols = base_cols + [c for c in df.columns if c not in base_cols]
     df = df[keep_cols]
 
-    # compute -log10 p
+    # Use the same significance metric for plotting and indicator calls:
+    # prefer corrected q-values when available, otherwise fall back to p-values.
+    sig_metric = q_col if q_col in df.columns else p_col
     with np.errstate(divide="ignore", invalid="ignore"):
-        df[f"{prefix}_log_p"] = (-np.log10(df[p_col])).replace([np.inf, -np.inf], np.nan).round(3)
+        df[f"{prefix}_log_p"] = (-np.log10(df[sig_metric])).replace([np.inf, -np.inf], np.nan).round(3)
 
-    # significance
+    # significance thresholding
     if force_all_sig:
         df[f"{prefix}_significance"] = True
     else:
-        df[f"{prefix}_significance"] = (df[p_col] < p_thresh) & (df[stat_col] > stat_thresh)
+        df[f"{prefix}_significance"] = (df[sig_metric] < p_thresh) & (df[stat_col] > stat_thresh)
 
     # label from index_map
     def idx_to_label(x):
@@ -184,6 +192,7 @@ def compute_sig_table(
     # rename canonical columns for consistency
     df.rename(columns={
         p_col:  f"{prefix}_p_value",
+        q_col:  f"{prefix}_q_value",
         stat_col: f"{prefix}_stat",
         idx_col:  f"{prefix}_index"
     }, inplace=True)
@@ -524,6 +533,13 @@ def plot_p_vs_stat_no_overlap(
         )
         leg_ax.axis("off")
 
+    # Draw threshold lines behind points.
+    if SIG_LINE_ALPHA is not None and isinstance(SIG_LINE_ALPHA, (int, float)) and SIG_LINE_ALPHA > 0:
+        if y_col.endswith("_log_p"):
+            y_thr = -np.log10(SIG_LINE_ALPHA)
+            ax.axhline(y=y_thr, linestyle="--", linewidth=1.0, color="gray", alpha=0.8, zorder=0)
+    ax.axvline(x=0.25, linestyle="--", linewidth=1.0, color="gray", alpha=0.8, zorder=0)
+
     # Plot points
     sns.scatterplot(
         data=dd,
@@ -539,9 +555,18 @@ def plot_p_vs_stat_no_overlap(
         edgecolor="black",
         legend=False,
         ax=ax,
+        zorder=2,
     )
     ax.set_xlabel(pretty_axis_label(x_col))
-    ax.set_ylabel(pretty_axis_label(y_col))
+    if y_col.endswith("_log_p"):
+        prefix = y_col[: -len("_log_p")]
+        q_value_col = f"{prefix}_q_value"
+        if q_value_col in dd.columns and pd.to_numeric(dd[q_value_col], errors="coerce").notna().any():
+            ax.set_ylabel("-log10(q.value)")
+        else:
+            ax.set_ylabel("-log10(p.value)")
+    else:
+        ax.set_ylabel(pretty_axis_label(y_col))
     ax.set_xlim(xmin - 0.05, xmax + 0.05)
     ax.set_ylim(ymin - 0.05, ymax + 0.05)
     if invert_y:
@@ -679,6 +704,7 @@ def plot_p_vs_stat_no_overlap(
 
 # ------------------------------- Main ---------------------------------------
 def main():
+    global SIG_LINE_ALPHA
     ap = argparse.ArgumentParser(
         description="Refactored ISA plotting pipeline (indicspecies -> tidy tables + figures)."
     )
@@ -741,23 +767,23 @@ def main():
     ap.add_argument(
         "--type-label-allowlist",
         type=str,
-        default="Lung Brush,BAL+Lung Brush,Lung Brush+Oral Rinse,Oral Rinse+BAL+Lung Brush",
+        default="Bronchial Brush,BAL+Bronchial Brush,Bronchial Brush+Oral Rinse,BAL+Bronchial Brush+Oral Rinse",
         help="Comma-separated type labels allowed for thresholded type labels.",
     )
 
     # Index maps
     ap.add_argument("--type-index", type=str, required=True,
                     help='Mapping of indicspecies "index" to labels, e.g. '
-                         '"1=BAL,2=Lung Brush,3=Oral Rinse,4=BAL+Lung Brush,5=BAL+Oral Rinse,6=Lung Brush+Oral Rinse,7=Oral Rinse+BAL+Lung Brush"')
+                         '"1=BAL,2=Bronchial Brush,3=Oral Rinse,4=BAL+Bronchial Brush,5=BAL+Oral Rinse,6=Bronchial Brush+Oral Rinse,7=Oral Rinse+BAL+Bronchial Brush"')
     ap.add_argument("--status-index", type=str, required=True,
                     help='Mapping for status "index", e.g. "1=Cancer,2=Non-Cancer,3=Cancer+Non-Cancer"')
 
     # Palettes
     ap.add_argument("--type-palette", type=str, required=True,
                     help='Color map for type labels, e.g. '
-                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73,'
-                         'BAL+Oral Rinse=#F19CBB,BAL+Lung Brush=#00FFFF,'
-                         'Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000"')
+                         '"Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73,'
+                         'BAL+Oral Rinse=#F19CBB,BAL+Bronchial Brush=#00FFFF,'
+                         'Bronchial Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Bronchial Brush=#000000"')
     ap.add_argument("--status-palette", type=str, required=True,
                     help='Color map for status, e.g. "Cancer=#A50026,Non-Cancer=#FFFFFF,Cancer+Non-Cancer=#000000"')
     ap.add_argument("--status-markers", type=str, default="Cancer=X,Non-Cancer=D,Cancer+Non-Cancer=o",
@@ -857,13 +883,14 @@ def main():
     )
 
     args = ap.parse_args()
+    SIG_LINE_ALPHA = args.p_thresh
 
     # ---- Label locks (combined plots only; easy to find/adjust) ----
     LABEL_PVAL_CUTOFF = 100000000000000 #0.05
     LABEL_STAT_CUTOFF = 0 #0.25
     # Restrict type labels to specific groups (set to None to allow all types)
-    # Example: {"BAL", "Lung Brush"}
-    TYPE_LABEL_ALLOWLIST = {"Lung Brush", "BAL+Lung Brush", "Lung Brush+Oral Rinse", "BAL"}
+    # Example: {"BAL", "Bronchial Brush"}
+    TYPE_LABEL_ALLOWLIST = {"Bronchial Brush", "BAL+Bronchial Brush", "Bronchial Brush+Oral Rinse", "BAL"}
     # Force labels for these status groups in combined plots (set to None to disable)
     STATUS_LABEL_ALLOWLIST = {"Cancer", "Non-Cancer"}
 
@@ -929,6 +956,9 @@ def main():
 
     type_palette = parse_mapping(args.type_palette)
     status_palette = parse_mapping(args.status_palette)
+    # Ensure background class is always color-mapped for seaborn categorical plots.
+    type_palette.setdefault("not_indicator", "lightgray")
+    status_palette.setdefault("not_indicator", "lightgray")
     status_markers = parse_mapping(args.status_markers)
     type_label_allowlist = {
         item.strip() for item in args.type_label_allowlist.split(",") if item.strip()
@@ -943,7 +973,7 @@ def main():
         tdf, index_map=type_index_map, palette=type_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=True, prefix="type"
+        force_all_sig=False, prefix="type"
     )
     type_asv = type_sig["ASV_ID"].astype("object").fillna("").astype(str)
     type_sig_mask = (
@@ -992,7 +1022,7 @@ def main():
         sdf, index_map=status_index_map, palette=status_palette,
         p_col=args.p_col, stat_col=args.stat_col, idx_col=args.idx_col,
         p_thresh=args.p_thresh, stat_thresh=args.stat_thresh,
-        force_all_sig=True, prefix="status"
+        force_all_sig=False, prefix="status"
     )
     status_sig = merge_summary_metrics(status_sig, status_summary_df, prefix="status")
     status_overlay_thresh = args.status_overlay_q_thresh if has_status_q_values else args.status_overlay_p_thresh

@@ -24,9 +24,9 @@ python clustermaps_cli.py \
   --metadata /path/metadata/metadata_updated.tsv \
   --isa /path/indicspecies/Type_status_ISA_results.tsv \
   --outdir /path/diversity \
-  --type-order "Oral Rinse,BAL,Lung Brush" \
+  --type-order "Oral Rinse,BAL,Bronchial Brush" \
   --exclude-types "Skin Brush,Scope Flush" \
-  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73" \
+  --type-palette "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73" \
   --status-palette "Non-Cancer=#FFFFFF,Cancer=#A50026,methods=#D3D3D3" \
   --topN "Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000" \
   --isa-min-stat 0.6 \
@@ -302,12 +302,12 @@ def main():
                     help="Output directory for figures and pivot tables.")
 
     # Palettes & orders
-    ap.add_argument("--type-order", type=str, default="Oral Rinse,BAL,Lung Brush",
+    ap.add_argument("--type-order", type=str, default="Oral Rinse,BAL,Bronchial Brush",
                     help="Comma-separated ordering of type_group.")
     ap.add_argument("--exclude-types", type=str, default="Skin Brush,Scope Flush",
                     help="Comma-separated type_group values to exclude.")
     ap.add_argument("--type-palette", type=str, required=True,
-                    help='e.g. "Oral Rinse=#6A3D9A,BAL=#0072B2,Lung Brush=#009E73"')
+                    help='e.g. "Oral Rinse=#6A3D9A,BAL=#0072B2,Bronchial Brush=#009E73"')
     ap.add_argument("--status-palette", type=str, required=True,
                     help='e.g. "Non-Cancer=#FFFFFF,Cancer=#A50026,methods=#D3D3D3"')
     ap.add_argument("--kit-palette", type=str, default="",

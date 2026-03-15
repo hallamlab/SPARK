@@ -39,13 +39,13 @@ sns.set_style("white")
 TYPE_PALETTE_DEFAULT = {
     'Scope Flush': '#E69F00',
     'Skin Brush':  '#CC79A7',
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
     'Failed-QC':   'lightgray',
 }
 THREE_PALETTE_DEFAULT = {
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
 }
@@ -158,7 +158,7 @@ def parse_args() -> argparse.Namespace:
                     help="Path to ASV_meta.tsv (default: <data-dir>/<subdir>/metadata/ASV_meta.tsv)")
     ap.add_argument("--presence", default=None,
                     help="Three-types presence TSV (default: metadata/Three_types_venn_presence_table.tsv)")
-    ap.add_argument("--type-order", default="Oral Rinse,BAL,Lung Brush",
+    ap.add_argument("--type-order", default="Oral Rinse,BAL,Bronchial Brush",
                     help="Comma list order for type_group axis")
     ap.add_argument("--formats", default="svg,pdf",
                     help="Comma-separated image formats (svg,pdf,png)")

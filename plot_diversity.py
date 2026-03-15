@@ -6,7 +6,7 @@ precomputed distance matrices (Bray, Jaccard) + metadata. Optional "mito" pass.
 
 Outputs (under --outdir and --mito-outdir):
 - diversity/
-  - alpha_ttest.tsv
+  - alpha_wilcoxon.tsv
   - permanova_global.tsv
   - permanova_pairwise.tsv
   - Beta_Heatmap_permanova.(pdf|svg)
@@ -24,7 +24,7 @@ python beta_alpha_analytics.py \
   --outliers-all  spark_combined_output/metadata/outliers_table.tsv \
   --outliers-type spark_combined_output/metadata/outliers_type_group.tsv \
   --exclude-types "Skin Brush,Scope Flush" \
-  --type-order "Oral Rinse,BAL,Lung Brush" \
+  --type-order "Oral Rinse,BAL,Bronchial Brush" \
   --outdir spark_combined_output/diversity
 
 # With mito
@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
 import umap
 from skbio import DistanceMatrix
@@ -54,6 +55,8 @@ from itertools import combinations
 from statsmodels.stats.multitest import multipletests
 from statannotations.Annotator import Annotator
 import matplotlib.colors as mcolors
+from scipy.stats import wilcoxon
+from scipy.spatial.distance import pdist, squareform
 
 
 # -------------------------- style --------------------------
@@ -67,12 +70,12 @@ sns.set_style("white")
 PALETTE_TYPES = {
     'Scope Flush': '#E69F00',
     'Skin Brush':  '#CC79A7',
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
     'Failed-QC':   'lightgray',
 }
-PALETTE_THREE = {k: PALETTE_TYPES[k] for k in ('Lung Brush', 'BAL', 'Oral Rinse')}
+PALETTE_THREE = {k: PALETTE_TYPES[k] for k in ('Bronchial Brush', 'BAL', 'Oral Rinse')}
 PALETTE_STATUS = {'Non-Cancer': 'white', 'Cancer': '#A50026', 'methods': 'lightgray'}
 
 # -------------------------- utils --------------------------
@@ -85,6 +88,16 @@ def read_tsv(path: Path, index_col=None) -> pd.DataFrame:
     if not Path(path).exists():
         raise FileNotFoundError(path)
     return pd.read_csv(path, sep="\t", index_col=index_col)
+
+def read_count_table(path: Path | None) -> pd.DataFrame:
+    if path is None:
+        return pd.DataFrame()
+    df = pd.read_csv(path, sep="\t", low_memory=False)
+    if "ASV_ID" in df.columns:
+        df = df.set_index("ASV_ID")
+    else:
+        df = df.set_index(df.columns[0])
+    return df
 
 def perform_umap_precomputed(dist_df: pd.DataFrame,
                              n_neighbors: int = 30,
@@ -110,23 +123,146 @@ def safe_merge(left: pd.DataFrame, right: pd.DataFrame, on: str) -> pd.DataFrame
     cols = [c for c in right.columns if c != on]
     return left.merge(right[[on] + cols], how="left", on=on)
 
-def fdr_ttests_by_group(df: pd.DataFrame, group_col: str, value_col: str) -> pd.DataFrame:
+def patient_level_pairwise_wilcoxon(df: pd.DataFrame, patient_col: str, group_col: str, value_col: str) -> pd.DataFrame:
+    work = df[[patient_col, group_col, value_col]].dropna().copy()
+    patient_group = work.groupby([patient_col, group_col], as_index=False)[value_col].mean()
     res = []
-    groups = [g for g in df[group_col].dropna().unique()]
-    for a, b in combinations(groups, 2):
-        x = df.loc[df[group_col] == a, value_col].dropna()
-        y = df.loc[df[group_col] == b, value_col].dropna()
-        if len(x) < 2 or len(y) < 2:
+    for a, b in combinations([g for g in patient_group[group_col].dropna().unique()], 2):
+        wide = (
+            patient_group[patient_group[group_col].isin([a, b])]
+            .pivot(index=patient_col, columns=group_col, values=value_col)
+            .dropna(subset=[a, b])
+        )
+        if len(wide) < 3:
             continue
-        stat = float((x.mean() - y.mean()) / (np.sqrt(x.var(ddof=1)/len(x) + y.var(ddof=1)/len(y))))
-        # Use scipy t-test? Here we use numpy fallback to keep deps simple if desired:
-        from scipy.stats import ttest_ind
-        _, p = ttest_ind(x, y, equal_var=False)
-        res.append({"group1": a, "group2": b, "tstat": stat, "pval": p})
+        try:
+            stat, p = wilcoxon(
+                wide[a].values,
+                wide[b].values,
+                zero_method="wilcox",
+                correction=False,
+                alternative="two-sided",
+                mode="auto",
+            )
+        except ValueError:
+            stat, p = np.nan, np.nan
+        res.append(
+            {
+                "group1": a,
+                "group2": b,
+                "n_paired_patients": int(len(wide)),
+                "wilcoxon_w": float(stat) if not np.isnan(stat) else np.nan,
+                "pval": float(p) if not np.isnan(p) else np.nan,
+            }
+        )
     out = pd.DataFrame(res)
     if not out.empty:
-        out["qval"] = multipletests(out["pval"], method="fdr_bh")[1]
+        valid = out["pval"].notna()
+        out["qval"] = np.nan
+        out.loc[valid, "qval"] = multipletests(out.loc[valid, "pval"], method="fdr_bh")[1]
         out["significant"] = out["qval"] < 0.05
+    return out
+
+def aggregate_mean_relative(counts: pd.DataFrame, group_ids: pd.Series) -> pd.DataFrame:
+    sample_rel = counts.div(counts.sum(axis=1).replace(0, 1), axis=0)
+    tmp = sample_rel.copy()
+    tmp["_group"] = group_ids.values
+    return tmp.groupby("_group").mean()
+
+def permanova_r2(dist_matrix: np.ndarray, group_labels: np.ndarray) -> float:
+    n = dist_matrix.shape[0]
+    if n < 2:
+        return np.nan
+    H = np.eye(n) - np.ones((n, n)) / n
+    G = -0.5 * H @ (dist_matrix ** 2) @ H
+    ss_total = np.trace(G)
+    if ss_total <= 0:
+        return 0.0
+    ss_between = 0.0
+    for group in np.unique(group_labels):
+        mask = group_labels == group
+        n_g = mask.sum()
+        if n_g > 0:
+            ss_between += np.sum(G[np.ix_(mask, mask)]) / n_g
+    return ss_between / ss_total
+
+def permanova_stat(dist_matrix: np.ndarray, group_labels: np.ndarray) -> tuple[float, float]:
+    r2 = permanova_r2(dist_matrix, group_labels)
+    groups = np.unique(group_labels)
+    n = len(group_labels)
+    g = len(groups)
+    if g < 2 or n <= g:
+        return r2, np.nan
+    f = (r2 / (g - 1)) / ((1 - r2) / (n - g)) if r2 < 1 else np.inf
+    return r2, f
+
+def blocked_permanova(counts: pd.DataFrame, meta: pd.DataFrame, patient_col: str, group_col: str, permutations: int = 999) -> pd.DataFrame:
+    counts = counts.loc[meta["sample"]]
+    group_ids = meta[patient_col].astype(str) + "||" + meta[group_col].astype(str)
+    agg = aggregate_mean_relative(counts, group_ids)
+    agg_meta = (
+        meta.assign(_group=group_ids)
+        .drop_duplicates("_group")
+        .loc[:, ["_group", patient_col, group_col]]
+        .set_index("_group")
+        .loc[agg.index]
+    )
+    patient_counts = agg_meta.groupby(patient_col)[group_col].nunique()
+    keep_patients = patient_counts[patient_counts >= 2].index
+    agg_meta = agg_meta[agg_meta[patient_col].isin(keep_patients)].copy()
+    agg = agg.loc[agg_meta.index]
+    if agg.empty or agg_meta[group_col].nunique() < 2:
+        raise ValueError("Blocked PERMANOVA requires at least two sample types across patients with >= 2 observed types.")
+
+    dist_array = squareform(pdist(agg.values, metric="braycurtis"))
+    dist = DistanceMatrix(dist_array.copy(order="C"), ids=agg.index.tolist())
+    labels = agg_meta[group_col].astype(str).values
+    patients = agg_meta[patient_col].astype(str).values
+    obs_r2, obs_f = permanova_stat(dist.data, labels)
+
+    perm_stats = []
+    rng = np.random.default_rng(42)
+    for _ in range(permutations):
+        perm_labels = labels.copy()
+        for patient in np.unique(patients):
+            mask = patients == patient
+            perm_labels[mask] = rng.permutation(perm_labels[mask])
+        _, perm_f = permanova_stat(dist.data, perm_labels)
+        perm_stats.append(perm_f)
+
+    p = (1 + np.sum(np.array(perm_stats) >= obs_f)) / (permutations + 1)
+    return pd.DataFrame([{
+        "term": "sample_type_within_patient",
+        "test statistic": obs_f,
+        "p-value": p,
+        "R2": obs_r2,
+        "n_patient_type_profiles": int(len(labels)),
+        "n_patients": int(pd.Series(patients).nunique()),
+    }])
+
+def blocked_pairwise_permanova(counts: pd.DataFrame, meta: pd.DataFrame, patient_col: str, group_col: str, permutations: int = 999) -> pd.DataFrame:
+    rows = []
+    for a, b in combinations(sorted(meta[group_col].dropna().unique()), 2):
+        sub = meta[meta[group_col].isin([a, b])].copy()
+        patient_counts = sub.groupby(patient_col)[group_col].nunique()
+        keep_patients = patient_counts[patient_counts == 2].index
+        sub = sub[sub[patient_col].isin(keep_patients)].copy()
+        if sub.empty:
+            continue
+        res = blocked_permanova(counts, sub, patient_col, group_col, permutations)
+        if res.empty:
+            continue
+        rows.append({
+            "Group1": a,
+            "Group2": b,
+            "test statistic": float(res.loc[0, "test statistic"]),
+            "p-value": float(res.loc[0, "p-value"]),
+            "R2": float(res.loc[0, "R2"]),
+            "n_patients": int(len(keep_patients)),
+        })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["q-value"] = multipletests(out["p-value"], method="fdr_bh")[1]
     return out
 
 def global_and_pairwise_permanova(bray: pd.DataFrame, group: pd.Series, permutations: int = 999):
@@ -223,6 +359,7 @@ def scatter_umap(df: pd.DataFrame,
 def run_one_pass(name: str,
                  meta: pd.DataFrame,
                  master: pd.DataFrame,
+                 count_table: pd.DataFrame,
                  alpha: pd.DataFrame,
                  bray: pd.DataFrame,
                  jacc: pd.DataFrame,
@@ -231,7 +368,8 @@ def run_one_pass(name: str,
                  type_order: list[str] | None,
                  neighbors: int,
                  min_dist: float,
-                 permutations: int):
+                 permutations: int,
+                 patient_col: str | None):
     ensure_dir(outdir)
 
     # Merge everything we have
@@ -280,31 +418,51 @@ def run_one_pass(name: str,
         order = list(df.get("type_group", pd.Series()).dropna().unique())
     type_palette = {k: PALETTE_TYPES.get(k, PALETTE_TYPES.get("Failed-QC", "#999999")) for k in order}
 
-    # ---------- Alpha t-tests + boxplot with visible alpha ----------
-    out_alpha = outdir / ("tables/alpha_ttest.tsv" if name == "micro" else "tables/alpha_ttest_mito.tsv")
+    if alpha.empty and bray.empty:
+        warnings.warn("No alpha or beta inputs were provided; only descriptive plots without inferential tables can be generated.")
+
+    if not alpha.empty:
+        if patient_col is None:
+            raise ValueError("--patient-col is required for patient-aware alpha-diversity inference.")
+        if patient_col not in df.columns:
+            raise ValueError(f"Patient column '{patient_col}' is missing from metadata.")
+
+    if not bray.empty:
+        if patient_col is None:
+            raise ValueError("--patient-col is required for patient-aware beta-diversity inference.")
+        if patient_col not in df.columns:
+            raise ValueError(f"Patient column '{patient_col}' is missing from metadata.")
+        if count_table.empty:
+            raise ValueError("--count-table is required for patient-aware beta-diversity inference.")
+
+    # ---------- Alpha Wilcoxon tests + boxplot with visible alpha ----------
+    out_alpha = outdir / ("tables/alpha_wilcoxon.tsv" if name == "micro" else "tables/alpha_wilcoxon_mito.tsv")
     if {"Shannon", "type_group"} <= set(df.columns):
-        ttab = fdr_ttests_by_group(df, "type_group", "Shannon")
+        ttab = patient_level_pairwise_wilcoxon(df, patient_col, "type_group", "Shannon")
         ttab.to_csv(out_alpha, sep="\t", index=False)
 
         # single-axis boxplot (no hue), colors contain alpha
         fig, ax = plt.subplots(figsize=(9, 6))
         sns.boxplot(
             data=df, x="type_group", y="Shannon",
-            order=order, palette=type_palette, linewidth=1
+            order=order, palette=type_palette, linewidth=0.8
         )
         # also fade lines (whiskers/medians) a bit
         for line in ax.lines:
             line.set_alpha(0.6)
 
         # Add stats
-        pairs = list(combinations(order, 2))
-        annot = Annotator(ax, pairs, data=df, x="type_group", y="Shannon", order=order)
-        annot.configure(test='t-test_ind', text_format='star', loc='inside', verbose=0)
-        annot.apply_and_annotate()
+        pairs = [(r["group1"], r["group2"]) for _, r in ttab.iterrows() if r["group1"] in order and r["group2"] in order]
+        if pairs:
+            annot = Annotator(ax, pairs, data=df, x="type_group", y="Shannon", order=order)
+            annot.configure(test=None, text_format='star', loc='inside', verbose=0)
+            annot.set_pvalues_and_annotate(ttab.set_index(["group1", "group2"]).loc[pairs, "qval"].tolist())
 
         ax.set_xlabel("")
         ax.set_ylabel("Shannon")
-        ax.tick_params(axis='x', rotation=45)
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+        ax.tick_params(axis='x', rotation=0)
+        sns.despine(ax=ax, top=True, right=True)
         fig.tight_layout()
         for ext in ("svg", "pdf"):
             fig.savefig(outdir / f"plots/Alpha_type_boxplot_{name}.{ext}")
@@ -312,7 +470,7 @@ def run_one_pass(name: str,
 
         # Faceted by status (boxed with alpha’d palette)
         if "status" in df.columns:
-            TYPE_ORDER = ["Oral Rinse", "BAL", "Lung Brush"]
+            TYPE_ORDER = ["Oral Rinse", "BAL", "Bronchial Brush"]
 
             g = sns.FacetGrid(
                 df,
@@ -335,7 +493,7 @@ def run_one_pass(name: str,
                     y="Shannon",
                     order=["Cancer", "Non-Cancer"],
                     color=facet_color,        # <-- one color per facet
-                    linewidth=1,
+                    linewidth=0.8,
                     width=0.85,
                     gap=0.15,
                     showfliers=True,
@@ -352,7 +510,8 @@ def run_one_pass(name: str,
                 ax.set_ylim(0, 5)
                 ax.set_xlabel("")
                 ax.set_ylabel("Shannon")
-                ax.tick_params(axis="x", rotation=45)
+                ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+                ax.tick_params(axis="x", rotation=0)
 
             g.figure.set_size_inches(12, 5)
             plt.tight_layout()
@@ -362,9 +521,16 @@ def run_one_pass(name: str,
 
     # ---------- PERMANOVA ----------
     if not bray.empty and "type_group" in df.columns:
-        # Align groups to Bray
-        groups = df.set_index("sample").loc[bray.index.intersection(df["sample"]), "type_group"]
-        glob, pair = global_and_pairwise_permanova(bray, groups, permutations=permutations)
+        meta_beta = (
+            df[["sample", patient_col, "type_group"]]
+            .dropna()
+            .drop_duplicates("sample")
+        )
+        sample_ids = [s for s in meta_beta["sample"] if s in count_table.columns]
+        meta_beta = meta_beta[meta_beta["sample"].isin(sample_ids)].copy()
+        counts_beta = count_table[sample_ids].T
+        glob = blocked_permanova(counts_beta, meta_beta, patient_col, "type_group", permutations=permutations)
+        pair = blocked_pairwise_permanova(counts_beta, meta_beta, patient_col, "type_group", permutations=permutations)
         glob.to_csv(outdir / ("tables/permanova_global.tsv" if name == "micro" else "tables/permanova_global_mito.tsv"), sep="\t", index=False)
         pair.to_csv(outdir / ("tables/permanova_pairwise.tsv" if name == "micro" else "tables/permanova_pairwise_mito.tsv"), sep="\t", index=False)
 
@@ -434,6 +600,7 @@ def main():
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--metadata", required=True, type=Path, help="Metadata TSV with at least 'sample' and 'type_group'.")
     p.add_argument("--master",   required=False, type=Path, help="Master table with counts/pass_filter (optional).")
+    p.add_argument("--count-table", required=False, type=Path, help="Wide ASV count table used for patient-aware beta stats.")
     p.add_argument("--alpha",    required=False, type=Path, help="Shannon TSV (sample,Shannon).")
     p.add_argument("--bray",     required=False, type=Path, help="Bray-Curtis square distance TSV (index=sample).")
     p.add_argument("--jacc",     required=False, type=Path, help="Jaccard square distance TSV (index=sample).")
@@ -451,6 +618,7 @@ def main():
     p.add_argument("--neighbors", type=int, default=30, help="UMAP neighbors for precomputed distances.")
     p.add_argument("--min-dist",  type=float, default=0.01, help="UMAP min_dist for precomputed distances.")
     p.add_argument("--permutations", type=int, default=999, help="PERMANOVA permutations.")
+    p.add_argument("--patient-col", default=None, help="Patient ID column in metadata for patient-aware stats.")
 
     # Output dirs
     p.add_argument("--outdir", type=Path, required=True, help="Output directory (micro).")
@@ -464,6 +632,7 @@ def main():
         raise ValueError("metadata must contain a 'sample' column.")
 
     master = read_tsv(args.master) if args.master else pd.DataFrame()
+    count_table = read_count_table(args.count_table) if args.count_table else pd.DataFrame()
     alpha  = read_tsv(args.alpha, index_col=0) if args.alpha else pd.DataFrame()
     bray   = read_tsv(args.bray,  index_col=0) if args.bray  else pd.DataFrame()
     jacc   = read_tsv(args.jacc,  index_col=0) if args.jacc  else pd.DataFrame()
@@ -487,11 +656,11 @@ def main():
     ensure_dir(args.outdir)
     run_one_pass(
         name="micro",
-        meta=meta, master=master, alpha=alpha, bray=bray, jacc=jacc,
+        meta=meta, master=master, count_table=count_table, alpha=alpha, bray=bray, jacc=jacc,
         outdir=args.outdir,
         exclude_types=exclude_types, type_order=type_order,
         neighbors=args.neighbors, min_dist=args.min_dist,
-        permutations=args.permutations
+        permutations=args.permutations, patient_col=args.patient_col
     )
 
     # MITO pass (optional)
@@ -504,11 +673,11 @@ def main():
 
         run_one_pass(
             name="mito",
-            meta=meta, master=master, alpha=mito_alpha, bray=mito_bray, jacc=mito_jacc,
+            meta=meta, master=master, count_table=count_table, alpha=mito_alpha, bray=mito_bray, jacc=mito_jacc,
             outdir=mito_dir,
             exclude_types=exclude_types, type_order=type_order,
             neighbors=args.neighbors, min_dist=args.min_dist,
-            permutations=args.permutations
+            permutations=args.permutations, patient_col=args.patient_col
         )
 
 if __name__ == "__main__":
