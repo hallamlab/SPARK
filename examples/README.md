@@ -12,6 +12,11 @@ This folder contains copy-ready templates for running `asv_pipeline.nf` on a new
   - Config template aligned with the default metadata + mito workflow.
   - Includes required placeholders for metadata and custom BLAST DBs.
 
+- `my_run.patient_aware_test.yml`
+  - Minimal test template for the new patient-aware branches.
+  - Enables `bray_patient_aware`, `taxonomy_patient_aware`, and `lung_status_analysis`.
+  - Disables unrelated optional downstream modules to keep the test run small.
+
 - `manifest.example.tsv`
   - Manifest format used by the pipeline.
   - **No header** in machine-readable rows (comment lines beginning with `#` are allowed).

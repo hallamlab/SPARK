@@ -157,6 +157,7 @@ Copy-ready files are available in `SPARK/examples/`:
 
 - `examples/my_run.min.yml`: core ASV + taxonomy only.
 - `examples/my_run.full.yml`: metadata + mito workflow.
+- `examples/my_run.patient_aware_test.yml`: minimal test config for the new patient-aware branches.
 - `examples/manifest.example.tsv`: manifest format template.
 - `examples/metadata.example.tsv`: minimal metadata schema template.
 

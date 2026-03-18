@@ -1,0 +1,120 @@
+# Minimal test template for the patient-aware branches.
+# Copy to SPARK/my_run.patient_aware_test.yml and edit all /abs/path placeholders.
+#
+# This keeps only the stages required to reach:
+# - bray_patient_aware
+# - taxonomy_patient_aware
+# - lung_status_analysis
+#
+# Notes:
+# - `metadata_plots.enabled: true` is required by all three branches.
+# - `filter_counts.enabled: true` and `general_stats.enabled: true` are still needed
+#   because `PLOT_METADATA` depends on those outputs.
+# - This template disables unrelated optional downstream analyses to keep the
+#   test run as small as possible.
+
+paths:
+  input_dir: /abs/path/to/fastq_dir
+  output_dir: /abs/path/to/output_dir
+  manifest: /abs/path/to/ref_db/sample_manifest.tsv
+  work_dir: /abs/path/to/nf_work
+  conda_cache_dir: /abs/path/to/conda_cache
+
+resources:
+  threads: 8
+  single_end: false
+
+mito:
+  enabled: true
+  mito_db: /abs/path/to/blastdb/mito_ncbi
+  biof_db: /abs/path/to/blastdb/ssu_pipeline_contaminants
+
+filter_counts:
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  group_col: type_group
+  min_group_size: 3
+  abundance_threshold: 0.005
+  sample_id_col: sample
+  save_intermediates: true
+
+general_stats:
+  enabled: true
+
+sankey:
+  enabled: false
+
+metadata_plots:
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  sample_col: sample
+  type_col: type_group
+  color_col: Color
+  run_micro: true
+  run_mito: true
+
+batch_correction:
+  enabled: false
+
+outlier_detection:
+  enabled: false
+
+collectors_curve:
+  enabled: false
+
+plot_upset:
+  enabled: false
+
+bubbleplotter:
+  enabled: false
+
+umap_clustering:
+  enabled: false
+
+diversity:
+  enabled: false
+
+indicspecies:
+  enabled: false
+  aligned_plot_enabled: false
+
+power_analysis:
+  enabled: false
+
+bray_patient_aware:
+  enabled: true
+  sample_col: sample
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: type_group
+
+taxonomy_patient_aware:
+  enabled: true
+  sample_col: sample
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: type_group
+  count_col: count
+
+lung_status_analysis:
+  enabled: true
+  sample_col: sample
+  type_col: type_group
+  sample_types: Bronchial Brush,BAL
+  case_col: Case
+  patient_col: Participant_ID
+  cancer_site_col: Cancer_Site
+  lung_code_col: lung_code
+  tumor_side_col: TumorSide
+  contralateral_col: Contralateral
+  healthy_col: Healthy
+  lung_status_col: lung_status
+
+clustermaps:
+  enabled: false
+
+spieceasi:
+  enabled: false
+
+biochem_pre_asv:
+  enabled: false
