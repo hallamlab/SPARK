@@ -24,6 +24,17 @@ from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 
+def canonicalize_sample_type(x: str) -> str:
+    x_clean = str(x).strip().lower()
+    if x_clean in {"oral", "oral rinse", "oral_rinse"}:
+        return "Oral Rinse"
+    if x_clean in {"bal", "bronchoalveolar lavage"}:
+        return "BAL"
+    if x_clean in {"lung brush", "bronchial brush", "brochial brush", "brush"}:
+        return "Lung Brush"
+    return str(x)
+
+
 def filter_contralateral_cancer(df: pd.DataFrame, case_col: str, type_col: str, contralateral_sample_types: list[str], contralateral_col: str,
                                 cancer_site_col: str, lung_side_col: str,
                                 contralateral_value: str) -> pd.DataFrame:
@@ -45,7 +56,7 @@ def filter_contralateral_cancer(df: pd.DataFrame, case_col: str, type_col: str, 
 
     is_cancer = ~work[case_col].astype(str).isin(["Control", "Non-Cancer"])
     is_contra = work[contra].astype(str) == str(contralateral_value)
-    in_target_type = work[type_col].astype(str).isin(set(contralateral_sample_types))
+    in_target_type = work[type_col].map(canonicalize_sample_type).isin(set(contralateral_sample_types))
     return work.loc[~(is_cancer & is_contra & in_target_type)].copy()
 
 
@@ -189,7 +200,7 @@ def main() -> None:
     p.add_argument("--data-long", required=True)
     p.add_argument("--tax-levels", default="Phylum,Family")
     p.add_argument("--sample-types", default="BAL,Lung Brush,Oral Rinse")
-    p.add_argument("--sample-col", default="lmp_id")
+    p.add_argument("--sample-col", default="sample")
     p.add_argument("--patient-col", default="Participant_ID")
     p.add_argument("--case-col", default="Case")
     p.add_argument("--type-col", default="type_group")
@@ -211,12 +222,14 @@ def main() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     long_df = pd.read_csv(args.data_long, sep="\t", low_memory=False)
+    long_df[args.type_col] = long_df[args.type_col].map(canonicalize_sample_type)
+    sample_types = [canonicalize_sample_type(x.strip()) for x in args.sample_types.split(",") if x.strip()]
     if args.exclude_contralateral_in_cancer:
         long_df = filter_contralateral_cancer(
             long_df,
             case_col=args.case_col,
             type_col=args.type_col,
-            contralateral_sample_types=[x.strip() for x in args.contralateral_sample_types.split(",") if x.strip()],
+            contralateral_sample_types=[canonicalize_sample_type(x.strip()) for x in args.contralateral_sample_types.split(",") if x.strip()],
             contralateral_col=args.contralateral_col,
             cancer_site_col=args.cancer_site_col,
             lung_side_col=args.lung_side_col,
@@ -224,7 +237,6 @@ def main() -> None:
         )
 
     tax_levels = [x.strip() for x in args.tax_levels.split(",") if x.strip()]
-    sample_types = [x.strip() for x in args.sample_types.split(",") if x.strip()]
 
     all_results = []
     for tax_level in tax_levels:

@@ -65,6 +65,17 @@ def canonical_case(x: str) -> str:
     return "Control" if str(x) in {"Control", "Non-Cancer"} else "Cancer"
 
 
+def canonicalize_sample_type(x: str) -> str:
+    x_clean = str(x).strip().lower()
+    if x_clean in {"oral", "oral rinse", "oral_rinse"}:
+        return "Oral Rinse"
+    if x_clean in {"bal", "bronchoalveolar lavage"}:
+        return "BAL"
+    if x_clean in {"lung brush", "bronchial brush", "brochial brush", "brush"}:
+        return "Lung Brush"
+    return str(x)
+
+
 def patient_type_taxon_rel(
     long_df: pd.DataFrame,
     tax_level: str,
@@ -686,7 +697,7 @@ def main() -> None:
     p.add_argument("--outdir", required=True)
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--top-n", type=int, default=12)
-    p.add_argument("--sample-col", default="lmp_id")
+    p.add_argument("--sample-col", default="sample")
     p.add_argument("--patient-col", default="Participant_ID")
     p.add_argument("--type-col", default="type_group")
     p.add_argument("--case-col", default="Case")
@@ -697,8 +708,17 @@ def main() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     long_df = pd.read_csv(args.data_long, sep="\t", low_memory=False)
+    long_df[args.type_col] = long_df[args.type_col].map(canonicalize_sample_type)
     cancer_res = pd.read_csv(args.cancer_results, sep="\t")
     pair_res = pd.read_csv(args.sampletype_results, sep="\t")
+    if "sample_type" in cancer_res.columns:
+        cancer_res["sample_type"] = cancer_res["sample_type"].map(canonicalize_sample_type)
+    if "group1" in pair_res.columns:
+        pair_res["group1"] = pair_res["group1"].map(canonicalize_sample_type)
+    if "group2" in pair_res.columns:
+        pair_res["group2"] = pair_res["group2"].map(canonicalize_sample_type)
+    if {"group1", "group2"}.issubset(pair_res.columns):
+        pair_res["contrast"] = pair_res["group1"].astype(str) + "_vs_" + pair_res["group2"].astype(str)
 
     for tax_level in ["Phylum", "Family"]:
         rel_df = patient_type_taxon_rel(

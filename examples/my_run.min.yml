@@ -46,6 +46,15 @@ indicspecies:
 power_analysis:
   enabled: false
 
+bray_patient_aware:
+  enabled: false
+
+taxonomy_patient_aware:
+  enabled: false
+
+lung_status_analysis:
+  enabled: false
+
 clustermaps:
   enabled: false
 

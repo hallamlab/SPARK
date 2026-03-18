@@ -283,6 +283,71 @@ Common keys:
 - `keep_contralateral_in_cancer`
 - `contralateral_sample_types`
 
+### `bray_patient_aware`
+Optional patient-aware beta-diversity branch. This stage is off by default and requires `metadata_plots.enabled: true`. It builds a fresh `ASV_master_long.tsv` from the run's current `ASV_meta_micro*.tsv` and final micro count table, then runs `run_bray_permanova_patient_aware.R` followed by `plot_bray_permanova_patient_aware.py`. When batch correction is enabled, the branch uses the corrected count matrix and corrected ASV metadata so the Bray/PERMANOVA analysis stays aligned with the data used downstream elsewhere in the pipeline.
+
+Common keys:
+- `enabled`
+- `output_dir`
+- `sample_col`
+- `patient_col`
+- `case_col`
+- `type_col`
+- `sample_types`
+- `exclude_contralateral_in_cancer`
+- `contralateral_col`
+- `cancer_site_col`
+- `lung_side_col`
+- `contralateral_value`
+- `contralateral_sample_types`
+- `transform` (`none` or `rclr`)
+- `permutations`
+- `seed`
+- `require_complete_types`
+
+### `taxonomy_patient_aware`
+Optional patient-aware taxonomy branch. This stage is off by default and requires `metadata_plots.enabled: true`. It builds a fresh `ASV_master_long.tsv` from the current run outputs, runs `run_taxonomic_abundance_analysis.py` for case/control comparisons and `run_taxonomic_sample_type_analysis.py` for paired sample-type comparisons, then renders the combined figures with `plot_taxonomic_observed_analysis.py`. When batch correction is enabled, the branch uses the corrected count matrix and corrected ASV metadata so the taxonomy summaries reflect the same processed data used by the rest of the run.
+
+Common keys:
+- `enabled`
+- `output_dir`
+- `sample_col`
+- `patient_col`
+- `case_col`
+- `type_col`
+- `count_col`
+- `tax_levels`
+- `sample_types`
+- `min_prevalence`
+- `exclude_contralateral_in_cancer`
+- `contralateral_col`
+- `cancer_site_col`
+- `lung_side_col`
+- `contralateral_value`
+- `contralateral_sample_types`
+- `skip_omnibus`
+- `transform` (`none` or `rclr`)
+- `alpha`
+- `top_n`
+
+### `lung_status_analysis`
+Optional lung-status contrast branch. This stage is off by default and requires `metadata_plots.enabled: true`. It builds a fresh `ASV_master_long.tsv`, then for each configured sample type runs `prepare_lung_status_data.py`, `run_lung_status_analysis.R`, and `plot_lung_status_analysis.py`. The prep step prefers explicit metadata columns such as `TumorSide`, `Contralateral`, `Healthy`, and `lung_status` when present, and otherwise falls back to deriving the three-way status from `Case`, `Cancer_Site`, and `lung_code`. When batch correction is enabled, the branch uses the corrected count matrix and corrected ASV metadata.
+
+Common keys:
+- `enabled`
+- `output_dir`
+- `sample_col`
+- `type_col`
+- `sample_types`
+- `case_col`
+- `patient_col`
+- `cancer_site_col`
+- `lung_code_col`
+- `tumor_side_col`
+- `contralateral_col`
+- `healthy_col`
+- `lung_status_col`
+
 ### `indicspecies.aligned_*`
 Optional aligned ISA summary/plot stage built on top of the existing `INDICSPECIES` outputs. This stage is off by default and does not replace the standard `INDICSPECIES_PLOTS` step; it adds a second summary/visualization pass using `plot_indicspecies_aligned.py`.
 
@@ -316,6 +381,9 @@ Under `paths.output_dir`, typical directories include:
 - `sina/`, `taxonomy/`, `mito/`, `stats/`, `logs/`
 - optional: `metadata/`, `batch_correction/`, `outliers_corrected/`, `diversity/`, `indicspecies/`, `clustermaps/`, `spieceasi/`, `network/`
 - optional: `power_analysis/`
+- optional: `bray_patient_aware/`
+- optional: `taxonomy_patient_aware/`
+- optional: `lung_status_analysis/`
 - optional biochem branch outputs when `biochem_pre_asv.enabled: true`
 
 Nextflow runtime artifacts:

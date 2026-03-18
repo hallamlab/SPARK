@@ -11,7 +11,7 @@ suppressPackageStartupMessages({
 option_list <- list(
   make_option("--data-wide", type = "character", help = "Wide ASV table (rows=ASVs, columns=samples)"),
   make_option("--data-long", type = "character", help = "Long metadata table"),
-  make_option("--sample-col", type = "character", default = "lmp_id", help = "Sample ID column in long table"),
+  make_option("--sample-col", type = "character", default = "sample", help = "Sample ID column in long table"),
   make_option("--patient-col", type = "character", default = "Participant_ID", help = "Patient ID column"),
   make_option("--case-col", type = "character", default = "Case", help = "Case/control column"),
   make_option("--type-col", type = "character", default = "type_group", help = "Sample type column"),
@@ -258,7 +258,11 @@ meta_cols <- meta_cols[meta_cols %in% colnames(long_df)]
 meta <- long_df %>%
   select(all_of(meta_cols)) %>%
   distinct() %>%
-  filter(.data[[args$type_col]] %in% sample_types_keep)
+  mutate(
+    sample_type_raw = .data[[args$type_col]],
+    sample_type = vapply(sample_type_raw, canonicalize_sample_type, character(1))
+  ) %>%
+  filter(sample_type %in% sample_types_keep)
 
 sample_ids <- intersect(meta[[args$sample_col]], colnames(wide_df))
 if (length(sample_ids) == 0) {
@@ -269,7 +273,6 @@ meta <- meta %>%
   filter(.data[[args$sample_col]] %in% sample_ids) %>%
   mutate(
     case_status = ifelse(.data[[args$case_col]] %in% c("Control", "Non-Cancer"), "Control", "Cancer"),
-    sample_type = .data[[args$type_col]],
     patient_id = .data[[args$patient_col]],
     sample_id = .data[[args$sample_col]]
   )

@@ -65,6 +65,12 @@ If you enable `power_analysis.enabled`, you will also typically need:
 - `type_group`: sample-type grouping column.
 - `lung_status` plus any side/site columns used in your dataset if you want the contralateral filtering options to be meaningful.
 
+If you enable `bray_patient_aware.enabled`, you need the same patient-aware metadata columns as above. This branch builds a fresh master long table from the run outputs, then runs blocked PERMANOVA and PERMDISP summaries plus companion figures.
+
+If you enable `taxonomy_patient_aware.enabled`, you also need the same patient-aware metadata columns, plus a usable count column in the generated master long table. This branch runs observed-data taxonomic case/control and sample-type comparisons, then produces summary heatmaps and boxplots.
+
+If you enable `lung_status_analysis.enabled`, your metadata should include the lung-side fields required to assign `TumorSide`, `Contralateral`, and `Healthy`. The prep step now prefers explicit metadata columns for those labels when present, and otherwise falls back to deriving them from `Case`, `Cancer_Site`, and `lung_code`.
+
 If you enable `indicspecies.aligned_plot_enabled`, no extra input files are required beyond a successful `indicspecies.enabled: true` run.
 
 ## Manifest Rules (Important)
