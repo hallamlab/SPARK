@@ -379,6 +379,42 @@ if( !masterSummaryEnvFile.exists() ) {
 }
 log.info "Using master summary Conda/Mamba env definition: ${masterSummaryCondaEnvPath}"
 
+def powerAnalysisEnvConfigPath = config.environments?.power_analysis
+def resolvedPowerAnalysisEnvPath = powerAnalysisEnvConfigPath ? resolveOptionalPath(powerAnalysisEnvConfigPath, configRoot) : null
+def powerAnalysisCondaEnvPath = resolvedPowerAnalysisEnvPath ?: defaultAdvancedEnvPath
+def powerAnalysisEnvFile = file(powerAnalysisCondaEnvPath)
+if( !powerAnalysisEnvFile.exists() ) {
+    exit 1, "Power analysis conda environment YAML not found: ${powerAnalysisCondaEnvPath}"
+}
+log.info "Using power analysis Conda/Mamba env definition: ${powerAnalysisCondaEnvPath}"
+
+def brayPatientAwareEnvConfigPath = config.environments?.bray_patient_aware
+def resolvedBrayPatientAwareEnvPath = brayPatientAwareEnvConfigPath ? resolveOptionalPath(brayPatientAwareEnvConfigPath, configRoot) : null
+def brayPatientAwareCondaEnvPath = resolvedBrayPatientAwareEnvPath ?: defaultAdvancedEnvPath
+def brayPatientAwareEnvFile = file(brayPatientAwareCondaEnvPath)
+if( !brayPatientAwareEnvFile.exists() ) {
+    exit 1, "Bray patient-aware conda environment YAML not found: ${brayPatientAwareCondaEnvPath}"
+}
+log.info "Using Bray patient-aware Conda/Mamba env definition: ${brayPatientAwareCondaEnvPath}"
+
+def taxonomyPatientAwareEnvConfigPath = config.environments?.taxonomy_patient_aware
+def resolvedTaxonomyPatientAwareEnvPath = taxonomyPatientAwareEnvConfigPath ? resolveOptionalPath(taxonomyPatientAwareEnvConfigPath, configRoot) : null
+def taxonomyPatientAwareCondaEnvPath = resolvedTaxonomyPatientAwareEnvPath ?: defaultAdvancedEnvPath
+def taxonomyPatientAwareEnvFile = file(taxonomyPatientAwareCondaEnvPath)
+if( !taxonomyPatientAwareEnvFile.exists() ) {
+    exit 1, "Taxonomy patient-aware conda environment YAML not found: ${taxonomyPatientAwareCondaEnvPath}"
+}
+log.info "Using taxonomy patient-aware Conda/Mamba env definition: ${taxonomyPatientAwareCondaEnvPath}"
+
+def lungStatusAnalysisEnvConfigPath = config.environments?.lung_status_analysis
+def resolvedLungStatusAnalysisEnvPath = lungStatusAnalysisEnvConfigPath ? resolveOptionalPath(lungStatusAnalysisEnvConfigPath, configRoot) : null
+def lungStatusAnalysisCondaEnvPath = resolvedLungStatusAnalysisEnvPath ?: defaultAdvancedEnvPath
+def lungStatusAnalysisEnvFile = file(lungStatusAnalysisCondaEnvPath)
+if( !lungStatusAnalysisEnvFile.exists() ) {
+    exit 1, "Lung status analysis conda environment YAML not found: ${lungStatusAnalysisCondaEnvPath}"
+}
+log.info "Using lung status analysis Conda/Mamba env definition: ${lungStatusAnalysisCondaEnvPath}"
+
 def plotUpsetEnvConfigPath = config.environments?.plot_upset
 def resolvedPlotUpsetEnvPath = plotUpsetEnvConfigPath ? resolveOptionalPath(plotUpsetEnvConfigPath, configRoot) : null
 def plotUpsetCondaEnvPath = resolvedPlotUpsetEnvPath ?: defaultAdvancedEnvPath
@@ -523,6 +559,11 @@ if( !plotIndicspeciesScriptFile.exists() ) {
     exit 1, "plot_indicspecies.py not found in project directory"
 }
 def plotIndicspeciesScriptPath = plotIndicspeciesScriptFile.canonicalPath
+def plotIndicspeciesAlignedScriptFile = new File("${projectDir}/plot_indicspecies_aligned.py")
+if( !plotIndicspeciesAlignedScriptFile.exists() ) {
+    exit 1, "plot_indicspecies_aligned.py not found in project directory"
+}
+def plotIndicspeciesAlignedScriptPath = plotIndicspeciesAlignedScriptFile.canonicalPath
 def clustermapsScriptFile = new File("${projectDir}/plot_clustermaps.py")
 if( !clustermapsScriptFile.exists() ) {
     exit 1, "plot_clustermaps.py not found in project directory"
@@ -548,6 +589,51 @@ if( !masterSummaryScriptFile.exists() ) {
     exit 1, "summary/build_master_asv_summary.py not found in project directory"
 }
 def masterSummaryScriptPath = masterSummaryScriptFile.canonicalPath
+def powerAnalysisScriptFile = new File("${projectDir}/run_power_analysis_pipeline.sh")
+if( !powerAnalysisScriptFile.exists() ) {
+    exit 1, "run_power_analysis_pipeline.sh not found in project directory"
+}
+def powerAnalysisScriptPath = powerAnalysisScriptFile.canonicalPath
+def brayPatientAwareScriptFile = new File("${projectDir}/run_bray_permanova_patient_aware.R")
+if( !brayPatientAwareScriptFile.exists() ) {
+    exit 1, "run_bray_permanova_patient_aware.R not found in project directory"
+}
+def brayPatientAwareScriptPath = brayPatientAwareScriptFile.canonicalPath
+def plotBrayPatientAwareScriptFile = new File("${projectDir}/plot_bray_permanova_patient_aware.py")
+if( !plotBrayPatientAwareScriptFile.exists() ) {
+    exit 1, "plot_bray_permanova_patient_aware.py not found in project directory"
+}
+def plotBrayPatientAwareScriptPath = plotBrayPatientAwareScriptFile.canonicalPath
+def taxonomicAbundanceObservedScriptFile = new File("${projectDir}/run_taxonomic_abundance_analysis.py")
+if( !taxonomicAbundanceObservedScriptFile.exists() ) {
+    exit 1, "run_taxonomic_abundance_analysis.py not found in project directory"
+}
+def taxonomicAbundanceObservedScriptPath = taxonomicAbundanceObservedScriptFile.canonicalPath
+def taxonomicSampleTypeObservedScriptFile = new File("${projectDir}/run_taxonomic_sample_type_analysis.py")
+if( !taxonomicSampleTypeObservedScriptFile.exists() ) {
+    exit 1, "run_taxonomic_sample_type_analysis.py not found in project directory"
+}
+def taxonomicSampleTypeObservedScriptPath = taxonomicSampleTypeObservedScriptFile.canonicalPath
+def plotTaxonomicObservedScriptFile = new File("${projectDir}/plot_taxonomic_observed_analysis.py")
+if( !plotTaxonomicObservedScriptFile.exists() ) {
+    exit 1, "plot_taxonomic_observed_analysis.py not found in project directory"
+}
+def plotTaxonomicObservedScriptPath = plotTaxonomicObservedScriptFile.canonicalPath
+def prepareLungStatusScriptFile = new File("${projectDir}/prepare_lung_status_data.py")
+if( !prepareLungStatusScriptFile.exists() ) {
+    exit 1, "prepare_lung_status_data.py not found in project directory"
+}
+def prepareLungStatusScriptPath = prepareLungStatusScriptFile.canonicalPath
+def lungStatusAnalysisScriptFile = new File("${projectDir}/run_lung_status_analysis.R")
+if( !lungStatusAnalysisScriptFile.exists() ) {
+    exit 1, "run_lung_status_analysis.R not found in project directory"
+}
+def lungStatusAnalysisScriptPath = lungStatusAnalysisScriptFile.canonicalPath
+def plotLungStatusScriptFile = new File("${projectDir}/plot_lung_status_analysis.py")
+if( !plotLungStatusScriptFile.exists() ) {
+    exit 1, "plot_lung_status_analysis.py not found in project directory"
+}
+def plotLungStatusScriptPath = plotLungStatusScriptFile.canonicalPath
 def emptyModulesScriptFile = new File("${projectDir}/empty_modules.tsv")
 if( !emptyModulesScriptFile.exists() ) {
     exit 1, "empty_modules.tsv not found in project directory"
@@ -1283,6 +1369,12 @@ if( indicspeciesGroup2OrderRaw instanceof List ) {
 def indicspeciesFocusGroup1Label = indicspeciesConfig.focus_group1_label ? indicspeciesConfig.focus_group1_label.toString().trim() : ''
 def indicspeciesFocusGroup2Label = indicspeciesConfig.focus_group2_label ? indicspeciesConfig.focus_group2_label.toString().trim() : ''
 boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
+boolean indicspeciesAlignedEnabled = indicspeciesConfig.containsKey('aligned_plot_enabled') ? (indicspeciesConfig.aligned_plot_enabled as boolean) : false
+def indicspeciesAlignedOutputDir = indicspeciesConfig.aligned_plot_output_dir ?: 'indicspecies/aligned'
+def indicspeciesAlignedOutputDirAbs = new File(outputDir, indicspeciesAlignedOutputDir).canonicalPath
+def indicspeciesAlignedAlpha = indicspeciesConfig.aligned_alpha != null ? (indicspeciesConfig.aligned_alpha as double) : 0.05d
+def indicspeciesAlignedMinStat = indicspeciesConfig.aligned_min_stat != null ? (indicspeciesConfig.aligned_min_stat as double) : 0.0d
+def indicspeciesAlignedTopN = indicspeciesConfig.aligned_top_n ? (indicspeciesConfig.aligned_top_n as int) : 25
 
 def clustermapsConfig = config.clustermaps ?: [:]
 boolean clustermapsRequested = clustermapsConfig.containsKey('enabled') ? (clustermapsConfig.enabled as boolean) : false
@@ -1477,6 +1569,139 @@ if( masterSummaryWhitelistRaw instanceof List ) {
 def masterSummaryWhitelistCsv = masterSummaryWhitelist ? masterSummaryWhitelist.join(',') : ''
 def masterSummaryMaxDirectCols = masterSummaryConfig.max_direct_cols ? (masterSummaryConfig.max_direct_cols as int) : 300
 
+def powerAnalysisConfig = config.power_analysis ?: [:]
+boolean powerAnalysisRequested = powerAnalysisConfig.containsKey('enabled') ? (powerAnalysisConfig.enabled as boolean) : false
+if( powerAnalysisRequested && !metadataPlotsEnabled ) {
+    exit 1, "power_analysis.enabled requires metadata_plots.enabled to be true"
+}
+boolean powerAnalysisEnabled = powerAnalysisRequested
+def powerAnalysisOutputDir = powerAnalysisConfig.output_dir ?: 'power_analysis'
+def powerAnalysisOutputDirAbs = resolveOutputRelative(powerAnalysisOutputDir.toString(), outputDir)
+def powerAnalysisSampleCol = powerAnalysisConfig.sample_col ?: metadataPlotsSampleCol
+def powerAnalysisPatientCol = powerAnalysisConfig.patient_col ? powerAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
+def powerAnalysisCaseCol = powerAnalysisConfig.case_col ? powerAnalysisConfig.case_col.toString().trim() : 'Case'
+def powerAnalysisTypeCol = powerAnalysisConfig.type_col ?: metadataPlotsTypeCol
+def powerAnalysisSampleSizesCancerRaw = powerAnalysisConfig.sample_sizes_cancer ?: '6,8,10,15,20,25,30'
+def powerAnalysisSampleSizesCancer = powerAnalysisSampleSizesCancerRaw instanceof List ?
+    powerAnalysisSampleSizesCancerRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisSampleSizesCancerRaw.toString().trim()
+def powerAnalysisSampleSizesStypeRaw = powerAnalysisConfig.sample_sizes_stype ?: '10,15,20,25,30,40,50'
+def powerAnalysisSampleSizesStype = powerAnalysisSampleSizesStypeRaw instanceof List ?
+    powerAnalysisSampleSizesStypeRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisSampleSizesStypeRaw.toString().trim()
+def powerAnalysisNControl = powerAnalysisConfig.n_control ? (powerAnalysisConfig.n_control as int) : 25
+def powerAnalysisNSimulations = powerAnalysisConfig.n_simulations ? (powerAnalysisConfig.n_simulations as int) : 1000
+def powerAnalysisNPerm = powerAnalysisConfig.n_perm ? (powerAnalysisConfig.n_perm as int) : 199
+def powerAnalysisAlpha = powerAnalysisConfig.alpha != null ? (powerAnalysisConfig.alpha as double) : 0.05d
+def powerAnalysisSeed = powerAnalysisConfig.seed ? (powerAnalysisConfig.seed as int) : 42
+boolean powerAnalysisSkipEstimate = powerAnalysisConfig.containsKey('skip_estimate') ? (powerAnalysisConfig.skip_estimate as boolean) : false
+boolean powerAnalysisSkipPlot = powerAnalysisConfig.containsKey('skip_plot') ? (powerAnalysisConfig.skip_plot as boolean) : false
+def powerAnalysisTransform = powerAnalysisConfig.transform ? powerAnalysisConfig.transform.toString().trim().toLowerCase() : 'none'
+if( !['none', 'rclr'].contains(powerAnalysisTransform) ) {
+    exit 1, "power_analysis.transform must be one of: none, rclr"
+}
+boolean powerAnalysisKeepContralateralInCancer = powerAnalysisConfig.containsKey('keep_contralateral_in_cancer') ? (powerAnalysisConfig.keep_contralateral_in_cancer as boolean) : false
+def powerAnalysisContralateralTypesRaw = powerAnalysisConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+def powerAnalysisContralateralTypes = powerAnalysisContralateralTypesRaw instanceof List ?
+    powerAnalysisContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisContralateralTypesRaw.toString().trim()
+def powerAnalysisIndicspeciesDir = powerAnalysisConfig.indicspecies_dir ? resolveOptionalPath(powerAnalysisConfig.indicspecies_dir, configRoot) : indicspeciesOutputDirAbs
+
+def brayPatientAwareConfig = config.bray_patient_aware ?: [:]
+boolean brayPatientAwareRequested = brayPatientAwareConfig.containsKey('enabled') ? (brayPatientAwareConfig.enabled as boolean) : false
+if( brayPatientAwareRequested && !metadataPlotsEnabled ) {
+    exit 1, "bray_patient_aware.enabled requires metadata_plots.enabled to be true"
+}
+boolean brayPatientAwareEnabled = brayPatientAwareRequested
+def brayPatientAwareOutputDir = brayPatientAwareConfig.output_dir ?: 'bray_patient_aware'
+def brayPatientAwareOutputDirAbs = resolveOutputRelative(brayPatientAwareOutputDir.toString(), outputDir)
+def brayPatientAwareSampleCol = brayPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
+def brayPatientAwarePatientCol = brayPatientAwareConfig.patient_col ? brayPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
+def brayPatientAwareCaseCol = brayPatientAwareConfig.case_col ? brayPatientAwareConfig.case_col.toString().trim() : 'Case'
+def brayPatientAwareTypeCol = brayPatientAwareConfig.type_col ?: metadataPlotsTypeCol
+def brayPatientAwareSampleTypesRaw = brayPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
+def brayPatientAwareSampleTypes = brayPatientAwareSampleTypesRaw instanceof List ?
+    brayPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    brayPatientAwareSampleTypesRaw.toString().trim()
+boolean brayPatientAwareExcludeContralateral = brayPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (brayPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
+def brayPatientAwareContralateralCol = brayPatientAwareConfig.contralateral_col ? brayPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
+def brayPatientAwareCancerSiteCol = brayPatientAwareConfig.cancer_site_col ? brayPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+def brayPatientAwareLungSideCol = brayPatientAwareConfig.lung_side_col ? brayPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
+def brayPatientAwareContralateralValue = brayPatientAwareConfig.contralateral_value ? brayPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
+def brayPatientAwareContralateralTypesRaw = brayPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+def brayPatientAwareContralateralTypes = brayPatientAwareContralateralTypesRaw instanceof List ?
+    brayPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    brayPatientAwareContralateralTypesRaw.toString().trim()
+def brayPatientAwareTransform = brayPatientAwareConfig.transform ? brayPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
+if( !['none', 'rclr'].contains(brayPatientAwareTransform) ) {
+    exit 1, "bray_patient_aware.transform must be one of: none, rclr"
+}
+def brayPatientAwarePermutations = brayPatientAwareConfig.permutations ? (brayPatientAwareConfig.permutations as int) : 9999
+def brayPatientAwareSeed = brayPatientAwareConfig.seed ? (brayPatientAwareConfig.seed as int) : 42
+boolean brayPatientAwareRequireCompleteTypes = brayPatientAwareConfig.containsKey('require_complete_types') ? (brayPatientAwareConfig.require_complete_types as boolean) : false
+
+def taxonomyPatientAwareConfig = config.taxonomy_patient_aware ?: [:]
+boolean taxonomyPatientAwareRequested = taxonomyPatientAwareConfig.containsKey('enabled') ? (taxonomyPatientAwareConfig.enabled as boolean) : false
+if( taxonomyPatientAwareRequested && !metadataPlotsEnabled ) {
+    exit 1, "taxonomy_patient_aware.enabled requires metadata_plots.enabled to be true"
+}
+boolean taxonomyPatientAwareEnabled = taxonomyPatientAwareRequested
+def taxonomyPatientAwareOutputDir = taxonomyPatientAwareConfig.output_dir ?: 'taxonomy_patient_aware'
+def taxonomyPatientAwareOutputDirAbs = resolveOutputRelative(taxonomyPatientAwareOutputDir.toString(), outputDir)
+def taxonomyPatientAwareSampleCol = taxonomyPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
+def taxonomyPatientAwarePatientCol = taxonomyPatientAwareConfig.patient_col ? taxonomyPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
+def taxonomyPatientAwareCaseCol = taxonomyPatientAwareConfig.case_col ? taxonomyPatientAwareConfig.case_col.toString().trim() : 'Case'
+def taxonomyPatientAwareTypeCol = taxonomyPatientAwareConfig.type_col ?: metadataPlotsTypeCol
+def taxonomyPatientAwareCountCol = taxonomyPatientAwareConfig.count_col ? taxonomyPatientAwareConfig.count_col.toString().trim() : 'count'
+def taxonomyPatientAwareTaxLevelsRaw = taxonomyPatientAwareConfig.tax_levels ?: 'Phylum,Family'
+def taxonomyPatientAwareTaxLevels = taxonomyPatientAwareTaxLevelsRaw instanceof List ?
+    taxonomyPatientAwareTaxLevelsRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    taxonomyPatientAwareTaxLevelsRaw.toString().trim()
+def taxonomyPatientAwareSampleTypesRaw = taxonomyPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
+def taxonomyPatientAwareSampleTypes = taxonomyPatientAwareSampleTypesRaw instanceof List ?
+    taxonomyPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    taxonomyPatientAwareSampleTypesRaw.toString().trim()
+def taxonomyPatientAwareMinPrevalence = taxonomyPatientAwareConfig.min_prevalence != null ? (taxonomyPatientAwareConfig.min_prevalence as double) : 0.10d
+boolean taxonomyPatientAwareExcludeContralateral = taxonomyPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (taxonomyPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
+def taxonomyPatientAwareContralateralCol = taxonomyPatientAwareConfig.contralateral_col ? taxonomyPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
+def taxonomyPatientAwareCancerSiteCol = taxonomyPatientAwareConfig.cancer_site_col ? taxonomyPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+def taxonomyPatientAwareLungSideCol = taxonomyPatientAwareConfig.lung_side_col ? taxonomyPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
+def taxonomyPatientAwareContralateralValue = taxonomyPatientAwareConfig.contralateral_value ? taxonomyPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
+def taxonomyPatientAwareContralateralTypesRaw = taxonomyPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+def taxonomyPatientAwareContralateralTypes = taxonomyPatientAwareContralateralTypesRaw instanceof List ?
+    taxonomyPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    taxonomyPatientAwareContralateralTypesRaw.toString().trim()
+boolean taxonomyPatientAwareSkipOmnibus = taxonomyPatientAwareConfig.containsKey('skip_omnibus') ? (taxonomyPatientAwareConfig.skip_omnibus as boolean) : false
+def taxonomyPatientAwareTransform = taxonomyPatientAwareConfig.transform ? taxonomyPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
+if( !['none', 'rclr'].contains(taxonomyPatientAwareTransform) ) {
+    exit 1, "taxonomy_patient_aware.transform must be one of: none, rclr"
+}
+def taxonomyPatientAwareAlpha = taxonomyPatientAwareConfig.alpha != null ? (taxonomyPatientAwareConfig.alpha as double) : 0.05d
+def taxonomyPatientAwareTopN = taxonomyPatientAwareConfig.top_n ? (taxonomyPatientAwareConfig.top_n as int) : 12
+
+def lungStatusAnalysisConfig = config.lung_status_analysis ?: [:]
+boolean lungStatusAnalysisRequested = lungStatusAnalysisConfig.containsKey('enabled') ? (lungStatusAnalysisConfig.enabled as boolean) : false
+if( lungStatusAnalysisRequested && !metadataPlotsEnabled ) {
+    exit 1, "lung_status_analysis.enabled requires metadata_plots.enabled to be true"
+}
+boolean lungStatusAnalysisEnabled = lungStatusAnalysisRequested
+def lungStatusAnalysisOutputDir = lungStatusAnalysisConfig.output_dir ?: 'lung_status_analysis'
+def lungStatusAnalysisOutputDirAbs = resolveOutputRelative(lungStatusAnalysisOutputDir.toString(), outputDir)
+def lungStatusAnalysisSampleCol = lungStatusAnalysisConfig.sample_col ?: metadataPlotsSampleCol
+def lungStatusAnalysisTypeCol = lungStatusAnalysisConfig.type_col ?: metadataPlotsTypeCol
+def lungStatusAnalysisSampleTypesRaw = lungStatusAnalysisConfig.sample_types ?: 'Lung Brush,BAL'
+def lungStatusAnalysisSampleTypes = lungStatusAnalysisSampleTypesRaw instanceof List ?
+    lungStatusAnalysisSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    lungStatusAnalysisSampleTypesRaw.toString().trim()
+def lungStatusAnalysisCaseCol = lungStatusAnalysisConfig.case_col ? lungStatusAnalysisConfig.case_col.toString().trim() : 'Case'
+def lungStatusAnalysisPatientCol = lungStatusAnalysisConfig.patient_col ? lungStatusAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
+def lungStatusAnalysisCancerSiteCol = lungStatusAnalysisConfig.cancer_site_col ? lungStatusAnalysisConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+def lungStatusAnalysisLungCodeCol = lungStatusAnalysisConfig.lung_code_col ? lungStatusAnalysisConfig.lung_code_col.toString().trim() : 'lung_code'
+def lungStatusAnalysisTumorSideCol = lungStatusAnalysisConfig.tumor_side_col ? lungStatusAnalysisConfig.tumor_side_col.toString().trim() : 'TumorSide'
+def lungStatusAnalysisContralateralCol = lungStatusAnalysisConfig.contralateral_col ? lungStatusAnalysisConfig.contralateral_col.toString().trim() : 'Contralateral'
+def lungStatusAnalysisHealthyCol = lungStatusAnalysisConfig.healthy_col ? lungStatusAnalysisConfig.healthy_col.toString().trim() : 'Healthy'
+def lungStatusAnalysisStatusCol = lungStatusAnalysisConfig.lung_status_col ? lungStatusAnalysisConfig.lung_status_col.toString().trim() : 'lung_status'
+
 workflow {
     def biochemReady = Channel.value(true)
     if( biochemPreAsvEnabled ) {
@@ -1593,7 +1818,7 @@ def asvFinalForSpieceasi = null
         asvFinalForCollectors = batch_stage.asv_corrected_counts_int
         asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int
         umapResultsForTrajectory = batch_stage.umap_results
-        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled ) {
+        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled || masterSummaryEnabled || powerAnalysisEnabled || brayPatientAwareEnabled || taxonomyPatientAwareEnabled || lungStatusAnalysisEnabled ) {
             def corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
                 asvMetaForClustermaps,
                 batch_stage.asv_corrected_counts_int
@@ -1630,6 +1855,7 @@ def asvFinalForSpieceasi = null
     }
     def indicspecies_stage = null
     def indicspecies_plots_stage = null
+    def indicspecies_aligned_stage = null
     if( indicspeciesEnabled ) {
         indicspecies_stage = INDICSPECIES(
             metaMicroForCollectors,
@@ -1641,6 +1867,11 @@ def asvFinalForSpieceasi = null
                 indicspecies_stage.all_tables.collect()
             )
         }
+        if( indicspeciesAlignedEnabled ) {
+            indicspecies_aligned_stage = INDICSPECIES_ALIGNED_PLOTS(
+                indicspecies_stage.all_tables.collect()
+            )
+        }
     }
     def indicspeciesReadyForClustermaps = indicspeciesEnabled ? indicspecies_stage.done.map { true } : Channel.value(false)
     if( clustermapsEnabled ) {
@@ -1648,6 +1879,31 @@ def asvFinalForSpieceasi = null
             asvMetaForClustermaps,
             metaMicroForCollectors,
             indicspeciesReadyForClustermaps
+        )
+    }
+    if( powerAnalysisEnabled ) {
+        POWER_ANALYSIS_PIPELINE(
+            asvMetaForClustermaps,
+            asvFinalForCollectors,
+            indicspeciesReadyForClustermaps
+        )
+    }
+    if( brayPatientAwareEnabled ) {
+        BRAY_PATIENT_AWARE(
+            asvMetaForClustermaps,
+            asvFinalForCollectors
+        )
+    }
+    if( taxonomyPatientAwareEnabled ) {
+        TAXONOMY_PATIENT_AWARE(
+            asvMetaForClustermaps,
+            asvFinalForCollectors
+        )
+    }
+    if( lungStatusAnalysisEnabled ) {
+        LUNG_STATUS_ANALYSIS(
+            asvMetaForClustermaps,
+            asvFinalForCollectors
         )
     }
     def spieceasi_stage = null
@@ -3742,6 +3998,402 @@ for g1_file, g2_file in pair_iter:
 PY
 
 touch indicspecies_plots.done
+"""
+}
+
+process INDICSPECIES_ALIGNED_PLOTS {
+    cpus pipelineThreads
+    conda "${indicspeciesCondaEnvPath}"
+
+    when:
+    indicspeciesEnabled && indicspeciesAlignedEnabled
+
+    input:
+    path(indicspecies_tables)
+
+    output:
+    path("indicspecies_aligned.done"), emit: done
+
+    script:
+    """
+set -euo pipefail
+mkdir -p "${indicspeciesAlignedOutputDirAbs}"
+mkdir -p aligned_indicspecies_input
+
+for src in *.tsv; do
+  [[ -f "\${src}" ]] || continue
+  ln -sf "\$(realpath "\${src}")" "aligned_indicspecies_input/\$(basename "\${src}")"
+done
+
+python "${plotIndicspeciesAlignedScriptPath}" \\
+  --indicspecies-dir aligned_indicspecies_input \\
+  --outdir "${indicspeciesAlignedOutputDirAbs}" \\
+  --alpha ${indicspeciesAlignedAlpha} \\
+  --min-stat ${indicspeciesAlignedMinStat} \\
+  --top-n ${indicspeciesAlignedTopN}
+
+touch indicspecies_aligned.done
+"""
+}
+
+process POWER_ANALYSIS_PIPELINE {
+    cpus pipelineThreads
+    conda "${powerAnalysisCondaEnvPath}"
+
+    when:
+    powerAnalysisEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+    val(indicspecies_ready)
+
+    output:
+    path("power_analysis.done"), emit: done
+
+    script:
+    def skipEstimateFlag = powerAnalysisSkipEstimate ? '1' : '0'
+    def skipPlotFlag = powerAnalysisSkipPlot ? '1' : '0'
+    def keepContralateralFlag = powerAnalysisKeepContralateralInCancer ? '1' : '0'
+    """
+set -euo pipefail
+mkdir -p "${powerAnalysisOutputDirAbs}"
+
+SUMMARY_INPUT_DIR="power_analysis_inputs"
+mkdir -p "\${SUMMARY_INPUT_DIR}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${clustermapsOutputDirAbs}" \\
+  --indicspecies-dir "${powerAnalysisIndicspeciesDir}" \\
+  --spieceasi-dir "${spieceasiOutputDirAbs}" \\
+  --outdir "\${SUMMARY_INPUT_DIR}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+if [[ ! -f "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" ]]; then
+  echo "Missing expected power-analysis input: \${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" >&2
+  exit 1
+fi
+
+POWER_INDICSPECIES_ARGS=()
+if [[ -d "${powerAnalysisIndicspeciesDir}" ]]; then
+  POWER_INDICSPECIES_ARGS=(--indicspecies-dir "${powerAnalysisIndicspeciesDir}")
+fi
+
+POWER_SKIP_ARGS=()
+if [[ "${skipEstimateFlag}" == "1" ]]; then
+  POWER_SKIP_ARGS+=(--skip-estimate)
+fi
+if [[ "${skipPlotFlag}" == "1" ]]; then
+  POWER_SKIP_ARGS+=(--skip-plot)
+fi
+
+POWER_CONTRALATERAL_ARGS=()
+if [[ "${keepContralateralFlag}" == "1" ]]; then
+  POWER_CONTRALATERAL_ARGS+=(--keep-contralateral-in-cancer)
+fi
+
+bash "${powerAnalysisScriptPath}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --data-wide "${asv_counts}" \\
+  --outdir "${powerAnalysisOutputDirAbs}" \\
+  --sample-col "${powerAnalysisSampleCol}" \\
+  --patient-col "${powerAnalysisPatientCol}" \\
+  --case-col "${powerAnalysisCaseCol}" \\
+  --type-col "${powerAnalysisTypeCol}" \\
+  --sample-sizes-cancer "${powerAnalysisSampleSizesCancer}" \\
+  --sample-sizes-stype "${powerAnalysisSampleSizesStype}" \\
+  --n-control ${powerAnalysisNControl} \\
+  --n-simulations ${powerAnalysisNSimulations} \\
+  --n-perm ${powerAnalysisNPerm} \\
+  --alpha ${powerAnalysisAlpha} \\
+  --seed ${powerAnalysisSeed} \\
+  --transform "${powerAnalysisTransform}" \\
+  --contralateral-sample-types "${powerAnalysisContralateralTypes}" \\
+  "\${POWER_SKIP_ARGS[@]}" \\
+  "\${POWER_CONTRALATERAL_ARGS[@]}" \\
+  "\${POWER_INDICSPECIES_ARGS[@]}"
+
+touch power_analysis.done
+"""
+}
+
+process BRAY_PATIENT_AWARE {
+    cpus pipelineThreads
+    conda "${brayPatientAwareCondaEnvPath}"
+
+    when:
+    brayPatientAwareEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+
+    output:
+    path("bray_patient_aware.done"), emit: done
+
+    script:
+    def excludeContralateralFlag = brayPatientAwareExcludeContralateral ? '1' : '0'
+    def requireCompleteTypesFlag = brayPatientAwareRequireCompleteTypes ? '1' : '0'
+    """
+set -euo pipefail
+mkdir -p "${brayPatientAwareOutputDirAbs}"
+
+SUMMARY_INPUT_DIR="bray_patient_aware_inputs"
+mkdir -p "\${SUMMARY_INPUT_DIR}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${clustermapsOutputDirAbs}" \\
+  --indicspecies-dir "${indicspeciesOutputDirAbs}" \\
+  --spieceasi-dir "${spieceasiOutputDirAbs}" \\
+  --outdir "\${SUMMARY_INPUT_DIR}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+if [[ ! -f "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" ]]; then
+  echo "Missing expected Bray patient-aware input: \${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" >&2
+  exit 1
+fi
+
+BRAY_CONTRALATERAL_ARGS=()
+if [[ "${excludeContralateralFlag}" == "1" ]]; then
+  BRAY_CONTRALATERAL_ARGS+=(--exclude-contralateral-in-cancer TRUE)
+else
+  BRAY_CONTRALATERAL_ARGS+=(--exclude-contralateral-in-cancer FALSE)
+fi
+
+BRAY_COMPLETENESS_ARGS=()
+if [[ "${requireCompleteTypesFlag}" == "1" ]]; then
+  BRAY_COMPLETENESS_ARGS+=(--require-complete-types)
+fi
+
+Rscript "${brayPatientAwareScriptPath}" \\
+  --data-wide "${asv_counts}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --sample-col "${brayPatientAwareSampleCol}" \\
+  --patient-col "${brayPatientAwarePatientCol}" \\
+  --case-col "${brayPatientAwareCaseCol}" \\
+  --type-col "${brayPatientAwareTypeCol}" \\
+  --sample-types "${brayPatientAwareSampleTypes}" \\
+  --contralateral-col "${brayPatientAwareContralateralCol}" \\
+  --cancer-site-col "${brayPatientAwareCancerSiteCol}" \\
+  --lung-side-col "${brayPatientAwareLungSideCol}" \\
+  --contralateral-value "${brayPatientAwareContralateralValue}" \\
+  --contralateral-sample-types "${brayPatientAwareContralateralTypes}" \\
+  --transform "${brayPatientAwareTransform}" \\
+  --permutations ${brayPatientAwarePermutations} \\
+  --seed ${brayPatientAwareSeed} \\
+  --outdir "${brayPatientAwareOutputDirAbs}" \\
+  "\${BRAY_CONTRALATERAL_ARGS[@]}" \\
+  "\${BRAY_COMPLETENESS_ARGS[@]}"
+
+python "${plotBrayPatientAwareScriptPath}" \\
+  --indir "${brayPatientAwareOutputDirAbs}" \\
+  --outdir "${brayPatientAwareOutputDirAbs}/figures"
+
+touch bray_patient_aware.done
+"""
+}
+
+process TAXONOMY_PATIENT_AWARE {
+    cpus pipelineThreads
+    conda "${taxonomyPatientAwareCondaEnvPath}"
+
+    when:
+    taxonomyPatientAwareEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+
+    output:
+    path("taxonomy_patient_aware.done"), emit: done
+
+    script:
+    def excludeContralateralFlag = taxonomyPatientAwareExcludeContralateral ? '1' : '0'
+    def skipOmnibusFlag = taxonomyPatientAwareSkipOmnibus ? '1' : '0'
+    """
+set -euo pipefail
+mkdir -p "${taxonomyPatientAwareOutputDirAbs}"
+
+SUMMARY_INPUT_DIR="taxonomy_patient_aware_inputs"
+mkdir -p "\${SUMMARY_INPUT_DIR}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${clustermapsOutputDirAbs}" \\
+  --indicspecies-dir "${indicspeciesOutputDirAbs}" \\
+  --spieceasi-dir "${spieceasiOutputDirAbs}" \\
+  --outdir "\${SUMMARY_INPUT_DIR}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+if [[ ! -f "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" ]]; then
+  echo "Missing expected taxonomy patient-aware input: \${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" >&2
+  exit 1
+fi
+
+TAXONOMY_CONTRALATERAL_ARGS=()
+if [[ "${excludeContralateralFlag}" == "1" ]]; then
+  TAXONOMY_CONTRALATERAL_ARGS+=(--exclude-contralateral-in-cancer)
+else
+  TAXONOMY_CONTRALATERAL_ARGS+=(--keep-contralateral-in-cancer)
+fi
+
+TAXONOMY_OMNIBUS_ARGS=()
+if [[ "${skipOmnibusFlag}" == "1" ]]; then
+  TAXONOMY_OMNIBUS_ARGS+=(--skip-omnibus)
+fi
+
+CANCER_OUTDIR="${taxonomyPatientAwareOutputDirAbs}/cancer_vs_control"
+SAMPLETYPE_OUTDIR="${taxonomyPatientAwareOutputDirAbs}/sample_type"
+FIGURES_OUTDIR="${taxonomyPatientAwareOutputDirAbs}/figures"
+mkdir -p "\${CANCER_OUTDIR}" "\${SAMPLETYPE_OUTDIR}" "\${FIGURES_OUTDIR}"
+
+python "${taxonomicAbundanceObservedScriptPath}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --tax-levels "${taxonomyPatientAwareTaxLevels}" \\
+  --sample-types "${taxonomyPatientAwareSampleTypes}" \\
+  --sample-col "${taxonomyPatientAwareSampleCol}" \\
+  --patient-col "${taxonomyPatientAwarePatientCol}" \\
+  --case-col "${taxonomyPatientAwareCaseCol}" \\
+  --type-col "${taxonomyPatientAwareTypeCol}" \\
+  --count-col "${taxonomyPatientAwareCountCol}" \\
+  --min-prevalence ${taxonomyPatientAwareMinPrevalence} \\
+  --contralateral-col "${taxonomyPatientAwareContralateralCol}" \\
+  --cancer-site-col "${taxonomyPatientAwareCancerSiteCol}" \\
+  --lung-side-col "${taxonomyPatientAwareLungSideCol}" \\
+  --contralateral-value "${taxonomyPatientAwareContralateralValue}" \\
+  --contralateral-sample-types "${taxonomyPatientAwareContralateralTypes}" \\
+  --transform "${taxonomyPatientAwareTransform}" \\
+  --outdir "\${CANCER_OUTDIR}" \\
+  "\${TAXONOMY_CONTRALATERAL_ARGS[@]}"
+
+python "${taxonomicSampleTypeObservedScriptPath}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --tax-levels "${taxonomyPatientAwareTaxLevels}" \\
+  --sample-types "${taxonomyPatientAwareSampleTypes}" \\
+  --sample-col "${taxonomyPatientAwareSampleCol}" \\
+  --patient-col "${taxonomyPatientAwarePatientCol}" \\
+  --case-col "${taxonomyPatientAwareCaseCol}" \\
+  --type-col "${taxonomyPatientAwareTypeCol}" \\
+  --count-col "${taxonomyPatientAwareCountCol}" \\
+  --min-prevalence ${taxonomyPatientAwareMinPrevalence} \\
+  --contralateral-col "${taxonomyPatientAwareContralateralCol}" \\
+  --cancer-site-col "${taxonomyPatientAwareCancerSiteCol}" \\
+  --lung-side-col "${taxonomyPatientAwareLungSideCol}" \\
+  --contralateral-value "${taxonomyPatientAwareContralateralValue}" \\
+  --contralateral-sample-types "${taxonomyPatientAwareContralateralTypes}" \\
+  --transform "${taxonomyPatientAwareTransform}" \\
+  --outdir "\${SAMPLETYPE_OUTDIR}" \\
+  "\${TAXONOMY_CONTRALATERAL_ARGS[@]}" \\
+  "\${TAXONOMY_OMNIBUS_ARGS[@]}"
+
+python "${plotTaxonomicObservedScriptPath}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --cancer-results "\${CANCER_OUTDIR}/taxonomic_abundance_observed.tsv" \\
+  --sampletype-results "\${SAMPLETYPE_OUTDIR}/taxonomic_sample_type_observed_pairwise.tsv" \\
+  --outdir "\${FIGURES_OUTDIR}" \\
+  --alpha ${taxonomyPatientAwareAlpha} \\
+  --top-n ${taxonomyPatientAwareTopN} \\
+  --sample-col "${taxonomyPatientAwareSampleCol}" \\
+  --patient-col "${taxonomyPatientAwarePatientCol}" \\
+  --type-col "${taxonomyPatientAwareTypeCol}" \\
+  --case-col "${taxonomyPatientAwareCaseCol}" \\
+  --count-col "${taxonomyPatientAwareCountCol}"
+
+touch taxonomy_patient_aware.done
+"""
+}
+
+process LUNG_STATUS_ANALYSIS {
+    cpus pipelineThreads
+    conda "${lungStatusAnalysisCondaEnvPath}"
+
+    when:
+    lungStatusAnalysisEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+
+    output:
+    path("lung_status_analysis.done"), emit: done
+
+    script:
+    """
+set -euo pipefail
+mkdir -p "${lungStatusAnalysisOutputDirAbs}"
+
+SUMMARY_INPUT_DIR="lung_status_analysis_inputs"
+mkdir -p "\${SUMMARY_INPUT_DIR}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${clustermapsOutputDirAbs}" \\
+  --indicspecies-dir "${indicspeciesOutputDirAbs}" \\
+  --spieceasi-dir "${spieceasiOutputDirAbs}" \\
+  --outdir "\${SUMMARY_INPUT_DIR}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+if [[ ! -f "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" ]]; then
+  echo "Missing expected lung-status input: \${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" >&2
+  exit 1
+fi
+
+IFS=',' read -r -a LUNG_SAMPLE_TYPES <<< "${lungStatusAnalysisSampleTypes}"
+for sample_type in "\${LUNG_SAMPLE_TYPES[@]}"; do
+  sample_type="\$(echo "\${sample_type}" | sed 's/^ *//; s/ *$//')"
+  [[ -n "\${sample_type}" ]] || continue
+  sample_slug="\${sample_type// /_}"
+  sample_root="${lungStatusAnalysisOutputDirAbs}/\${sample_slug}"
+  data_dir="\${sample_root}/data"
+  results_dir="\${sample_root}/results"
+  figures_dir="\${sample_root}/figures"
+  mkdir -p "\${data_dir}" "\${results_dir}" "\${figures_dir}"
+
+  python "${prepareLungStatusScriptPath}" \\
+    --input "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+    --sample-type "\${sample_type}" \\
+    --sample-col "${lungStatusAnalysisSampleCol}" \\
+    --type-col "${lungStatusAnalysisTypeCol}" \\
+    --case-col "${lungStatusAnalysisCaseCol}" \\
+    --patient-col "${lungStatusAnalysisPatientCol}" \\
+    --cancer-site-col "${lungStatusAnalysisCancerSiteCol}" \\
+    --lung-code-col "${lungStatusAnalysisLungCodeCol}" \\
+    --tumor-side-col "${lungStatusAnalysisTumorSideCol}" \\
+    --contralateral-col "${lungStatusAnalysisContralateralCol}" \\
+    --healthy-col "${lungStatusAnalysisHealthyCol}" \\
+    --lung-status-col "${lungStatusAnalysisStatusCol}" \\
+    --outdir "\${data_dir}"
+
+  meta_file="\$(find "\${data_dir}" -maxdepth 1 -name '*_metadata.tsv' | head -n 1)"
+  asv_file="\$(find "\${data_dir}" -maxdepth 1 -name '*_ASV_table.tsv' | head -n 1)"
+  if [[ -z "\${meta_file}" || -z "\${asv_file}" ]]; then
+    echo "Missing prepared lung-status inputs for sample type: \${sample_type}" >&2
+    exit 1
+  fi
+
+  Rscript "${lungStatusAnalysisScriptPath}" "\${meta_file}" "\${asv_file}" "\${results_dir}"
+
+  python "${plotLungStatusScriptPath}" \\
+    --metadata "\${meta_file}" \\
+    --patient-level "\${results_dir}/patient_level_metadata.tsv" \\
+    --distances "\${results_dir}/patient_level_bray_distances.tsv" \\
+    --summary "\${results_dir}/lung_status_contrasts_summary.tsv" \\
+    --pairdist-a "\${results_dir}/contrast_A_pairwise_distances.tsv" \\
+    --asv-table "\${asv_file}" \\
+    --outdir "\${figures_dir}"
+done
+
+touch lung_status_analysis.done
 """
 }
 

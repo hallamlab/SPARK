@@ -334,8 +334,89 @@ indicspecies:
   plot_enabled: true
   plot_pairs_mode: all
   plot_output_dir: indicspecies/plots
+  aligned_plot_enabled: false
+  aligned_plot_output_dir: indicspecies/aligned
+  aligned_alpha: 0.05
+  aligned_min_stat: 0.0
+  aligned_top_n: 25
   venn:
   taxonomy: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
+
+power_analysis:
+  enabled: false
+  output_dir: power_analysis
+  sample_col: sampleID
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: Depth
+  sample_sizes_cancer: 6,8,10,15,20,25,30
+  sample_sizes_stype: 10,15,20,25,30,40,50
+  n_control: 25
+  n_simulations: 1000
+  n_perm: 199
+  alpha: 0.05
+  seed: 42
+  skip_estimate: false
+  skip_plot: false
+  transform: none
+  keep_contralateral_in_cancer: false
+  contralateral_sample_types: 20m,50m
+
+bray_patient_aware:
+  enabled: false
+  output_dir: bray_patient_aware
+  sample_col: sampleID
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: Depth
+  sample_types: 20m,50m,150m
+  exclude_contralateral_in_cancer: false
+  contralateral_col: lung_status
+  cancer_site_col: Cancer_Site
+  lung_side_col: lung_code
+  contralateral_value: Contralateral
+  contralateral_sample_types: 20m,50m
+  transform: none
+  permutations: 9999
+  seed: 42
+  require_complete_types: false
+
+taxonomy_patient_aware:
+  enabled: false
+  output_dir: taxonomy_patient_aware
+  sample_col: sampleID
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: Depth
+  count_col: count
+  tax_levels: Phylum,Family
+  sample_types: 20m,50m,150m
+  min_prevalence: 0.10
+  exclude_contralateral_in_cancer: false
+  contralateral_col: lung_status
+  cancer_site_col: Cancer_Site
+  lung_side_col: lung_code
+  contralateral_value: Contralateral
+  contralateral_sample_types: 20m,50m
+  skip_omnibus: false
+  transform: none
+  alpha: 0.05
+  top_n: 12
+
+lung_status_analysis:
+  enabled: false
+  output_dir: lung_status_analysis
+  sample_col: sampleID
+  type_col: Depth
+  sample_types: 20m,50m
+  case_col: Case
+  patient_col: Participant_ID
+  cancer_site_col: Cancer_Site
+  lung_code_col: lung_code
+  tumor_side_col: TumorSide
+  contralateral_col: Contralateral
+  healthy_col: Healthy
+  lung_status_col: lung_status
 
 clustermaps:
   enabled: true
@@ -489,6 +570,9 @@ environments:
   diversity: envs/advanced.yml
   indicspecies: envs/advanced.yml
   clustermaps: envs/advanced.yml
+  bray_patient_aware: envs/advanced.yml
+  taxonomy_patient_aware: envs/advanced.yml
+  lung_status_analysis: envs/advanced.yml
   spieceasi: envs/advanced.yml
   network_modules: envs/advanced.yml
   network: envs/advanced.yml
