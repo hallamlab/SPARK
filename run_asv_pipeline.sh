@@ -56,6 +56,7 @@ PROCESS_ORDER=(
   NETWORK_MODULES
   GRAPH_NETWORK
   SANKEY
+  MASTER_SUMMARY
 )
 
 usage() {
@@ -392,4 +393,10 @@ else
   echo "[controller] Resume disabled for this run (--no-resume)."
 fi
 
-nextflow run "${SCRIPT_DIR}/asv_pipeline.nf" --params-file "$CONFIG_FILE" "${RESUME_ARGS[@]}" -w "$NXF_WORK" "${NEXTFLOW_ARGS[@]}"
+SPARK_PIPELINE_CONFIG="$CONFIG_FILE" \
+nextflow run "${SCRIPT_DIR}/asv_pipeline.nf" \
+  --params-file "$CONFIG_FILE" \
+  --pipeline_config "$CONFIG_FILE" \
+  "${RESUME_ARGS[@]}" \
+  -w "$NXF_WORK" \
+  "${NEXTFLOW_ARGS[@]}"

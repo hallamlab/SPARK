@@ -49,6 +49,7 @@ reports/
 # -----------------------------
 # OS/editor noise
 # -----------------------------
+.vscode/
 .DS_Store
 *.swp
 *.swo

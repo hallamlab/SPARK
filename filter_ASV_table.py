@@ -16,10 +16,19 @@ count_df = pd.read_csv(count_table, sep='\t', header=0, index_col=0)
 # Filter samples by total count
 low_filter_df = count_df.loc[:, count_df.sum() >= count_threshold]
 
-# Filter ASVs by relative abundance
-abund_filter_df = low_filter_df.loc[
-    (low_filter_df.sum(axis=1) / low_filter_df.values.sum()) * 100 >= asv_abund_threshold
-]
+# Filter ASVs by per-sample relative abundance (%).
+# Keep an ASV if it reaches the threshold in at least one retained sample.
+sample_totals = low_filter_df.sum(axis=0)
+nonzero_samples = sample_totals > 0
+
+if nonzero_samples.any():
+    per_sample_rel_abund = low_filter_df.loc[:, nonzero_samples].div(
+        sample_totals[nonzero_samples], axis=1
+    ) * 100
+    keep_asvs = per_sample_rel_abund.ge(asv_abund_threshold).any(axis=1)
+    abund_filter_df = low_filter_df.loc[keep_asvs]
+else:
+    abund_filter_df = low_filter_df.iloc[0:0]
 
 # Filter ASVs that are all 0s
 filter_0s = low_filter_df > 0

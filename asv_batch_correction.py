@@ -24,6 +24,7 @@ Quickstart:
 """
 from __future__ import annotations
 import argparse
+import os
 import shutil
 import subprocess
 import tempfile
@@ -65,7 +66,7 @@ plt.rcParams.update({
 })
 sns.set_style("white")
 
-SAMPLE_ID_COL = 'sampleID'
+DEFAULT_SAMPLE_ID_COL = 'sampleID'
 
 
 def _sorted_non_null_unique(series: pd.Series) -> List:
@@ -180,16 +181,34 @@ def _run_conqur_r(
             auto_install     <- as.integer(args[[15]]) == 1
             seed             <- as.integer(args[[16]])
 
+            r_lib_user <- Sys.getenv("R_LIBS_USER", unset = "")
+            if (nchar(r_lib_user) > 0) {
+              dir.create(r_lib_user, recursive = TRUE, showWarnings = FALSE)
+              .libPaths(c(r_lib_user, .libPaths()))
+            }
+
             if (auto_install) {
+              lib_primary <- .libPaths()[1]
+              for (lock_name in c("00LOCK-ConQuR", "00LOCK-remotes", "00LOCK-foreach")) {
+                lock_path <- file.path(lib_primary, lock_name)
+                if (dir.exists(lock_path)) {
+                  unlink(lock_path, recursive = TRUE, force = TRUE)
+                }
+              }
               repos <- "https://cloud.r-project.org"
               if (!requireNamespace("remotes", quietly = TRUE)) {
-                install.packages("remotes", repos = repos)
+                install.packages("remotes", repos = repos, lib = lib_primary)
               }
               if (!requireNamespace("foreach", quietly = TRUE)) {
-                install.packages("foreach", repos = repos)
+                install.packages("foreach", repos = repos, lib = lib_primary)
               }
               if (!requireNamespace("ConQuR", quietly = TRUE)) {
-                remotes::install_github("wdl2459/ConQuR", dependencies = TRUE, upgrade = "never")
+                remotes::install_github(
+                  "wdl2459/ConQuR",
+                  dependencies = TRUE,
+                  upgrade = "never",
+                  lib = lib_primary
+                )
               }
             }
 
@@ -322,7 +341,11 @@ def _run_conqur_r(
             "1" if auto_install else "0",
             str(int(random_state)),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        run_env = os.environ.copy()
+        r_lib_user = td_path / "r_libs_user"
+        r_lib_user.mkdir(parents=True, exist_ok=True)
+        run_env["R_LIBS_USER"] = str(r_lib_user)
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=run_env)
         if proc.returncode != 0:
             raise RuntimeError(
                 "ConQuR correction failed.\n"
@@ -534,7 +557,11 @@ def _largest_remainder_integerize_rows(
     """
     n_rows, n_cols = values.shape
     out = np.zeros((n_rows, n_cols), dtype=np.int64)
-    target_totals = np.asarray(np.rint(target_totals), dtype=np.int64).reshape(-1)
+    safe_targets = np.asarray(np.rint(target_totals), dtype=float).reshape(-1)
+    safe_targets[~np.isfinite(safe_targets)] = 0.0
+    int64_max = float(np.iinfo(np.int64).max)
+    safe_targets = np.clip(safe_targets, 0.0, int64_max)
+    target_totals = safe_targets.astype(np.int64)
     if target_totals.shape[0] != n_rows:
         raise ValueError("target_totals length does not match values rows")
 
@@ -587,13 +614,22 @@ def export_corrected_abundance_table(
         )
 
     corrected_samples = corrected_counts.copy()
-    corrected_samples = corrected_samples.apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+    corrected_samples = corrected_samples.apply(pd.to_numeric, errors="coerce")
+    corrected_samples = corrected_samples.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
     corrected = corrected_samples.to_numpy(dtype=float)
 
     # Integerize to count-like values while preserving corrected sample totals.
     lib_size = corrected.sum(axis=1, keepdims=True)
     raw_lib_size = asv_raw_counts.to_numpy(dtype=float).sum(axis=1, keepdims=True)
-    lib_size = np.where(lib_size <= 0, raw_lib_size, lib_size)
+    int64_max = float(np.iinfo(np.int64).max)
+    bad_lib = (~np.isfinite(lib_size)) | (lib_size <= 0) | (lib_size > int64_max)
+    if np.any(bad_lib):
+        n_bad = int(np.sum(bad_lib))
+        print(
+            f"  [w] {n_bad} sample totals were invalid/overflow-prone after correction; "
+            "using raw library sizes for integer pseudo-count export."
+        )
+    lib_size = np.where(bad_lib, raw_lib_size, lib_size)
     lib_size[lib_size <= 0] = 1.0
 
     comp = corrected / lib_size
@@ -2225,9 +2261,9 @@ def plot_countspace_preservation(
     if len(common_samples) == 0 or len(common_features) == 0:
         raise ValueError("No overlap across raw/float/pseudocount tables for preservation diagnostics.")
 
-    raw = raw_counts.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-    cor_f = corrected_counts_float.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-    cor_p = corrected_counts_pseudo.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    raw = raw_counts.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+    cor_f = corrected_counts_float.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
+    cor_p = corrected_counts_pseudo.loc[common_samples, common_features].apply(pd.to_numeric, errors="coerce").fillna(0.0).clip(lower=0.0)
 
     batch = batch.reindex(common_samples).astype(str)
     bio = None
@@ -2414,6 +2450,8 @@ def main():
                         help="Path to metadata TSV")
     parser.add_argument("--asv-meta", type=str, required=True,
                         help="Path to asv + metadata TSV")    
+    parser.add_argument("--sample-id-col", type=str, default=DEFAULT_SAMPLE_ID_COL,
+                        help="Sample ID column name in metadata")
     parser.add_argument("--batch-col", required=True,
                         help="Batch column name in metadata")
     parser.add_argument("--output-dir", type=str, required=True,
@@ -2532,7 +2570,7 @@ def main():
     # Load data
     print("[1/9] Loading data...")
     asv_raw = load_asv_table(asv_path, args.asv_orientation)
-    meta_index_col = SAMPLE_ID_COL
+    meta_index_col = args.sample_id_col
     metadata = load_metadata(meta_path, meta_index_col)
     
     asv_meta = pd.read_csv(asv_meta_path, sep="\t", header=0)
@@ -2654,10 +2692,38 @@ def main():
     asv_clr_before.to_csv(out_dir / "asv_clr_before_correction.tsv", sep="\t")
     asv_clr_after.to_csv(out_dir / "asv_clr_after_correction.tsv", sep="\t")
     print(f"  [✓] Saved CLR-transformed data (before/after)")
-    asv_clr_after_stack =  asv_clr_after.stack().reset_index()
-    asv_clr_after_stack.columns = ['longID', 'ASV_ID', 'batch_corrected_clr']
-    
-    asv_clr_after_stack = asv_meta.merge(asv_clr_after_stack, on=['ASV_ID', 'longID'], how='left')
+    asv_clr_after_stack = asv_clr_after.stack().reset_index()
+    asv_clr_after_stack.columns = [meta_index_col, 'ASV_ID', 'batch_corrected_clr']
+
+    # Use configured sample-id column for merge, with legacy fallback for older ASV-meta files.
+    join_sample_col = meta_index_col
+    if join_sample_col not in asv_meta.columns:
+        legacy_candidates = [DEFAULT_SAMPLE_ID_COL, "longID", "sample"]
+        legacy_col = next((c for c in legacy_candidates if c in asv_meta.columns), None)
+        if legacy_col is None:
+            raise ValueError(
+                f"ASV metadata is missing sample column '{join_sample_col}'. "
+                f"Available columns: {list(asv_meta.columns)}"
+            )
+        print(
+            f"  [w] ASV metadata missing '{join_sample_col}'; using legacy sample column '{legacy_col}'"
+        )
+        asv_meta = asv_meta.rename(columns={legacy_col: join_sample_col})
+
+    if "ASV_ID" not in asv_meta.columns:
+        raise ValueError(
+            f"ASV metadata is missing required column 'ASV_ID'. "
+            f"Available columns: {list(asv_meta.columns)}"
+        )
+
+    asv_meta[join_sample_col] = asv_meta[join_sample_col].astype(str)
+    asv_meta["ASV_ID"] = asv_meta["ASV_ID"].astype(str)
+    asv_clr_after_stack[join_sample_col] = asv_clr_after_stack[join_sample_col].astype(str)
+    asv_clr_after_stack["ASV_ID"] = asv_clr_after_stack["ASV_ID"].astype(str)
+
+    asv_clr_after_stack = asv_meta.merge(
+        asv_clr_after_stack, on=["ASV_ID", join_sample_col], how="left"
+    )
     asv_clr_after_stack.to_csv(out_dir / "asv_clr_after_correction_with_metadata.tsv", sep="\t", index=False)
     print(f"  [✓] Saved CLR-transformed data with ASV metadata")
 

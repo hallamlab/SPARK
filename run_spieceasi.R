@@ -25,9 +25,9 @@ opt_list <- list(
 
   # Filtering
   make_option("--min-rel-abund", type="double", default=0.0, dest="min_rel_abund",
-              help="Keep ASVs reaching at least this relative abundance in >=1 sample [default %default]."),
+              help="Keep ASVs reaching at least this relative abundance in >=1 sample. Accepts fraction (0-1) or percent (0-100) [default %default]."),
   make_option("--min-prevalence", type="double", default=0.0, dest="min_prevalence",
-              help="Keep ASVs present in at least this fraction of samples [0-1] [default %default]."),
+              help="Keep ASVs present in at least this prevalence threshold. Accepts fraction (0-1) or percent (0-100) [default %default]."),
   make_option("--remove-zero-var", type="logical", default=TRUE, dest="remove_zero_var",
               help="Drop ASVs with zero variance after filtering [default %default]."),
 
@@ -99,6 +99,28 @@ dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 msg <- function(...) cat(sprintf("[%s] %s\n", format(Sys.time(), "%H:%M:%S"), sprintf(...)))
 load_if_exists <- function(path) if (file.exists(path)) readRDS(path) else FALSE
 save_csv <- function(x, path) { write.csv(x, path, row.names = FALSE); msg("Wrote %s", path) }
+
+normalize_fraction_threshold <- function(x, label) {
+  if (!is.finite(x)) {
+    stop(sprintf("%s must be a finite number.", label), call. = FALSE)
+  }
+  if (x < 0) {
+    stop(sprintf("%s must be >= 0.", label), call. = FALSE)
+  }
+  if (x > 1 && x <= 100) {
+    x_old <- x
+    x <- x / 100
+    msg("%s interpreted as percent: %.6g -> %.6g", label, x_old, x)
+    return(x)
+  }
+  if (x > 100) {
+    stop(sprintf("%s=%.6g is out of range. Use fraction (0-1) or percent (0-100).", label, x), call. = FALSE)
+  }
+  x
+}
+
+opt$min_rel_abund <- normalize_fraction_threshold(opt$min_rel_abund, "--min-rel-abund")
+opt$min_prevalence <- normalize_fraction_threshold(opt$min_prevalence, "--min-prevalence")
 
 safe_clr <- function(x, margin = 1) {
   x <- as.matrix(x)

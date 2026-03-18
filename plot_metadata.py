@@ -143,7 +143,12 @@ def save_mat(df: pd.DataFrame, path: Path) -> None:
 
 
 # ========= Core helpers =========
-def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Sequence[str]]) -> pd.DataFrame:
+def read_metadata(
+    meta_path: Path,
+    meta_sample_col: str,
+    keep_types: Optional[Sequence[str]],
+    type_col: str = "type_group",
+) -> pd.DataFrame:
     df = pd.read_csv(meta_path, sep='\t', header=0)
     # Derive status if present
     if 'Case' in df.columns:
@@ -157,8 +162,9 @@ def read_metadata(meta_path: Path, meta_sample_col: str, keep_types: Optional[Se
         df['type_code'] = df['type_group'].astype(str).str[:2]
     if 'Type' in df.columns:
         df['lung_code'] = df['Type'].astype(str).str[0].where(lambda s: s.isin(['R', 'L']), other='N')
-    if keep_types is not None and 'type_group' in df.columns:
-        df = df[df['type_group'].isin(keep_types)].copy()
+    # Empty keep_types means "no filter"; only filter when non-empty list is provided.
+    if keep_types and type_col in df.columns:
+        df = df[df[type_col].isin(keep_types)].copy()
     if meta_sample_col in df.columns:
         df[meta_sample_col] = df[meta_sample_col].astype('string').str.strip()
         df = df[df[meta_sample_col].notna() & (df[meta_sample_col] != '')].copy()
@@ -435,6 +441,11 @@ def correct_counts_against_controls(asv_meta: pd.DataFrame, meta: pd.DataFrame,
 
 def presence_shared_percent(count_mat: pd.DataFrame) -> pd.DataFrame:
     """Presence/absence Jaccard * 100 from count matrix (ASVs x samples)."""
+    if count_mat.shape[1] == 0:
+        return pd.DataFrame()
+    if count_mat.shape[0] == 0:
+        cols = count_mat.columns
+        return pd.DataFrame(0.0, index=cols, columns=cols)
     pa = (count_mat > 0).astype(int)
     shared = pa.T.dot(pa)
     n = pa.sum()
@@ -452,9 +463,11 @@ def clustermap_shared_percent(
     shared_pct: pd.DataFrame,
     col_legend_df: pd.DataFrame,
     row_legend_df: pd.DataFrame,
-    col_palette: Dict[int, str],
+    col_palette: Dict[str, str],
     out_svg: Path,
     out_pdf: Path,
+    legend_order: Optional[Sequence[str]] = None,
+    legend_title: str = "Group",
     cmap=None,
 ) -> None:
     cmap = cmap or build_greys_cmap()
@@ -472,11 +485,20 @@ def clustermap_shared_percent(
     g.ax_heatmap.tick_params(axis='x', bottom=True, labelbottom=True)
     g.ax_heatmap.tick_params(axis='x', which='both', length=5)
     
-    # Create legend with Depth values as labels
-    handles = [Patch(facecolor=color, edgecolor='black', label=str(depth)) 
-               for depth, color in sorted(col_palette.items())]
+    # Create ordered legend labels when requested
+    handles = []
+    used = set()
+    if legend_order:
+        for label in legend_order:
+            if label in col_palette:
+                handles.append(Patch(facecolor=col_palette[label], edgecolor='black', label=str(label)))
+                used.add(label)
+    for label, color in col_palette.items():
+        if label in used:
+            continue
+        handles.append(Patch(facecolor=color, edgecolor='black', label=str(label)))
     
-    g.ax_heatmap.legend(handles=handles, title='Depth', 
+    g.ax_heatmap.legend(handles=handles, title=legend_title,
                         bbox_to_anchor=(1.05, 1), loc='upper left',
                         frameon=True, fontsize=10)
     
@@ -598,6 +620,7 @@ def compute_and_save_block(
     type_col: str,
     type_palette: Dict[str, str],
     keep_types: Sequence[str],
+    group_order: Optional[Sequence[str]],
     fastq_stats_df: pd.DataFrame,
     dashed_line_y: Optional[float] = None,   # Only used in mito box+swarm
     include_rank_filters: Optional[Dict[str, set[str]]] = None,
@@ -629,42 +652,56 @@ def compute_and_save_block(
     sample_list = asv_tax[meta_sample_col].unique().tolist()
     meta = meta[meta[meta_sample_col].isin(sample_list)].copy()
 
-    if not keep_types:
-        meta[type_col] = meta[type_col].astype(int)
-        keep_types = sorted(meta[type_col].unique().tolist())
+    observed_groups = [str(g) for g in pd.unique(meta[type_col].dropna()).tolist()]
+    if group_order:
+        specified = [str(g).strip() for g in group_order if str(g).strip()]
+        plot_groups = [g for g in specified if g in observed_groups] + [g for g in observed_groups if g not in specified]
+    elif keep_types:
+        specified = [str(g).strip() for g in keep_types if str(g).strip()]
+        plot_groups = [g for g in specified if g in observed_groups] + [g for g in observed_groups if g not in specified]
+    else:
+        plot_groups = observed_groups
 
     # Merge with metadata
     asv_meta = asv_tax.merge(meta, on=meta_sample_col, how='inner')
+
+    # Control subtraction (scope+skin); used downstream for corrected outputs and plots
+    corr_meta = correct_counts_against_controls(asv_meta, meta, meta_sample_col, type_col)
     
     # Stats per sample for raw reads
     reads_df = fastq_stats_df.copy()
     reads_df = reads_df.rename(columns={'num_seqs': 'num_reads_total'})
     reads_df['raw_count'] = (reads_df['num_reads_total'] / 2.0)
 
-    # Build metastat table
+    # Build per-sample summary table
     cnt_df = asv_meta.groupby([meta_sample_col])['count'].sum().reset_index()
+    corr_cnt_df = corr_meta.groupby([meta_sample_col])['corr_count'].sum().reset_index()
     metastat = meta.merge(reads_df[[meta_sample_col, 'raw_count']], on=meta_sample_col, how='left') \
-                   .merge(cnt_df, on=meta_sample_col, how='left')
+                   .merge(cnt_df, on=meta_sample_col, how='left') \
+                   .merge(corr_cnt_df, on=meta_sample_col, how='left')
     metastat['pass_filter'] = [t if s in set(asv_meta[meta_sample_col]) else 'Failed-QC'
                                for s, t in zip(metastat[meta_sample_col], metastat[type_col])]
-    long_df = metastat.groupby([type_col, 'pass_filter', meta_sample_col])['raw_count'].sum().reset_index()
-    long_df = long_df[long_df['raw_count'] > 0]
+    long_df = metastat.groupby([type_col, 'pass_filter', meta_sample_col])['corr_count'].sum().reset_index()
+    long_df = long_df[long_df['corr_count'] > 0]
 
-    # Box + swarm
-    plt.figure(figsize=(10, 10))
-    ax = sns.boxplot(x=type_col, y='raw_count', data=long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
-                     order=list(keep_types))
-    sns.stripplot(data=long_df, x=type_col, y='raw_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
-                  jitter=0.25, palette=type_palette)
-    if dashed_line_y is not None:
-        plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
-    plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
-    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
-    plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.png")
-    plt.close()
+    # Box + swarm (corrected counts)
+    if long_df.empty:
+        print(f"[w] No corrected-count rows available for {mode_name} box/swarm plot; skipping.")
+    else:
+        plt.figure(figsize=(10, 10))
+        ax = sns.boxplot(x=type_col, y='corr_count', data=long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
+                         order=list(plot_groups))
+        sns.stripplot(data=long_df, x=type_col, y='corr_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
+                      jitter=0.25, palette=type_palette)
+        if dashed_line_y is not None:
+            plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
+        ax.set_ylabel("Corrected Count")
+        plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
+        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
+        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.png")
+        plt.close()
 
-    # Control subtraction (scope+skin), pivot to ASV x sample corrected counts
-    corr_meta = correct_counts_against_controls(asv_meta, meta, meta_sample_col, type_col)
+    # Pivot to ASV x sample corrected counts
     cleaned = corr_meta.pivot_table(index='ASV_ID', columns=meta_sample_col, values='corr_count', aggfunc='sum', fill_value=0)
 
     # Keep only assigned Domain and only kept samples
@@ -686,10 +723,22 @@ def compute_and_save_block(
         type_col: m_df[type_col].map(type_palette),
     }, index=m_df.index)
     row_colors_df = col_colors_df.copy()
-    
+
+    if filtered.shape[1] == 0:
+        print(f"[w] No samples available for shared-ASV plotting in {mode_name} block; skipping clustermap/violin.")
+        return
+    if filtered.shape[0] == 0:
+        print(f"[w] No ASVs available for shared-ASV plotting in {mode_name} block; skipping clustermap/violin.")
+        return
+
     # Shared % matrix and clustermap
     shared_pct = presence_shared_percent(filtered)
-    sub_palette = {x:type_palette[x] for x in type_palette if x in keep_types}
+    if shared_pct.shape[0] < 2:
+        print(f"[w] Fewer than 2 samples available for shared-ASV plotting in {mode_name} block; skipping clustermap/violin.")
+        return
+    sub_palette = {g: type_palette[g] for g in plot_groups if g in type_palette}
+    if not sub_palette:
+        sub_palette = {x: type_palette[x] for x in type_palette}
     clustermap_shared_percent(
         shared_pct,
         col_legend_df=col_colors_df,
@@ -697,17 +746,18 @@ def compute_and_save_block(
         col_palette=sub_palette,
         out_svg=out_root / f"clustermap_ASVpercent_{mode_name}.svg",
         out_pdf=out_root / f"clustermap_ASVpercent_{mode_name}.png",
+        legend_order=plot_groups,
+        legend_title=type_col,
     )
 
     # Violin pairs (only for selected groups present)
-    vg = [g for g in set(meta[type_col])]
-    if vg:
+    if plot_groups:
         fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
         _, tidy = plot_grouppair_violins_sns(
             shared_pct, meta,
             sample_id_col=meta_sample_col, group_col=type_col,
             include_within=True,
-            group_order=vg,
+            group_order=plot_groups,
             group_colors=type_palette,
             title="ASVs Shared by Sample Type",
             ylabel="ASVs Shared (%)",
@@ -790,6 +840,11 @@ def get_parser() -> argparse.ArgumentParser:
     )
     cols.add_argument("--keep-types", default="",
                       help="Comma-separated list of types to keep (order honored)")
+    cols.add_argument(
+        "--group-order",
+        default="",
+        help="Comma-separated explicit order for group1/type plots (order-only; does not filter).",
+    )
 
     reads = p.add_argument_group("Read Stats")
     reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
@@ -828,6 +883,7 @@ def main():
     sub_dir = args.sub_dir
     meta_path = args.metadata
     keep_types = parse_list_csv(args.keep_types)
+    group_order = parse_list_csv(args.group_order)
     include_rank_filters = parse_rank_filters(args.include_rank)
     
     # Resolve canonical paths
@@ -864,7 +920,7 @@ def main():
 
     # Read data
     meta_sample_col = args.sample_id_col
-    meta = read_metadata(meta_path, meta_sample_col, keep_types)
+    meta = read_metadata(meta_path, meta_sample_col, keep_types, type_col=args.group1_col)
     if biochem_assignments_path:
         biochem_df = load_biochem_assignments(biochem_assignments_path)
         meta = merge_biochem_assignments(
@@ -929,6 +985,7 @@ def main():
             type_col=args.group1_col,
             type_palette=palette,
             keep_types=keep_types,
+            group_order=group_order,
             fastq_stats_df=fastq_df.copy(),
             dashed_line_y=None,
             include_rank_filters=include_rank_filters,
@@ -948,6 +1005,7 @@ def main():
             type_col=args.group1_col,
             type_palette=palette,
             keep_types=keep_types,
+            group_order=group_order,
             fastq_stats_df=fastq_df.copy(),
             dashed_line_y=(args.mito_threshold_line if args.mito_threshold_line >= 0 else None),
             include_rank_filters=include_rank_filters,

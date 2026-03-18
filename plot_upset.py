@@ -49,6 +49,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Patch
@@ -163,6 +164,86 @@ def _patch_upsetplot_plot_matrix() -> None:
 
 
 _patch_upsetplot_plot_matrix()
+
+
+# upsetplot<=0.9.0 uses np.diff(...) directly for text offsets in _label_sizes,
+# yielding shape-(1,) arrays (not scalars). Newer matplotlib rejects this in
+# text coordinates ("only 0-dimensional arrays can be converted to Python scalars").
+def _patch_upsetplot_label_sizes() -> None:
+    if getattr(upsetplot_plotting.UpSet._label_sizes, "__name__", "") == "_label_sizes_scalar_margin":
+        return
+
+    def _label_sizes_scalar_margin(self, ax, rects, where):
+        if not self._show_counts and not self._show_percentages:
+            return
+        if self._show_counts is True:
+            count_fmt = "{:.0f}"
+        else:
+            count_fmt = self._show_counts
+            if "{" not in count_fmt:
+                count_fmt = upsetplot_plotting.util.to_new_pos_format(count_fmt)
+
+        pct_fmt = "{:.1%}" if self._show_percentages is True else self._show_percentages
+
+        if count_fmt and pct_fmt:
+            if where == "top":
+                fmt = f"{count_fmt}\n({pct_fmt})"
+            else:
+                fmt = f"{count_fmt} ({pct_fmt})"
+
+            def make_args(val):
+                return val, val / self.total
+        elif count_fmt:
+            fmt = count_fmt
+
+            def make_args(val):
+                return (val,)
+        else:
+            fmt = pct_fmt
+
+            def make_args(val):
+                return (val / self.total,)
+
+        if where == "right":
+            margin = float(0.01 * abs(np.diff(ax.get_xlim())).item())
+            for rect in rects:
+                width = float(rect.get_width() + rect.get_x())
+                ax.text(
+                    width + margin,
+                    float(rect.get_y() + rect.get_height() * 0.5),
+                    fmt.format(*make_args(width)),
+                    ha="left",
+                    va="center",
+                )
+        elif where == "left":
+            margin = float(0.01 * abs(np.diff(ax.get_xlim())).item())
+            for rect in rects:
+                width = float(rect.get_width() + rect.get_x())
+                ax.text(
+                    width + margin,
+                    float(rect.get_y() + rect.get_height() * 0.5),
+                    fmt.format(*make_args(width)),
+                    ha="right",
+                    va="center",
+                )
+        elif where == "top":
+            margin = float(0.01 * abs(np.diff(ax.get_ylim())).item())
+            for rect in rects:
+                height = float(rect.get_height() + rect.get_y())
+                ax.text(
+                    float(rect.get_x() + rect.get_width() * 0.5),
+                    height + margin,
+                    fmt.format(*make_args(height)),
+                    ha="center",
+                    va="bottom",
+                )
+        else:
+            raise NotImplementedError("unhandled where: %r" % where)
+
+    upsetplot_plotting.UpSet._label_sizes = _label_sizes_scalar_margin
+
+
+_patch_upsetplot_label_sizes()
 
 # Optional venn backends
 _HAVE_MPL_VENN = False
@@ -367,9 +448,26 @@ def build_upset_weighted_rows(
 
 # ---------- Plotters ----------
 def savefig_multi(fig: plt.Figure, out_path_base: Path, name: str, formats: Sequence[str]) -> None:
+    fig.canvas.draw()
     for ext in formats:
-        fig.savefig(out_path_base.with_name(f"{out_path_base.stem}_{name}.{ext}"), bbox_inches="tight")
+        fig.savefig(
+            out_path_base.with_name(f"{out_path_base.stem}_{name}.{ext}"),
+            bbox_inches="tight",
+            pad_inches=0.8,
+        )
     plt.close(fig)
+
+
+def _tune_upset_layout(fig: plt.Figure, labels: Sequence[str]) -> None:
+    """
+    Reserve enough margin for long category labels (e.g., 'Bronchial Brush')
+    so they are not clipped in saved output.
+    """
+    for ax in fig.axes:
+        for txt in ax.get_xticklabels() + ax.get_yticklabels():
+            txt.set_clip_on(False)
+        for txt in ax.texts:
+            txt.set_clip_on(False)
 
 def plot_upset_unique(
     group_sets: Mapping[str, set],
@@ -377,7 +475,8 @@ def plot_upset_unique(
     title: str,
     out_base: Path,
     formats: Sequence[str],
-    group_col: str
+    group_col: str,
+    font_size: float,
 ) -> None:
     rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
     data = build_upset_unique(rev_grp_sets)
@@ -391,13 +490,24 @@ def plot_upset_unique(
     )
     for g, c in colors.items():
         upset.style_categories([g], bar_facecolor=c, bar_edgecolor="black")
-    fig = plt.figure(figsize=(12, 8))
-    mpl.rcParams["font.size"] = 6
-    upset.plot(fig=fig)
-    fig.suptitle(title, y=0.98)
+    max_len = max((len(str(g)) for g in group_sets.keys()), default=0)
+    fig_w = max(14, 12 + 0.28 * max_len)
+    fig = plt.figure(figsize=(fig_w, 9))
+    with mpl.rc_context({"font.size": float(font_size)}):
+        upset.plot(fig=fig)
+    _tune_upset_layout(fig, list(group_sets.keys()))
+    fig.suptitle(title, y=0.98, fontsize=float(font_size) + 1)
     # legend
     handles = [Patch(facecolor=colors[g], edgecolor="black", label=g) for g in group_sets.keys()]
-    fig.legend(handles=handles, title=group_col, bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
+    fig.legend(
+        handles=handles,
+        title=group_col,
+        bbox_to_anchor=(1.02, 1),
+        loc='upper left',
+        borderaxespad=0,
+        fontsize=float(font_size),
+        title_fontsize=float(font_size),
+    )
     savefig_multi(fig, out_base, "upset", formats)
 
 def plot_upset_weighted(
@@ -408,7 +518,8 @@ def plot_upset_weighted(
     title: str,
     out_base: Path,
     formats: Sequence[str],
-    group_col: str
+    group_col: str,
+    font_size: float,
 ) -> None:
     rev_grp_sets = {g: s for g, s in reversed(list(group_sets.items()))}
     df = build_upset_weighted_rows(rev_grp_sets, per_group_values, group_order)
@@ -428,9 +539,12 @@ def plot_upset_weighted(
     for g, c in colors.items():
         upset.style_categories([g], bar_facecolor=c, bar_edgecolor="black")
     upset.add_stacked_bars(by="group", sum_over="count", colors=colors, title=f"Abundance by {group_col}", elements=10)
-    fig = plt.figure(figsize=(12, 8))
-    mpl.rcParams["font.size"] = 6
-    axes = upset.plot(fig=fig)
+    max_len = max((len(str(g)) for g in group_order), default=0)
+    fig_w = max(14, 12 + 0.28 * max_len)
+    fig = plt.figure(figsize=(fig_w, 9))
+    with mpl.rc_context({"font.size": float(font_size)}):
+        axes = upset.plot(fig=fig)
+    _tune_upset_layout(fig, list(group_order))
     # fix legend ordering
     ax_extra = axes.get('extra0', None)
     if ax_extra is not None:
@@ -438,8 +552,17 @@ def plot_upset_weighted(
         order = list(group_order)
         handles = [handles[labels.index(o)] for o in order if o in labels]
         labels = [o for o in order if o in labels]
-        ax_extra.legend(handles, labels, title=group_col, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0)
-    fig.suptitle(title, y=1.02)
+        ax_extra.legend(
+            handles,
+            labels,
+            title=group_col,
+            bbox_to_anchor=(1.05, 1),
+            loc='upper left',
+            borderaxespad=0,
+            fontsize=float(font_size),
+            title_fontsize=float(font_size),
+        )
+    fig.suptitle(title, y=1.02, fontsize=float(font_size) + 1)
     savefig_multi(fig, out_base, "upset_weighted", formats)
 
 def plot_venn(
@@ -543,11 +666,13 @@ def run_domain(
     id_col: str,
     group_col: str,
     color_col: str,
+    group_order: Optional[Sequence[str]],
     subset_groups: Optional[Sequence[str]],
     use_raw: bool,
     use_final: bool,
     skip_venn: bool,
     formats: Sequence[str],
+    font_size: float,
 ) -> None:
     ensure_dir(inp.out_base)
     
@@ -561,8 +686,13 @@ def run_domain(
     palette_df = md[[group_col, color_col]].dropna(subset=[group_col]).drop_duplicates()
     palette = dict(zip(palette_df[group_col], palette_df[color_col]))
     
-    # Sort groups
-    all_groups = sort_groups(list(palette.keys()))
+    # Sort groups (or apply explicit order when provided)
+    if group_order:
+        requested = [str(g).strip() for g in group_order if str(g).strip()]
+        auto_groups = sort_groups([g for g in palette.keys() if g not in requested])
+        all_groups = requested + auto_groups
+    else:
+        all_groups = sort_groups(list(palette.keys()))
     
     # Filter to subset if specified
     if subset_groups:
@@ -600,12 +730,12 @@ def run_domain(
             
             # UpSet unique
             plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
-                            f"ASV Membership by {group_col} (Raw)", base, formats, group_col)
+                            f"ASV Membership by {group_col} (Raw)", base, formats, group_col, font_size)
             
             # UpSet weighted
             plot_upset_weighted(group_sets, raw_group_asv_total, groups_present,
                               {g: palette[g] for g in groups_present},
-                              f"ASV Abundance by {group_col} (Raw)", base, formats, group_col)
+                              f"ASV Abundance by {group_col} (Raw)", base, formats, group_col, font_size)
             
             # Venn (optional)
             if not skip_venn:
@@ -637,12 +767,12 @@ def run_domain(
             
             # UpSet unique
             plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
-                            f"ASV Membership by {group_col} (Final)", base, formats, group_col)
+                            f"ASV Membership by {group_col} (Final)", base, formats, group_col, font_size)
             
             # UpSet weighted
             plot_upset_weighted(group_sets, fin_group_asv_total, groups_present,
                               {g: palette[g] for g in groups_present},
-                              f"ASV Abundance by {group_col} (Final)", base, formats, group_col)
+                              f"ASV Abundance by {group_col} (Final)", base, formats, group_col, font_size)
             
             # Venn (optional)
             if not skip_venn:
@@ -670,6 +800,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--color-col", default="Color", help="Metadata column with color values (hex codes)")
     ap.add_argument("--subset-groups", default=None,
                     help="Optional comma-separated list of groups to include (subset of all groups)")
+    ap.add_argument("--group-order", default=None,
+                    help="Optional comma-separated explicit group order (e.g., 'Oral Rinse,BAL,Bronchial Brush')")
     
     # Data selection
     ap.add_argument("--use-raw", action="store_true", default=True, help="Process raw ASV data")
@@ -682,6 +814,8 @@ def parse_args() -> argparse.Namespace:
                     help="Skip Venn diagram generation (useful for >3-5 groups)")
     ap.add_argument("--formats", default="svg,pdf",
                     help="Comma-separated figure formats: e.g., svg,pdf,png")
+    ap.add_argument("--font-size", type=float, default=12.0,
+                    help="Base font size used in UpSet plots")
     
     return ap.parse_args()
 
@@ -695,6 +829,9 @@ def main() -> None:
     subset_groups = None
     if args.subset_groups:
         subset_groups = [g.strip() for g in args.subset_groups.split(",") if g.strip()]
+    group_order = None
+    if args.group_order:
+        group_order = [g.strip() for g in args.group_order.split(",") if g.strip()]
     
     # Determine which data to process
     use_raw = args.use_raw
@@ -716,11 +853,13 @@ def main() -> None:
             id_col=args.sample_id_col,
             group_col=args.group_col,
             color_col=args.color_col,
+            group_order=group_order,
             subset_groups=subset_groups,
             use_raw=use_raw,
             use_final=use_final,
             skip_venn=args.skip_venn,
             formats=formats,
+            font_size=args.font_size,
         )
         print(f"[OK] Finished {dom}")
 
