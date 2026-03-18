@@ -41,6 +41,7 @@ diversity:
 
 indicspecies:
   enabled: false
+  aligned_plot_enabled: false
 
 power_analysis:
   enabled: false

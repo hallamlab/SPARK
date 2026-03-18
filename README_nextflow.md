@@ -283,6 +283,16 @@ Common keys:
 - `keep_contralateral_in_cancer`
 - `contralateral_sample_types`
 
+### `indicspecies.aligned_*`
+Optional aligned ISA summary/plot stage built on top of the existing `INDICSPECIES` outputs. This stage is off by default and does not replace the standard `INDICSPECIES_PLOTS` step; it adds a second summary/visualization pass using `plot_indicspecies_aligned.py`.
+
+Common keys:
+- `aligned_plot_enabled`
+- `aligned_plot_output_dir`
+- `aligned_alpha`
+- `aligned_min_stat`
+- `aligned_top_n`
+
 ---
 
 ## Manifest vs Auto-Discovery

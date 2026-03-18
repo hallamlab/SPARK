@@ -334,6 +334,11 @@ indicspecies:
   plot_enabled: true
   plot_pairs_mode: all
   plot_output_dir: indicspecies/plots
+  aligned_plot_enabled: false
+  aligned_plot_output_dir: indicspecies/aligned
+  aligned_alpha: 0.05
+  aligned_min_stat: 0.0
+  aligned_top_n: 25
   venn:
   taxonomy: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
 

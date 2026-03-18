@@ -532,6 +532,11 @@ if( !plotIndicspeciesScriptFile.exists() ) {
     exit 1, "plot_indicspecies.py not found in project directory"
 }
 def plotIndicspeciesScriptPath = plotIndicspeciesScriptFile.canonicalPath
+def plotIndicspeciesAlignedScriptFile = new File("${projectDir}/plot_indicspecies_aligned.py")
+if( !plotIndicspeciesAlignedScriptFile.exists() ) {
+    exit 1, "plot_indicspecies_aligned.py not found in project directory"
+}
+def plotIndicspeciesAlignedScriptPath = plotIndicspeciesAlignedScriptFile.canonicalPath
 def clustermapsScriptFile = new File("${projectDir}/plot_clustermaps.py")
 if( !clustermapsScriptFile.exists() ) {
     exit 1, "plot_clustermaps.py not found in project directory"
@@ -1297,6 +1302,12 @@ if( indicspeciesGroup2OrderRaw instanceof List ) {
 def indicspeciesFocusGroup1Label = indicspeciesConfig.focus_group1_label ? indicspeciesConfig.focus_group1_label.toString().trim() : ''
 def indicspeciesFocusGroup2Label = indicspeciesConfig.focus_group2_label ? indicspeciesConfig.focus_group2_label.toString().trim() : ''
 boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
+boolean indicspeciesAlignedEnabled = indicspeciesConfig.containsKey('aligned_plot_enabled') ? (indicspeciesConfig.aligned_plot_enabled as boolean) : false
+def indicspeciesAlignedOutputDir = indicspeciesConfig.aligned_plot_output_dir ?: 'indicspecies/aligned'
+def indicspeciesAlignedOutputDirAbs = new File(outputDir, indicspeciesAlignedOutputDir).canonicalPath
+def indicspeciesAlignedAlpha = indicspeciesConfig.aligned_alpha != null ? (indicspeciesConfig.aligned_alpha as double) : 0.05d
+def indicspeciesAlignedMinStat = indicspeciesConfig.aligned_min_stat != null ? (indicspeciesConfig.aligned_min_stat as double) : 0.0d
+def indicspeciesAlignedTopN = indicspeciesConfig.aligned_top_n ? (indicspeciesConfig.aligned_top_n as int) : 25
 
 def clustermapsConfig = config.clustermaps ?: [:]
 boolean clustermapsRequested = clustermapsConfig.containsKey('enabled') ? (clustermapsConfig.enabled as boolean) : false
@@ -1682,6 +1693,7 @@ def asvFinalForSpieceasi = null
     }
     def indicspecies_stage = null
     def indicspecies_plots_stage = null
+    def indicspecies_aligned_stage = null
     if( indicspeciesEnabled ) {
         indicspecies_stage = INDICSPECIES(
             metaMicroForCollectors,
@@ -1690,6 +1702,11 @@ def asvFinalForSpieceasi = null
         if( indicspeciesPlotEnabled ) {
             indicspecies_plots_stage = INDICSPECIES_PLOTS(
                 metaMicroForCollectors,
+                indicspecies_stage.all_tables.collect()
+            )
+        }
+        if( indicspeciesAlignedEnabled ) {
+            indicspecies_aligned_stage = INDICSPECIES_ALIGNED_PLOTS(
                 indicspecies_stage.all_tables.collect()
             )
         }
@@ -3801,6 +3818,41 @@ for g1_file, g2_file in pair_iter:
 PY
 
 touch indicspecies_plots.done
+"""
+}
+
+process INDICSPECIES_ALIGNED_PLOTS {
+    cpus pipelineThreads
+    conda "${indicspeciesCondaEnvPath}"
+
+    when:
+    indicspeciesEnabled && indicspeciesAlignedEnabled
+
+    input:
+    path(indicspecies_tables)
+
+    output:
+    path("indicspecies_aligned.done"), emit: done
+
+    script:
+    """
+set -euo pipefail
+mkdir -p "${indicspeciesAlignedOutputDirAbs}"
+mkdir -p aligned_indicspecies_input
+
+for src in *.tsv; do
+  [[ -f "\${src}" ]] || continue
+  ln -sf "\$(realpath "\${src}")" "aligned_indicspecies_input/\$(basename "\${src}")"
+done
+
+python "${plotIndicspeciesAlignedScriptPath}" \\
+  --indicspecies-dir aligned_indicspecies_input \\
+  --outdir "${indicspeciesAlignedOutputDirAbs}" \\
+  --alpha ${indicspeciesAlignedAlpha} \\
+  --min-stat ${indicspeciesAlignedMinStat} \\
+  --top-n ${indicspeciesAlignedTopN}
+
+touch indicspecies_aligned.done
 """
 }
 

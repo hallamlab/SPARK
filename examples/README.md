@@ -65,6 +65,8 @@ If you enable `power_analysis.enabled`, you will also typically need:
 - `type_group`: sample-type grouping column.
 - `lung_status` plus any side/site columns used in your dataset if you want the contralateral filtering options to be meaningful.
 
+If you enable `indicspecies.aligned_plot_enabled`, no extra input files are required beyond a successful `indicspecies.enabled: true` run.
+
 ## Manifest Rules (Important)
 
 - Use tab-separated values.
