@@ -8,8 +8,10 @@ suppressPackageStartupMessages({
 })
 
 opt_list <- list(
-  make_option("--graph-sub", type = "character", default = NULL, help = "Thresholded positive GraphML (required)."),
-  make_option("--graph-all", type = "character", default = NULL, help = "All-positive GraphML (optional)."),
+  make_option("--graph-sub", type = "character", default = NULL, dest = "graph_sub",
+              help = "Thresholded positive GraphML (required)."),
+  make_option("--graph-all", type = "character", default = NULL, dest = "graph_all",
+              help = "All-positive GraphML (optional)."),
   make_option("--outdir", type = "character", default = NULL, help = "Output directory (required)."),
   make_option("--prefix", type = "character", default = "spieceasi", help = "Output prefix [default %default]."),
   make_option("--methods", type = "character", default = "leiden,louvain", help = "Comma-separated methods [default %default]."),

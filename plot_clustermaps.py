@@ -296,6 +296,15 @@ def draw_clustermap(
         warnings.warn(f"Skipping empty pivot: {outfile_prefix}")
         return
 
+    row_cluster = pivot.shape[0] > 1
+    col_cluster = pivot.shape[1] > 1
+    if not row_cluster or not col_cluster:
+        warnings.warn(
+            f"Pivot for {outfile_prefix} is degenerate "
+            f"(rows={pivot.shape[0]}, cols={pivot.shape[1]}). "
+            "Disabling unsupported dendrogram(s)."
+        )
+
     # Order colors by heatmap columns
     if not col_colors_df.empty:
         col_colors_df = col_colors_df.loc[pivot.columns]
@@ -323,6 +332,7 @@ def draw_clustermap(
         figsize=(figsize_w, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
+        row_cluster=row_cluster,
         col_cluster=False,
     )
     cbar = g.ax_heatmap.collections[0].colorbar
@@ -356,7 +366,8 @@ def draw_clustermap(
         figsize=(figsize_w, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
-        col_cluster=True,
+        row_cluster=row_cluster,
+        col_cluster=col_cluster,
     )
     cbar = g.ax_heatmap.collections[0].colorbar
     cbar.set_ticks(tick_vals_log)

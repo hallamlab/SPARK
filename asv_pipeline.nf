@@ -1178,10 +1178,10 @@ def clustermapsAsvIdCol = clustermapsConfig.asv_id_col ?: 'ASV_ID'
 def clustermapsGroup1Col = clustermapsConfig.group1_col ?: 'type_group'
 def clustermapsGroup2Col = clustermapsConfig.group2_col ?: 'status'
 def clustermapsGroup3Col = clustermapsConfig.containsKey('group3_col') ? (clustermapsConfig.group3_col ?: '') : 'kit'
-def clustermapsGroup1Order = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: 'Oral Rinse,BAL,Lung Brush')
-def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: 'Skin Brush,Scope Flush')
-def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: 'Oral Rinse=#6A3D9A,BAL+Oral Rinse=#F19CBB,BAL=#0072B2,BAL+Lung Brush=#00FFFF,Lung Brush=#009E73,Lung Brush+Oral Rinse=#C1EAAD,Oral Rinse+BAL+Lung Brush=#000000,not_indicator=#D3D3D3')
-def clustermapsGroup2Palette = clustermapsConfig.group2_palette ?: (clustermapsConfig.status_palette ?: 'Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3')
+def clustermapsGroup1Order = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: '')
+def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: '')
+def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: '')
+def clustermapsGroup2Palette = clustermapsConfig.group2_palette ?: (clustermapsConfig.status_palette ?: '')
 def clustermapsGroup3Palette = clustermapsConfig.group3_palette ?: (clustermapsConfig.kit_palette ?: '')
 def clustermapsRanks = clustermapsConfig.ranks ?: 'Phylum,Class,Order,Family,Genus,Species,ASV_ID'
 def clustermapsTopN = clustermapsConfig.topN ?: 'Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000'
@@ -1191,6 +1191,9 @@ def clustermapsIsaSignificanceCols = clustermapsConfig.isa_significance_cols ?: 
 def clustermapsIsaStatCols = clustermapsConfig.isa_stat_cols ?: ''
 def clustermapsMitoSampleMode = clustermapsConfig.mito_sample_mode ?: 'auto'
 boolean clustermapsRunMito = clustermapsConfig.containsKey('run_mito') ? (clustermapsConfig.run_mito as boolean) : true
+if( clustermapsIsaFile && !new File(clustermapsIsaFile).isFile() ) {
+    log.warn "clustermaps.isa_file is not a regular file and will be ignored: ${clustermapsIsaFile}"
+}
 
 def spieceasiConfig = config.spieceasi ?: [:]
 boolean spieceasiRequested = spieceasiConfig.containsKey('enabled') ? (spieceasiConfig.enabled as boolean) : false
@@ -3443,6 +3446,10 @@ process CLUSTERMAPS {
 
     script:
     def group3ColArg = clustermapsGroup3Col ? """  --group3-col "${clustermapsGroup3Col}" \\\n""" : ''
+    def group1OrderArg = clustermapsGroup1Order ? """  --group1-order "${clustermapsGroup1Order}" \\\n""" : ''
+    def excludeGroup1Arg = clustermapsExcludeGroup1 ? """  --exclude-group1 "${clustermapsExcludeGroup1}" \\\n""" : ''
+    def group1PaletteArg = clustermapsGroup1Palette ? """  --group1-palette "${clustermapsGroup1Palette}" \\\n""" : ''
+    def group2PaletteArg = clustermapsGroup2Palette ? """  --group2-palette "${clustermapsGroup2Palette}" \\\n""" : ''
     def group3PaletteArg = clustermapsGroup3Palette ? """  --group3-palette "${clustermapsGroup3Palette}" \\\n""" : ''
     def clustermapsRunMitoFlag = clustermapsRunMito ? '1' : '0'
     def isaFileArg = clustermapsIsaFile ?: ''
@@ -3468,10 +3475,7 @@ if [[ "${clustermapsRunMitoFlag}" == "1" && -f "${clustermapsMitoInputPath}" ]];
     --asv-id-col "${clustermapsAsvIdCol}" \\
     --group1-col "${clustermapsGroup1Col}" \\
     --group2-col "${clustermapsGroup2Col}" \\
-${group3ColArg}    --group1-order "${clustermapsGroup1Order}" \\
-    --exclude-group1 "${clustermapsExcludeGroup1}" \\
-    --group1-palette "${clustermapsGroup1Palette}" \\
-    --group2-palette "${clustermapsGroup2Palette}" \\
+${group3ColArg}${group1OrderArg}${excludeGroup1Arg}${group1PaletteArg}${group2PaletteArg}\
 ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
     --topN "${clustermapsTopN}" \\
     --count-col "${clustermapsCountCol}" \\
@@ -3490,10 +3494,7 @@ else
     --asv-id-col "${clustermapsAsvIdCol}" \\
     --group1-col "${clustermapsGroup1Col}" \\
     --group2-col "${clustermapsGroup2Col}" \\
-${group3ColArg}    --group1-order "${clustermapsGroup1Order}" \\
-    --exclude-group1 "${clustermapsExcludeGroup1}" \\
-    --group1-palette "${clustermapsGroup1Palette}" \\
-    --group2-palette "${clustermapsGroup2Palette}" \\
+${group3ColArg}${group1OrderArg}${excludeGroup1Arg}${group1PaletteArg}${group2PaletteArg}\
 ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
     --topN "${clustermapsTopN}" \\
     --count-col "${clustermapsCountCol}" \\
