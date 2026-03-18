@@ -58,6 +58,13 @@ Useful optional columns for expanded analysis:
 
 - `Cruise`, `Year`, `Month`, `Day`, `Season`, `plateID`, `Depth_anchored`.
 
+If you enable `power_analysis.enabled`, you will also typically need:
+
+- `Participant_ID`: patient/blocking identifier.
+- `Case`: case-vs-control grouping column.
+- `type_group`: sample-type grouping column.
+- `lung_status` plus any side/site columns used in your dataset if you want the contralateral filtering options to be meaningful.
+
 ## Manifest Rules (Important)
 
 - Use tab-separated values.

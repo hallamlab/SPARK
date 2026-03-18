@@ -337,6 +337,26 @@ indicspecies:
   venn:
   taxonomy: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
 
+power_analysis:
+  enabled: false
+  output_dir: power_analysis
+  sample_col: sampleID
+  patient_col: Participant_ID
+  case_col: Case
+  type_col: Depth
+  sample_sizes_cancer: 6,8,10,15,20,25,30
+  sample_sizes_stype: 10,15,20,25,30,40,50
+  n_control: 25
+  n_simulations: 1000
+  n_perm: 199
+  alpha: 0.05
+  seed: 42
+  skip_estimate: false
+  skip_plot: false
+  transform: none
+  keep_contralateral_in_cancer: false
+  contralateral_sample_types: 20m,50m
+
 clustermaps:
   enabled: true
   output_dir: clustermaps

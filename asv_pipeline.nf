@@ -379,6 +379,15 @@ if( !masterSummaryEnvFile.exists() ) {
 }
 log.info "Using master summary Conda/Mamba env definition: ${masterSummaryCondaEnvPath}"
 
+def powerAnalysisEnvConfigPath = config.environments?.power_analysis
+def resolvedPowerAnalysisEnvPath = powerAnalysisEnvConfigPath ? resolveOptionalPath(powerAnalysisEnvConfigPath, configRoot) : null
+def powerAnalysisCondaEnvPath = resolvedPowerAnalysisEnvPath ?: defaultAdvancedEnvPath
+def powerAnalysisEnvFile = file(powerAnalysisCondaEnvPath)
+if( !powerAnalysisEnvFile.exists() ) {
+    exit 1, "Power analysis conda environment YAML not found: ${powerAnalysisCondaEnvPath}"
+}
+log.info "Using power analysis Conda/Mamba env definition: ${powerAnalysisCondaEnvPath}"
+
 def plotUpsetEnvConfigPath = config.environments?.plot_upset
 def resolvedPlotUpsetEnvPath = plotUpsetEnvConfigPath ? resolveOptionalPath(plotUpsetEnvConfigPath, configRoot) : null
 def plotUpsetCondaEnvPath = resolvedPlotUpsetEnvPath ?: defaultAdvancedEnvPath
@@ -548,6 +557,11 @@ if( !masterSummaryScriptFile.exists() ) {
     exit 1, "summary/build_master_asv_summary.py not found in project directory"
 }
 def masterSummaryScriptPath = masterSummaryScriptFile.canonicalPath
+def powerAnalysisScriptFile = new File("${projectDir}/run_power_analysis_pipeline.sh")
+if( !powerAnalysisScriptFile.exists() ) {
+    exit 1, "run_power_analysis_pipeline.sh not found in project directory"
+}
+def powerAnalysisScriptPath = powerAnalysisScriptFile.canonicalPath
 def emptyModulesScriptFile = new File("${projectDir}/empty_modules.tsv")
 if( !emptyModulesScriptFile.exists() ) {
     exit 1, "empty_modules.tsv not found in project directory"
@@ -1477,6 +1491,44 @@ if( masterSummaryWhitelistRaw instanceof List ) {
 def masterSummaryWhitelistCsv = masterSummaryWhitelist ? masterSummaryWhitelist.join(',') : ''
 def masterSummaryMaxDirectCols = masterSummaryConfig.max_direct_cols ? (masterSummaryConfig.max_direct_cols as int) : 300
 
+def powerAnalysisConfig = config.power_analysis ?: [:]
+boolean powerAnalysisRequested = powerAnalysisConfig.containsKey('enabled') ? (powerAnalysisConfig.enabled as boolean) : false
+if( powerAnalysisRequested && !metadataPlotsEnabled ) {
+    exit 1, "power_analysis.enabled requires metadata_plots.enabled to be true"
+}
+boolean powerAnalysisEnabled = powerAnalysisRequested
+def powerAnalysisOutputDir = powerAnalysisConfig.output_dir ?: 'power_analysis'
+def powerAnalysisOutputDirAbs = resolveOutputRelative(powerAnalysisOutputDir.toString(), outputDir)
+def powerAnalysisSampleCol = powerAnalysisConfig.sample_col ?: metadataPlotsSampleCol
+def powerAnalysisPatientCol = powerAnalysisConfig.patient_col ? powerAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
+def powerAnalysisCaseCol = powerAnalysisConfig.case_col ? powerAnalysisConfig.case_col.toString().trim() : 'Case'
+def powerAnalysisTypeCol = powerAnalysisConfig.type_col ?: metadataPlotsTypeCol
+def powerAnalysisSampleSizesCancerRaw = powerAnalysisConfig.sample_sizes_cancer ?: '6,8,10,15,20,25,30'
+def powerAnalysisSampleSizesCancer = powerAnalysisSampleSizesCancerRaw instanceof List ?
+    powerAnalysisSampleSizesCancerRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisSampleSizesCancerRaw.toString().trim()
+def powerAnalysisSampleSizesStypeRaw = powerAnalysisConfig.sample_sizes_stype ?: '10,15,20,25,30,40,50'
+def powerAnalysisSampleSizesStype = powerAnalysisSampleSizesStypeRaw instanceof List ?
+    powerAnalysisSampleSizesStypeRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisSampleSizesStypeRaw.toString().trim()
+def powerAnalysisNControl = powerAnalysisConfig.n_control ? (powerAnalysisConfig.n_control as int) : 25
+def powerAnalysisNSimulations = powerAnalysisConfig.n_simulations ? (powerAnalysisConfig.n_simulations as int) : 1000
+def powerAnalysisNPerm = powerAnalysisConfig.n_perm ? (powerAnalysisConfig.n_perm as int) : 199
+def powerAnalysisAlpha = powerAnalysisConfig.alpha != null ? (powerAnalysisConfig.alpha as double) : 0.05d
+def powerAnalysisSeed = powerAnalysisConfig.seed ? (powerAnalysisConfig.seed as int) : 42
+boolean powerAnalysisSkipEstimate = powerAnalysisConfig.containsKey('skip_estimate') ? (powerAnalysisConfig.skip_estimate as boolean) : false
+boolean powerAnalysisSkipPlot = powerAnalysisConfig.containsKey('skip_plot') ? (powerAnalysisConfig.skip_plot as boolean) : false
+def powerAnalysisTransform = powerAnalysisConfig.transform ? powerAnalysisConfig.transform.toString().trim().toLowerCase() : 'none'
+if( !['none', 'rclr'].contains(powerAnalysisTransform) ) {
+    exit 1, "power_analysis.transform must be one of: none, rclr"
+}
+boolean powerAnalysisKeepContralateralInCancer = powerAnalysisConfig.containsKey('keep_contralateral_in_cancer') ? (powerAnalysisConfig.keep_contralateral_in_cancer as boolean) : false
+def powerAnalysisContralateralTypesRaw = powerAnalysisConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+def powerAnalysisContralateralTypes = powerAnalysisContralateralTypesRaw instanceof List ?
+    powerAnalysisContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+    powerAnalysisContralateralTypesRaw.toString().trim()
+def powerAnalysisIndicspeciesDir = powerAnalysisConfig.indicspecies_dir ? resolveOptionalPath(powerAnalysisConfig.indicspecies_dir, configRoot) : indicspeciesOutputDirAbs
+
 workflow {
     def biochemReady = Channel.value(true)
     if( biochemPreAsvEnabled ) {
@@ -1593,7 +1645,7 @@ def asvFinalForSpieceasi = null
         asvFinalForCollectors = batch_stage.asv_corrected_counts_int
         asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int
         umapResultsForTrajectory = batch_stage.umap_results
-        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled ) {
+        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled || masterSummaryEnabled || powerAnalysisEnabled ) {
             def corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
                 asvMetaForClustermaps,
                 batch_stage.asv_corrected_counts_int
@@ -1647,6 +1699,13 @@ def asvFinalForSpieceasi = null
         CLUSTERMAPS(
             asvMetaForClustermaps,
             metaMicroForCollectors,
+            indicspeciesReadyForClustermaps
+        )
+    }
+    if( powerAnalysisEnabled ) {
+        POWER_ANALYSIS_PIPELINE(
+            asvMetaForClustermaps,
+            asvFinalForCollectors,
             indicspeciesReadyForClustermaps
         )
     }
@@ -3742,6 +3801,90 @@ for g1_file, g2_file in pair_iter:
 PY
 
 touch indicspecies_plots.done
+"""
+}
+
+process POWER_ANALYSIS_PIPELINE {
+    cpus pipelineThreads
+    conda "${powerAnalysisCondaEnvPath}"
+
+    when:
+    powerAnalysisEnabled
+
+    input:
+    path(asv_meta)
+    path(asv_counts)
+    val(indicspecies_ready)
+
+    output:
+    path("power_analysis.done"), emit: done
+
+    script:
+    def skipEstimateFlag = powerAnalysisSkipEstimate ? '1' : '0'
+    def skipPlotFlag = powerAnalysisSkipPlot ? '1' : '0'
+    def keepContralateralFlag = powerAnalysisKeepContralateralInCancer ? '1' : '0'
+    """
+set -euo pipefail
+mkdir -p "${powerAnalysisOutputDirAbs}"
+
+SUMMARY_INPUT_DIR="power_analysis_inputs"
+mkdir -p "\${SUMMARY_INPUT_DIR}"
+
+python "${masterSummaryScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --asv-meta "${asv_meta}" \\
+  --asv-counts "${asv_counts}" \\
+  --clustermaps-dir "${clustermapsOutputDirAbs}" \\
+  --indicspecies-dir "${powerAnalysisIndicspeciesDir}" \\
+  --spieceasi-dir "${spieceasiOutputDirAbs}" \\
+  --outdir "\${SUMMARY_INPUT_DIR}" \\
+  --max-direct-cols ${masterSummaryMaxDirectCols}
+
+if [[ ! -f "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" ]]; then
+  echo "Missing expected power-analysis input: \${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" >&2
+  exit 1
+fi
+
+POWER_INDICSPECIES_ARGS=()
+if [[ -d "${powerAnalysisIndicspeciesDir}" ]]; then
+  POWER_INDICSPECIES_ARGS=(--indicspecies-dir "${powerAnalysisIndicspeciesDir}")
+fi
+
+POWER_SKIP_ARGS=()
+if [[ "${skipEstimateFlag}" == "1" ]]; then
+  POWER_SKIP_ARGS+=(--skip-estimate)
+fi
+if [[ "${skipPlotFlag}" == "1" ]]; then
+  POWER_SKIP_ARGS+=(--skip-plot)
+fi
+
+POWER_CONTRALATERAL_ARGS=()
+if [[ "${keepContralateralFlag}" == "1" ]]; then
+  POWER_CONTRALATERAL_ARGS+=(--keep-contralateral-in-cancer)
+fi
+
+bash "${powerAnalysisScriptPath}" \\
+  --data-long "\${SUMMARY_INPUT_DIR}/ASV_master_long.tsv" \\
+  --data-wide "${asv_counts}" \\
+  --outdir "${powerAnalysisOutputDirAbs}" \\
+  --sample-col "${powerAnalysisSampleCol}" \\
+  --patient-col "${powerAnalysisPatientCol}" \\
+  --case-col "${powerAnalysisCaseCol}" \\
+  --type-col "${powerAnalysisTypeCol}" \\
+  --sample-sizes-cancer "${powerAnalysisSampleSizesCancer}" \\
+  --sample-sizes-stype "${powerAnalysisSampleSizesStype}" \\
+  --n-control ${powerAnalysisNControl} \\
+  --n-simulations ${powerAnalysisNSimulations} \\
+  --n-perm ${powerAnalysisNPerm} \\
+  --alpha ${powerAnalysisAlpha} \\
+  --seed ${powerAnalysisSeed} \\
+  --transform "${powerAnalysisTransform}" \\
+  --contralateral-sample-types "${powerAnalysisContralateralTypes}" \\
+  "\${POWER_SKIP_ARGS[@]}" \\
+  "\${POWER_CONTRALATERAL_ARGS[@]}" \\
+  "\${POWER_INDICSPECIES_ARGS[@]}"
+
+touch power_analysis.done
 """
 }
 

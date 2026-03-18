@@ -243,7 +243,7 @@ Map logical stage environments to YAML files in `SPARK/envs/`.
 Common keys:
 - `main`, `sina`, `taxonomy`, `mitomaster`, `mito_checker`, `filter_counts`, `general_stats`, `plot_metadata`, `sankey`
 - `biochem_pre_asv` or `biochem`
-- Optional advanced keys: `diversity`, `indicspecies`, `clustermaps`, `spieceasi`, `network`, `network_modules`, `plot_upset`, `bubbleplotter`, `umap_clustering`, plus step-specific `biochem_*`
+- Optional advanced keys: `diversity`, `indicspecies`, `power_analysis`, `clustermaps`, `spieceasi`, `network`, `network_modules`, `plot_upset`, `bubbleplotter`, `umap_clustering`, plus step-specific `biochem_*`
 
 ### Feature toggles to review
 - `mito.enabled`
@@ -255,9 +255,33 @@ Common keys:
 - `collectors_curve.enabled`
 - `diversity.enabled`
 - `indicspecies.enabled`
+- `power_analysis.enabled`
 - `clustermaps.enabled`
 - `spieceasi.enabled`
 - `biochem_pre_asv.enabled`
+
+### `power_analysis`
+Optional patient-aware power-analysis branch. This stage is off by default and requires `metadata_plots.enabled: true`, because it builds a long-format master table from `ASV_meta_micro*.tsv` plus the final micro count table. If `indicspecies.enabled: true`, the power-analysis plotting wrapper will also reuse the run's indicspecies outputs for aligned ISA power figures.
+
+Common keys:
+- `enabled`
+- `output_dir`
+- `sample_col`
+- `patient_col`
+- `case_col`
+- `type_col`
+- `sample_sizes_cancer`
+- `sample_sizes_stype`
+- `n_control`
+- `n_simulations`
+- `n_perm`
+- `alpha`
+- `seed`
+- `skip_estimate`
+- `skip_plot`
+- `transform` (`none` or `rclr`)
+- `keep_contralateral_in_cancer`
+- `contralateral_sample_types`
 
 ---
 
@@ -281,6 +305,7 @@ Under `paths.output_dir`, typical directories include:
 - `fastp/`, `merged/`, `filtered/`, `concat/`, `derep/`, `denoise/`, `nochimeras/`, `ASVs/`
 - `sina/`, `taxonomy/`, `mito/`, `stats/`, `logs/`
 - optional: `metadata/`, `batch_correction/`, `outliers_corrected/`, `diversity/`, `indicspecies/`, `clustermaps/`, `spieceasi/`, `network/`
+- optional: `power_analysis/`
 - optional biochem branch outputs when `biochem_pre_asv.enabled: true`
 
 Nextflow runtime artifacts:
@@ -296,6 +321,9 @@ Nextflow runtime artifacts:
 
 - `metadata_plots metadata file not found ...`
   - Provide `metadata_plots.metadata` or disable `metadata_plots.enabled`.
+
+- `power_analysis.enabled requires metadata_plots.enabled to be true`
+  - Enable `metadata_plots`, or disable `power_analysis`.
 
 - `... BLAST database not found ...`
   - Set `mito.mito_db` / `mito.biof_db` to valid DB prefixes and ensure files exist.

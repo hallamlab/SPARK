@@ -61,6 +61,9 @@ diversity:
 indicspecies:
   enabled: false
 
+power_analysis:
+  enabled: false
+
 clustermaps:
   enabled: false
 
