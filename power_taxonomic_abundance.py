@@ -19,6 +19,16 @@ from statsmodels.stats.multitest import multipletests
 warnings.filterwarnings('ignore')
 
 
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
 def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Lung Brush,BAL',
                                  contralateral_col='lung_status', cancer_site_col='Cancer_Site',
                                  lung_side_col='lung_code', contralateral_value='Contralateral'):
@@ -58,16 +68,16 @@ def apply_transform(count_matrix, transform):
     return count_matrix / totals
 
 
-def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
+def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1, sample_col='sample'):
     """
     Aggregate ASV counts to taxonomic level.
     Returns: DataFrame with samples × taxa
     """
     # Group by sample and taxon
-    agg = long_df.groupby(['lmp_id', tax_level])['count'].sum().reset_index()
+    agg = long_df.groupby([sample_col, tax_level])['count'].sum().reset_index()
 
     # Pivot to wide format
-    wide = agg.pivot(index='lmp_id', columns=tax_level, values='count').fillna(0)
+    wide = agg.pivot(index=sample_col, columns=tax_level, values='count').fillna(0)
 
     return wide
 
@@ -349,7 +359,7 @@ def main():
     parser.add_argument("--patient-col", default="Participant_ID")
     parser.add_argument("--case-col", default="Case")
     parser.add_argument("--type-col", default="type_group")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
@@ -373,6 +383,7 @@ def main():
     # Load data
     print("Loading data...")
     long_df = pd.read_csv(args.data_long, sep='\t')
+    sample_col = resolve_sample_col(long_df, args.sample_col)
     if args.exclude_contralateral_in_cancer:
         long_df = filter_contralateral_long_df(long_df, case_col=args.case_col, type_col=args.type_col, contralateral_sample_types=args.contralateral_sample_types)
 
@@ -416,11 +427,11 @@ def main():
             stype_df = long_df[long_df[args.type_col] == stype].copy()
 
             # Aggregate to taxonomy
-            tax_wide = aggregate_to_taxonomy(stype_df, tax_level=tax_level, min_prevalence=0.1)
+            tax_wide = aggregate_to_taxonomy(stype_df, tax_level=tax_level, min_prevalence=0.1, sample_col=sample_col)
 
             # Get metadata
-            metadata = stype_df[[args.sample_col, args.patient_col, args.case_col]].drop_duplicates()
-            metadata = metadata.set_index(args.sample_col)
+            metadata = stype_df[[sample_col, args.patient_col, args.case_col]].drop_duplicates()
+            metadata = metadata.set_index(sample_col)
 
             sample_ids = metadata.index.intersection(tax_wide.index)
             metadata = metadata.loc[sample_ids]

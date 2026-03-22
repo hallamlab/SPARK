@@ -354,22 +354,25 @@ class Inputs:
         data_dir: Path,
         subdir: str,
         domain: str,  # "micro" or "mito"
-        taxonomy_path: Optional[Path] = None
+        taxonomy_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
+        asv_raw_path: Optional[Path] = None,
+        asv_final_path: Optional[Path] = None,
     ):
         self.data_dir = Path(data_dir)
         self.subdir = subdir
         self.domain = domain
         if domain == "micro":
-            self.asv_raw = self.data_dir / subdir / "ASVs" / "ASV_target.micro.tsv"
-            self.asv_final = self.data_dir / subdir / "ASVs" / "ASV_final.micro.tsv"
-            self.meta = self.data_dir / subdir / "metadata" / "metadata_updated_micro.tsv"
+            self.asv_raw = asv_raw_path or (self.data_dir / subdir / "ASVs" / "ASV_target.micro.tsv")
+            self.asv_final = asv_final_path or (self.data_dir / subdir / "ASVs" / "ASV_final.micro.tsv")
+            self.meta = metadata_path or (self.data_dir / subdir / "metadata" / "metadata_updated_micro.tsv")
             # taxonomy shared across domains by default
             self.tax = taxonomy_path or (self.data_dir / subdir / "taxonomy" / "ASV_SILVA_tax.full-length.vsearch.tsv")
             self.out_base = self.data_dir / subdir / "metadata"
         elif domain == "mito":
-            self.asv_raw = self.data_dir / subdir / "mito" / "ASVs" / "ASV_target.mito.tsv"
-            self.asv_final = self.data_dir / subdir / "mito" / "ASVs" / "ASV_final.mito.tsv"
-            self.meta = self.data_dir / subdir / "mito" / "metadata" / "metadata_updated_mito.tsv"
+            self.asv_raw = asv_raw_path or (self.data_dir / subdir / "mito" / "ASVs" / "ASV_target.mito.tsv")
+            self.asv_final = asv_final_path or (self.data_dir / subdir / "mito" / "ASVs" / "ASV_final.mito.tsv")
+            self.meta = metadata_path or (self.data_dir / subdir / "mito" / "metadata" / "metadata_updated_mito.tsv")
             self.tax = taxonomy_path or (self.data_dir / subdir / "taxonomy" / "ASV_SILVA_tax.full-length.vsearch.tsv")
             self.out_base = self.data_dir / subdir / "mito" / "metadata"
         else:
@@ -673,6 +676,7 @@ def run_domain(
     skip_venn: bool,
     formats: Sequence[str],
     font_size: float,
+    output_tag: str = "",
 ) -> None:
     ensure_dir(inp.out_base)
     
@@ -703,6 +707,8 @@ def run_domain(
     
     print(f"[{inp.domain}] Groups (in order): {all_groups}")
     print(f"[{inp.domain}] Palette: {palette}")
+
+    tag_suffix = f"_{output_tag.strip()}" if output_tag and output_tag.strip() else ""
     
     # Long format helper
     def melt_counts(count_df: pd.DataFrame) -> pd.DataFrame:
@@ -726,7 +732,7 @@ def run_domain(
         group_sets = {g: set(raw_tx.loc[raw_tx[group_col] == g, 'ASV_ID']) for g in groups_present}
         
         if len(group_sets) >= 2:
-            base = inp.out_base / f"raw_{inp.domain}"
+            base = inp.out_base / f"raw_{inp.domain}{tag_suffix}"
             
             # UpSet unique
             plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
@@ -763,7 +769,7 @@ def run_domain(
         group_sets = {g: set(fin_tx.loc[fin_tx[group_col] == g, 'ASV_ID']) for g in groups_present}
         
         if len(group_sets) >= 2:
-            base = inp.out_base / f"final_{inp.domain}"
+            base = inp.out_base / f"final_{inp.domain}{tag_suffix}"
             
             # UpSet unique
             plot_upset_unique(group_sets, {g: palette[g] for g in groups_present},
@@ -793,6 +799,12 @@ def parse_args() -> argparse.Namespace:
                     help="Which domain(s) to run")
     ap.add_argument("--taxonomy-path", default=None,
                     help="Optional path to taxonomy, should point to <subdir>/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv")
+    ap.add_argument("--metadata-path", default=None,
+                    help="Optional metadata TSV override (defaults to metadata_updated_<domain>.tsv)")
+    ap.add_argument("--asv-raw-path", default=None,
+                    help="Optional raw ASV table override")
+    ap.add_argument("--asv-final-path", default=None,
+                    help="Optional final ASV table override")
     
     # Grouping and colors
     ap.add_argument("--sample-id-col", default="sampleID", help="Metadata column with sample IDs")
@@ -816,6 +828,8 @@ def parse_args() -> argparse.Namespace:
                     help="Comma-separated figure formats: e.g., svg,pdf,png")
     ap.add_argument("--font-size", type=float, default=12.0,
                     help="Base font size used in UpSet plots")
+    ap.add_argument("--output-tag", default="",
+                    help="Optional suffix tag added to output stems, e.g. 'raw' -> raw_micro_raw_*.svg")
     
     return ap.parse_args()
 
@@ -823,6 +837,9 @@ def main() -> None:
     args = parse_args()
     data_dir = Path(args.data_dir)
     taxonomy_path = Path(args.taxonomy_path) if args.taxonomy_path else None
+    metadata_path = Path(args.metadata_path) if args.metadata_path else None
+    asv_raw_path = Path(args.asv_raw_path) if args.asv_raw_path else None
+    asv_final_path = Path(args.asv_final_path) if args.asv_final_path else None
     formats = [f.strip().lstrip(".") for f in args.formats.split(",") if f.strip()]
     
     # Parse subset groups if provided
@@ -846,7 +863,15 @@ def main() -> None:
     domains = ["micro", "mito"] if args.domain == "both" else [args.domain]
     
     for dom in domains:
-        inp = Inputs(data_dir=data_dir, subdir=args.subdir, domain=dom, taxonomy_path=taxonomy_path)
+        inp = Inputs(
+            data_dir=data_dir,
+            subdir=args.subdir,
+            domain=dom,
+            taxonomy_path=taxonomy_path,
+            metadata_path=metadata_path,
+            asv_raw_path=asv_raw_path,
+            asv_final_path=asv_final_path,
+        )
         print(f"[INFO] Running {inp}")
         run_domain(
             inp=inp,
@@ -860,6 +885,7 @@ def main() -> None:
             skip_venn=args.skip_venn,
             formats=formats,
             font_size=args.font_size,
+            output_tag=args.output_tag,
         )
         print(f"[OK] Finished {dom}")
 

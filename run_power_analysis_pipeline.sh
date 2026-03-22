@@ -19,7 +19,7 @@ Usage:
     [--type-col type_group] \
     [--sample-sizes-cancer 6,8,10,15,20,25,30] \
     [--sample-sizes-stype 10,15,20,25,30,40,50] \
-    [--n-control 25] [--n-simulations 1000] [--n-perm 199] \
+    [--n-simulations 1000] [--n-perm 199] \
     [--alpha 0.05] [--seed 42] \
     [--skip-estimate] [--skip-plot] \
     [--transform none|rclr] \
@@ -37,7 +37,6 @@ CASE_COL="Case"
 TYPE_COL="type_group"
 SAMPLE_SIZES_CANCER="6,8,10,15,20,25,30"
 SAMPLE_SIZES_STYPE="10,15,20,25,30,40,50"
-N_CONTROL="25"
 N_SIMULATIONS="1000"
 N_PERM="199"
 ALPHA="0.05"
@@ -60,7 +59,6 @@ while [[ $# -gt 0 ]]; do
     --type-col) TYPE_COL="$2"; shift 2 ;;
     --sample-sizes-cancer) SAMPLE_SIZES_CANCER="$2"; shift 2 ;;
     --sample-sizes-stype) SAMPLE_SIZES_STYPE="$2"; shift 2 ;;
-    --n-control) N_CONTROL="$2"; shift 2 ;;
     --n-simulations) N_SIMULATIONS="$2"; shift 2 ;;
     --n-perm) N_PERM="$2"; shift 2 ;;
     --alpha) ALPHA="$2"; shift 2 ;;
@@ -113,9 +111,12 @@ python3 "$SCRIPT_DIR/power_main.py" \
   --data-wide "$DATA_WIDE" \
   --data-long "$DATA_LONG" \
   --effect-sizes-dir "$EFFECT_DIR" \
+  --sample-col "$SAMPLE_COL" \
+  --patient-col "$PATIENT_COL" \
+  --case-col "$CASE_COL" \
+  --type-col "$TYPE_COL" \
   --sample-sizes-cancer "$SAMPLE_SIZES_CANCER" \
   --sample-sizes-stype "$SAMPLE_SIZES_STYPE" \
-  --n-control "$N_CONTROL" \
   --n-simulations "$N_SIMULATIONS" \
   --n-perm "$N_PERM" \
   --alpha "$ALPHA" \

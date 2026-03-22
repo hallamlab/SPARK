@@ -32,7 +32,7 @@ option_list <- list(
               help="Long format data file (ASV_master_long.tsv)"),
   make_option("--data-wide", type="character",
               help="Wide count matrix (ASV_master_count_wide.tsv)"),
-  make_option("--sample-col", type="character", default="lmp_id",
+  make_option("--sample-col", type="character", default="sample",
               help="Column in long data for sample IDs [default: %default]"),
   make_option("--patient-col", type="character", default="Participant_ID",
               help="Column for patient IDs [default: %default]"),
@@ -136,9 +136,14 @@ cat("  Wide format:", args$`data-wide`, "\n\n")
 # Read long format data to get metadata
 message("Reading long format data: ", args$`data-long`)
 long_df <- read_tsv(args$`data-long`, show_col_types = FALSE)
+sample_col <- args$`sample-col`
+if (!(sample_col %in% names(long_df)) && identical(sample_col, "sample") && ("lmp_id" %in% names(long_df))) {
+  message("Column 'sample' not found; using legacy alias 'lmp_id'.")
+  sample_col <- "lmp_id"
+}
 
 # Extract metadata (unique sample-level records)
-required_cols <- c(args$`sample-col`, args$`patient-col`)
+required_cols <- c(sample_col, args$`patient-col`)
 group_cols_vec <- strsplit(args$`group-cols`, ",", fixed = TRUE)[[1]] %>% trimws()
 if ("status" %in% group_cols_vec && !("type_group" %in% group_cols_vec)) {
   # Needed for status stratification by sample type.
@@ -175,7 +180,7 @@ if (length(missing_cols) > 0) {
 meta <- long_df %>%
   select(all_of(all_cols)) %>%
   distinct() %>%
-  tibble::column_to_rownames(args$`sample-col`)
+  tibble::column_to_rownames(sample_col)
 
 effective_contralateral_col <- args$`contralateral-col`
 if (derive_contralateral_from_sides) {

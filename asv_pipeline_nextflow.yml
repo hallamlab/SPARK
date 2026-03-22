@@ -1,9 +1,9 @@
 paths:
-  input_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/input_fastqs
-  output_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output
-  manifest: /home/ryan/Projects/UBC/LMP/avery_spark_output/sample_manifest.tsv
-  work_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/nf_work
-  conda_cache_dir: /home/ryan/Projects/UBC/LMP/avery_spark_output/input_fastqs/conda_cache
+  input_dir: /home/ryan/Projects/UBC/LMP/spark_set2_output/
+  output_dir: /home/ryan/Projects/UBC/LMP/spark_set2_output
+  manifest: /home/ryan/Projects/UBC/LMP/spark_set2_manifest.tsv
+  work_dir: /home/ryan/Projects/UBC/LMP/spark_set2_output/nf_work
+  conda_cache_dir: /home/ryan/Projects/UBC/LMP/spark_set2_output/conda_cache
     # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
@@ -13,46 +13,6 @@ resources:
 
 biochem_pre_asv:
   enabled: false
-  table_a: /cephfs/rjm_work/si_asv/ref_db/SI_JA_Compiled_Geochem_Dec_09_Outlier_RM.csv
-  table_b: /cephfs/rjm_work/si_asv/ref_db/SI_JA_Compiled_CTD_Data_Dec_18_2025_Outlier_RM.csv
-  output_root: /cephfs/rjm_work/si_asv/NF_V4_ncbi_output/biochem_pipeline
-  cleaned_density_filename: 02_oxygen_best_available_density_RJM.tsv
-  clean_keep_cols:
-    - cruise_year_month_depth
-    - Cruise
-    - Year
-    - Month
-    - Day
-    - Depth
-    - Phosphate
-    - Silicate
-    - Nitrite
-    - Nitrate
-    - Ammonium
-    - Hydrogen Sulfide
-    - Nitrous Oxide
-    - Methane
-    - Temperature
-    - Salinity
-    - Oxygen
-    - Density
-    - Fe
-    - Dimethyl Sulfide
-  clean_drop_cols: []
-  clean_rename_map:
-    PO4: Phosphate
-    SI: Silicate
-    NO2: Nitrite
-    NO3: Nitrate
-    NH4: Ammonium
-    H2S: Hydrogen Sulfide
-    N2O: Nitrous Oxide
-    CH4: Methane
-    Oxygen_best_available: Oxygen
-    density_kg_m3: Density
-  feature_cols: Oxygen,Nitrate,Nitrite,Nitrous Oxide,Ammonium,Hydrogen Sulfide,Methane,Phosphate,Silicate,Temperature,Salinity,Density,Fe,Dimethyl Sulfide
-  gmm_k: auto
-  eof_pcs: 1,2,4
 
 filename_patterns:
   r1_tokens:
@@ -157,12 +117,12 @@ mito:
 
 filter_counts:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set2_metadata.tsv
   output: ASV_target.tsv
-  group_col: type_group
+  group_col: Type_Group
   min_group_size: 3
   abundance_threshold: 0.5
-  sample_id_col: sample
+  sample_id_col: Sample
   min_consensus: 0.0
   taxon_col: Taxon
   consensus_col: Consensus
@@ -178,10 +138,10 @@ general_stats:
 
 sankey:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set2_metadata.tsv
   sub_dir: .
-  sample_col: sample
-  group1_col: type_group
+  sample_col: Sample
+  group1_col: Type_Group
   color_col: Color
   keep_types:
   arrangement: freeform
@@ -192,11 +152,13 @@ sankey:
 
 metadata_plots:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set2_metadata.tsv
   sub_dir: .
-  sample_col: sample
-  type_col: type_group
+  sample_col: Sample
+  type_col: Type_Group
   color_col: Color
+  subtraction_group_col: Type_Group
+  subtraction_groups: ['Scope Flush', 'Skin Brush', 'Control']
   keep_types:
     - Oral Rinse
     - BAL
@@ -212,11 +174,11 @@ metadata_plots:
 batch_correction:
   enabled: false
   output_dir: batch_correction
-  sample_id_col: sample
+  sample_id_col: Sample
   batch_col: DNA_plate
   asv_orientation: features_rows
-  biological_covariates: type_group
-  biological_color_col: type_group
+  biological_covariates: Type_Group
+  biological_color_col: Type_Group
   color_palette_col: Color
   conqur_mode: standard
   conqur_num_core: 6
@@ -241,11 +203,11 @@ batch_correction:
 outlier_detection:
   enabled: true
   output_dir: outliers_corrected
-  sample_col: sample
+  sample_col: Sample
   group_cols:
     - type_group,Case
   transform: none
-  asv_orientation: samples_rows
+  asv_orientation: Samples_rows
   pre_transformed: true
   scale: false
   use_iso: true
@@ -264,8 +226,8 @@ outlier_detection:
 
 collectors_curve:
   enabled: true
-  sample_col: sample
-  group_col: type_group
+  sample_col: Sample
+  group_col: Type_Group
   color_col: Color
   group_order:
     - Oral Rinse
@@ -286,8 +248,8 @@ plot_upset:
   sub_dir: .
   domain: micro
   taxonomy_path:
-  sample_id_col: sample
-  group_col: type_group
+  sample_id_col: Sample
+  group_col: Type_Group
   color_col: Color
   group_order:
     - Oral Rinse
@@ -304,8 +266,8 @@ bubbleplotter:
   enabled: true
   output_prefix: metadata/bubble_plot_asv
   count_col: corr_count
-  sample_col: sample
-  group1_col: type_group
+  sample_col: Sample
+  group1_col: Type_Group
   group2_col: Case
   color_col: Color
   group1_order:
@@ -320,9 +282,9 @@ bubbleplotter:
 umap_clustering:
   enabled: true
   output_prefix: metadata/umap_clustering
-  sample_col: sample
+  sample_col: Sample
   count_col: corr_count
-  group1_col: type_group
+  group1_col: Type_Group
   group2_col: Case
   color_col: Color
   group1_order:
@@ -345,8 +307,8 @@ diversity:
   output_dir: diversity
   mito_output_dir: mito/diversity
   mito_input:
-  sample_col: sample
-  group1_col: type_group
+  sample_col: Sample
+  group1_col: Type_Group
   group2_col: Case
   color_col: Color
   block_col: Participant_ID
@@ -364,10 +326,10 @@ diversity:
 
 indicspecies:
   enabled: true
-  sample_col: sample
+  sample_col: Sample
   color_col: Color
   group_cols:
-    - type_group
+    - Type_Group
     - Case
   group1_order:
     - Oral Rinse
@@ -398,35 +360,34 @@ indicspecies:
   aligned_min_stat: 0.0
   aligned_top_n: 25
   venn:
-  taxonomy: /home/ryan/Projects/UBC/LMP/avery_spark_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
+  taxonomy: /home/ryan/Projects/UBC/LMP/spark_set2_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
 
 power_analysis:
-  enabled: false
+  enabled: true
   output_dir: power_analysis
-  sample_col: sample
+  sample_col: Sample
   patient_col: Participant_ID
   case_col: Case
-  type_col: type_group
-  sample_sizes_cancer: 6,8,10,15,20,25,30
-  sample_sizes_stype: 10,15,20,25,30,40,50
-  n_control: 25
-  n_simulations: 1000
-  n_perm: 199
+  type_col: Type_Group
+  sample_sizes_cancer: 6,10,20
+  sample_sizes_stype: 10,20,30
+  n_simulations: 100
+  n_perm: 49
   alpha: 0.05
   seed: 42
   skip_estimate: false
   skip_plot: false
   transform: none
   keep_contralateral_in_cancer: false
-  contralateral_sample_types: Lung Brush,BAL
+  contralateral_sample_types: Bronchial Brush,BAL
 
 bray_patient_aware:
   enabled: false
   output_dir: bray_patient_aware
-  sample_col: sample
+  sample_col: Sample
   patient_col: Participant_ID
   case_col: Case
-  type_col: type_group
+  type_col: Type_Group
   sample_types: Oral Rinse,BAL,Bronchial Brush
   exclude_contralateral_in_cancer: true
   contralateral_col: lung_status
@@ -442,10 +403,10 @@ bray_patient_aware:
 taxonomy_patient_aware:
   enabled: false
   output_dir: taxonomy_patient_aware
-  sample_col: sample
+  sample_col: Sample
   patient_col: Participant_ID
   case_col: Case
-  type_col: type_group
+  type_col: Type_Group
   count_col: count
   tax_levels: Phylum,Family
   sample_types: Oral Rinse,BAL,Bronchial Brush
@@ -464,8 +425,8 @@ taxonomy_patient_aware:
 lung_status_analysis:
   enabled: false
   output_dir: lung_status_analysis
-  sample_col: sample
-  type_col: type_group
+  sample_col: Sample
+  type_col: Type_Group
   sample_types: Bronchial Brush,BAL
   case_col: Case
   patient_col: Participant_ID
@@ -481,12 +442,12 @@ clustermaps:
   output_dir: clustermaps
   mito_output_dir: mito/clustermaps
   mito_input:
-  isa_file: /home/ryan/Projects/UBC/LMP/avery_spark_output/indicspecies/
+  isa_file: /home/ryan/Projects/UBC/LMP/spark_set2_output/indicspecies/
   run_mito: true
-  sample_col: sample
+  sample_col: Sample
   sample_code_col: sample_code
   asv_id_col: ASV_ID
-  group1_col: type_group
+  group1_col: Type_Group
   group2_col: Case
   group3_col:
   group4_col:
@@ -539,7 +500,7 @@ spieceasi:
   node_features:
   network_modes:
     - all
-  metadata: /home/ryan/Projects/UBC/LMP/avery_spark_output/Sample_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set2_metadata.tsv
   color_col: Color
   group1_order:
     - Oral Rinse
@@ -602,46 +563,9 @@ master_summary:
 
 trajectory_analysis:
   enabled: false
-  output_dir: trajectory_analysis
-  month_col: Month
-  group_cols:
-    - Depth
-    - cluster_after
-  color_col: Color
-  top_taxa: 10
-
-stratification:
-  enabled: false
-  output_dir: stratification_timeseries_analysis
-  date_col: Date
-  month_col: Month
-  year_col: Year
-  depth_col: Depth
-  consensus_threshold: 2
-  sample_id_col: sample
-  trajectory_group_col: cluster_after
-  trajectory_summary:
 
 assign_compartments:
   enabled: false
-  output_dir: compartments
-  depth_col: Depth
-  month_col: Month
-  biochem_cols:
-    - Temperature
-    - Oxygen
-    - Nitrogen Oxides
-    - Nitrate
-    - Nitrite
-    - Ammonium
-    - Nitrous Oxide
-    - Hydrogen Sulfide
-    - Dimethyl Sulfide
-    - Methane
-    - Phosphate
-    - Silicate
-  use_integrated: true
-  verbose: true
 
 environments:
   main: envs/asv_pipeline.yml

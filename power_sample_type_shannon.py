@@ -18,6 +18,26 @@ from itertools import combinations
 warnings.filterwarnings('ignore')
 
 
+def normalize_sample_ids(values):
+    """Normalize sample IDs so numeric-looking IDs align across long and wide tables."""
+    series = pd.Series(values, copy=False)
+    as_num = pd.to_numeric(series, errors='coerce')
+    normalized = series.astype(str)
+    int_like = as_num.notna() & np.isclose(as_num % 1, 0)
+    normalized.loc[int_like] = as_num.loc[int_like].astype(np.int64).astype(str)
+    return normalized
+
+
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
 def shannon_diversity(counts):
     """Calculate Shannon diversity for a count vector."""
     counts = counts[counts > 0]
@@ -187,12 +207,19 @@ def main():
     print("Loading data...")
     long_df = pd.read_csv(args.data_long, sep='\t')
     wide_df = pd.read_csv(args.data_wide, sep='\t', index_col=0)
+    sample_col = resolve_sample_col(long_df, args.sample_col)
+    long_df[sample_col] = normalize_sample_ids(long_df[sample_col])
+    wide_df.columns = normalize_sample_ids(wide_df.columns)
 
     # Get metadata
-    metadata = long_df[[args.sample_col, args.patient_col, args.type_col]].drop_duplicates()
-    metadata = metadata.set_index(args.sample_col)
+    metadata = long_df[[sample_col, args.patient_col, args.type_col]].drop_duplicates()
+    metadata = metadata.set_index(sample_col)
 
     sample_ids = metadata.index.intersection(wide_df.columns)
+    if len(sample_ids) == 0:
+        raise ValueError(
+            "No overlapping samples between long and wide power-analysis inputs after sample-ID normalization."
+        )
     metadata = metadata.loc[sample_ids]
     wide_df_filtered = wide_df[sample_ids].T
 

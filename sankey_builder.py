@@ -388,6 +388,8 @@ def get_parser() -> argparse.ArgumentParser:
     io.add_argument("--color-col", default="Color", help="Color column in metadata")
     io.add_argument("--keep-types", default="",
                     help="Comma-separated list; if empty, keep all types")
+    io.add_argument("--all-samples", action="store_true",
+                    help="Use all metadata samples as the sample universe instead of only samples present in the microbial ASV table.")
 
     io.add_argument("--fastq-stats", default="stats/fastq_stats.tsv",
                     help="Path (relative to sub-dir or absolute) to raw fastq stats TSV")
@@ -454,6 +456,8 @@ def main():
         print(f"[i] ASV decon: {asv_decon_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
 
+    meta = read_metadata(metadata_path, args.samp_col, args.group1_col, keep_types)
+
     # ASV matrices -> long -> merge -> sum
     # Use consistent sample ID parsing across all ASV matrices
     asv_micro_long = read_asv_matrix(
@@ -461,7 +465,10 @@ def main():
         args.samp_col,
     )
 
-    sample_list = asv_micro_long[args.samp_col].unique().tolist()
+    if args.all_samples:
+        sample_list = meta[args.samp_col].astype(str).unique().tolist()
+    else:
+        sample_list = asv_micro_long[args.samp_col].unique().tolist()
 
     asv_raw_long = read_asv_matrix(
         asv_raw_path,
@@ -475,8 +482,7 @@ def main():
     )
     asv_decon_long = asv_decon_long[asv_decon_long[args.samp_col].isin(sample_list)].copy()
 
-    # Read metadata and filter by types, then restrict to samples with ASV micro data
-    meta = read_metadata(metadata_path, args.samp_col, args.group1_col, keep_types)
+    # Restrict metadata to the active sample universe
     meta = meta[meta[args.samp_col].isin(sample_list)].copy()
 
     manifest_map = load_sample_manifest(manifest_path)

@@ -25,10 +25,33 @@ import json
 warnings.filterwarnings('ignore')
 
 
-def filter_contralateral_long_and_wide(long_df, wide_df, sample_col='lmp_id', case_col='Case', type_col='type_group',
+def normalize_sample_ids(values):
+    """Normalize sample IDs so numeric-looking IDs align across long and wide tables."""
+    series = pd.Series(values, copy=False)
+    as_num = pd.to_numeric(series, errors='coerce')
+    normalized = series.astype(str)
+    int_like = as_num.notna() & np.isclose(as_num % 1, 0)
+    normalized.loc[int_like] = as_num.loc[int_like].astype(np.int64).astype(str)
+    return normalized
+
+
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
+def filter_contralateral_long_and_wide(long_df, wide_df, sample_col='sample', case_col='Case', type_col='type_group',
                                        contralateral_sample_types='Lung Brush,BAL', contralateral_col='lung_status',
                                        cancer_site_col='Cancer_Site', lung_side_col='lung_code', contralateral_value='Contralateral'):
     work = long_df.copy()
+    work[sample_col] = normalize_sample_ids(work[sample_col])
+    wide_df = wide_df.copy()
+    wide_df.columns = normalize_sample_ids(wide_df.columns)
     contra = contralateral_col
     if contra not in work.columns and {cancer_site_col, lung_side_col}.issubset(work.columns):
         cancer_side = work[cancer_site_col].astype(str).str[:1].str.upper()
@@ -66,14 +89,18 @@ def load_data(long_path, wide_path):
     elif wide_df.columns[0].startswith('ASV'):
         wide_df = wide_df.set_index(wide_df.columns[0])
 
+    wide_df.columns = normalize_sample_ids(wide_df.columns)
+
     print(f"Loaded {len(long_df)} rows (long), {wide_df.shape} (wide: ASVs × samples)")
     return long_df, wide_df
 
 
-def get_sample_metadata(long_df, sample_col='lmp_id', patient_col='Participant_ID',
+def get_sample_metadata(long_df, sample_col='sample', patient_col='Participant_ID',
                         case_col='Case', type_col='type_group'):
     """Extract sample-level metadata."""
-    meta = long_df[[sample_col, patient_col, case_col, type_col]].drop_duplicates()
+    meta = long_df[[sample_col, patient_col, case_col, type_col]].copy()
+    meta[sample_col] = normalize_sample_ids(meta[sample_col])
+    meta = meta.drop_duplicates()
     meta = meta.set_index(sample_col)
     print(f"Extracted metadata for {len(meta)} samples from {meta[patient_col].nunique()} patients")
     return meta
@@ -332,7 +359,7 @@ def classify_asvs(wide_df, prevalence_thresholds=(0.2, 0.5)):
 
 # ======================== Taxonomic Abundance Effect Sizes ========================
 
-def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', count_col='count', transform='none'):
+def calculate_taxonomic_abundances(long_df, tax_level, sample_col='sample', count_col='count', transform='none'):
     """
     Calculate relative abundances at a given taxonomic level.
     Returns a DataFrame with samples as rows and taxa as columns.
@@ -359,14 +386,14 @@ def calculate_taxonomic_abundances(long_df, tax_level, sample_col='lmp_id', coun
 
 
 def taxonomic_effect_sizes(long_df, metadata, tax_level='Phylum',
-                          case_col='Case', patient_col='Participant_ID',
+                          case_col='Case', patient_col='Participant_ID', sample_col='sample',
                           n_bootstrap=1000, seed=42, min_prevalence=0.1, transform='none'):
     """
     Compute effect sizes (Cohen's d) for differential abundance at a taxonomic level.
     Uses patient-level aggregation and bootstrap for confidence intervals.
     """
     # Get relative abundances
-    rel_abund = calculate_taxonomic_abundances(long_df, tax_level, transform=transform)
+    rel_abund = calculate_taxonomic_abundances(long_df, tax_level, sample_col=sample_col, transform=transform)
 
     # Filter to samples in metadata
     sample_ids = metadata.index.intersection(rel_abund.index)
@@ -440,7 +467,7 @@ def main():
     parser.add_argument("--data-long", required=True, help="Long format ASV data (TSV)")
     parser.add_argument("--data-wide", required=True, help="Wide format ASV count matrix (TSV)")
     parser.add_argument("--patient-col", default="Participant_ID")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--case-col", default="Case")
     parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--n-bootstrap", type=int, default=1000)
@@ -455,15 +482,25 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     long_df, wide_df = load_data(args.data_long, args.data_wide)
+    sample_col = resolve_sample_col(long_df, args.sample_col)
+    long_df[sample_col] = normalize_sample_ids(long_df[sample_col])
     if args.exclude_contralateral_in_cancer:
         long_df, wide_df = filter_contralateral_long_and_wide(
-            long_df, wide_df, sample_col=args.sample_col, case_col=args.case_col, type_col=args.type_col,
+            long_df, wide_df, sample_col=sample_col, case_col=args.case_col, type_col=args.type_col,
             contralateral_sample_types=args.contralateral_sample_types
         )
-    metadata = get_sample_metadata(long_df, args.sample_col, args.patient_col, args.case_col, args.type_col)
+    metadata = get_sample_metadata(long_df, sample_col, args.patient_col, args.case_col, args.type_col)
 
     sample_ids = metadata.index.intersection(wide_df.columns)
     print(f"\n{len(sample_ids)} samples in both metadata and count matrix")
+
+    if len(sample_ids) == 0:
+        meta_preview = metadata.index.astype(str).tolist()[:5]
+        wide_preview = [str(c) for c in wide_df.columns.tolist()[:5]]
+        raise ValueError(
+            "No overlapping sample IDs between long-format metadata and wide count matrix "
+            f"after normalization. Metadata examples: {meta_preview}; wide examples: {wide_preview}"
+        )
 
     metadata = metadata.loc[sample_ids]
     wide_df_filtered = wide_df[sample_ids].T
@@ -647,13 +684,13 @@ def main():
 
     phylum_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Phylum',
-        case_col=args.case_col, patient_col=args.patient_col,
+        case_col=args.case_col, patient_col=args.patient_col, sample_col=sample_col,
         n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 
     family_effects = taxonomic_effect_sizes(
         long_df, metadata, tax_level='Family',
-        case_col=args.case_col, patient_col=args.patient_col,
+        case_col=args.case_col, patient_col=args.patient_col, sample_col=sample_col,
         n_bootstrap=args.n_bootstrap, seed=args.seed, transform=args.transform
     )
 

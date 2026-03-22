@@ -19,6 +19,26 @@ from itertools import combinations
 warnings.filterwarnings('ignore')
 
 
+def normalize_sample_ids(values):
+    """Normalize sample IDs so numeric-looking IDs align across long and wide tables."""
+    series = pd.Series(values, copy=False)
+    as_num = pd.to_numeric(series, errors='coerce')
+    normalized = series.astype(str)
+    int_like = as_num.notna() & np.isclose(as_num % 1, 0)
+    normalized.loc[int_like] = as_num.loc[int_like].astype(np.int64).astype(str)
+    return normalized
+
+
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
 def apply_transform(count_matrix, transform):
     if transform == 'rclr':
         out = np.zeros_like(count_matrix, dtype=float)
@@ -34,10 +54,10 @@ def apply_transform(count_matrix, transform):
     return count_matrix / totals
 
 
-def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1):
+def aggregate_to_taxonomy(long_df, tax_level='Phylum', min_prevalence=0.1, sample_col='sample'):
     """Aggregate ASV counts to taxonomic level."""
-    agg = long_df.groupby(['lmp_id', tax_level])['count'].sum().reset_index()
-    wide = agg.pivot(index='lmp_id', columns=tax_level, values='count').fillna(0)
+    agg = long_df.groupby([sample_col, tax_level])['count'].sum().reset_index()
+    wide = agg.pivot(index=sample_col, columns=tax_level, values='count').fillna(0)
 
     return wide
 
@@ -193,7 +213,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patient-col", default="Participant_ID")
     parser.add_argument("--type-col", default="type_group")
-    parser.add_argument("--sample-col", default="lmp_id")
+    parser.add_argument("--sample-col", default="sample")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     args = parser.parse_args()
@@ -213,6 +233,8 @@ def main():
     # Load data
     print("Loading data...")
     long_df = pd.read_csv(args.data_long, sep='\t')
+    sample_col = resolve_sample_col(long_df, args.sample_col)
+    long_df[sample_col] = normalize_sample_ids(long_df[sample_col])
 
     all_results = []
 
@@ -222,13 +244,17 @@ def main():
         print("="*60)
 
         # Aggregate to taxonomy
-        tax_wide = aggregate_to_taxonomy(long_df, tax_level=tax_level, min_prevalence=0.1)
+        tax_wide = aggregate_to_taxonomy(long_df, tax_level=tax_level, min_prevalence=0.1, sample_col=sample_col)
 
         # Get metadata
-        metadata = long_df[[args.sample_col, args.patient_col, args.type_col]].drop_duplicates()
-        metadata = metadata.set_index(args.sample_col)
+        metadata = long_df[[sample_col, args.patient_col, args.type_col]].drop_duplicates()
+        metadata = metadata.set_index(sample_col)
 
         sample_ids = metadata.index.intersection(tax_wide.index)
+        if len(sample_ids) == 0:
+            raise ValueError(
+                f"No overlapping samples between long-format metadata and {tax_level} taxonomic table after sample-ID normalization."
+            )
         metadata = metadata.loc[sample_ids]
         tax_wide = tax_wide.loc[sample_ids]
 

@@ -18,6 +18,16 @@ from simulate_data import bootstrap_patients, spike_in_fold_change, filter_by_sa
 warnings.filterwarnings('ignore')
 
 
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
 def filter_contralateral_metadata(meta_df, case_col='Case', type_col='type_group',
                                   contralateral_sample_types='Lung Brush,BAL',
                                   contralateral_col='lung_status',
@@ -238,6 +248,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
+    parser.add_argument("--sample-col", default="sample")
+    parser.add_argument("--patient-col", default="Participant_ID")
+    parser.add_argument("--case-col", default="Case")
+    parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
     parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
@@ -250,23 +264,24 @@ def main():
     print("Loading data...")
     wide_df = pd.read_csv(args.data_wide, sep='\t', index_col=0)
     long_df = pd.read_csv(args.data_long, sep='\t')
+    sample_col = resolve_sample_col(long_df, args.sample_col)
 
-    meta_cols = ['lmp_id', 'Participant_ID', 'Case', 'type_group', 'lung_status', 'Cancer_Site', 'lung_code']
+    meta_cols = [sample_col, args.patient_col, args.case_col, args.type_col, 'lung_status', 'Cancer_Site', 'lung_code']
     meta_cols = [c for c in meta_cols if c in long_df.columns]
-    metadata = long_df[meta_cols].drop_duplicates().set_index('lmp_id')
+    metadata = long_df[meta_cols].drop_duplicates().set_index(sample_col)
     if args.exclude_contralateral_in_cancer:
         metadata = filter_contralateral_metadata(metadata.reset_index(),
-                                                 case_col='Case', type_col='type_group',
+                                                 case_col=args.case_col, type_col=args.type_col,
                                                  contralateral_sample_types=args.contralateral_sample_types,
                                                  contralateral_col='lung_status',
                                                  cancer_site_col='Cancer_Site',
-                                                 lung_side_col='lung_code').set_index('lmp_id')
+                                                 lung_side_col='lung_code').set_index(sample_col)
     sample_ids = metadata.index.intersection(wide_df.columns)
 
     count_matrix = wide_df[sample_ids].T.values
-    patient_ids = metadata.loc[sample_ids, 'Participant_ID'].values
-    case_status = metadata.loc[sample_ids, 'Case'].values
-    sample_types = metadata.loc[sample_ids, 'type_group'].values
+    patient_ids = metadata.loc[sample_ids, args.patient_col].values
+    case_status = metadata.loc[sample_ids, args.case_col].values
+    sample_types = metadata.loc[sample_ids, args.type_col].values
     asv_names = wide_df.index.tolist()
 
     # Determine actual number of control patients from the data

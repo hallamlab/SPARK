@@ -77,6 +77,34 @@ def read_tsv(path: Path, index_col: Optional[int] = None) -> pd.DataFrame:
         raise ValueError(f"Failed to read {path}: {e}")
 
 
+def normalize_sample_id_value(value: Any) -> str:
+    """Normalize sample IDs to stable string keys."""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.endswith(".0"):
+        try:
+            num = float(text)
+            if np.isfinite(num) and num.is_integer():
+                return str(int(num))
+        except ValueError:
+            pass
+    return text
+
+
+def normalize_sample_id_series(series: pd.Series) -> pd.Series:
+    """Normalize a sample-ID series to string values."""
+    return series.map(normalize_sample_id_value).astype(str)
+
+
+def normalize_distance_matrix_ids(dist_matrix: pd.DataFrame) -> pd.DataFrame:
+    """Normalize row/column sample IDs of a square distance matrix."""
+    dm = dist_matrix.copy()
+    dm.index = pd.Index([normalize_sample_id_value(v) for v in dm.index], name=dm.index.name)
+    dm.columns = [normalize_sample_id_value(v) for v in dm.columns]
+    return dm
+
+
 def safe_merge(left: pd.DataFrame, right: pd.DataFrame, on: str, 
                how: str = 'left', suffixes: Tuple[str, str] = ('', '_drop')) -> pd.DataFrame:
     """Safely merge DataFrames, avoiding column conflicts."""
@@ -720,6 +748,7 @@ def run_analysis_pipeline(
     
     # Prepare working dataframe
     df = metadata.copy()
+    df[sample_col] = normalize_sample_id_series(df[sample_col])
     df[group_col] = df[group_col].astype(str)
 
     # Apply filters
@@ -755,6 +784,7 @@ def run_analysis_pipeline(
         
         # Merge alpha diversity
         alpha_df = alpha_table.reset_index().rename(columns={'sampleID': sample_col})
+        alpha_df[sample_col] = normalize_sample_id_series(alpha_df[sample_col])
 
         df = safe_merge(df, alpha_df, on=sample_col)
         
@@ -813,12 +843,12 @@ def run_analysis_pipeline(
         
         # Align groups to distance matrix samples
         common_samples = dist_matrix.index.intersection(df[sample_col])
-        groups_series = df.set_index(sample_col).loc[common_samples, group_col]
+        groups_series = df.drop_duplicates(subset=[sample_col]).set_index(sample_col).loc[common_samples, group_col]
         
         # Compute PERMANOVA
         block_series = None
         if block_col and block_col in df.columns:
-            block_series = df.set_index(sample_col).loc[common_samples, block_col]
+            block_series = df.drop_duplicates(subset=[sample_col]).set_index(sample_col).loc[common_samples, block_col]
 
         global_perm, pairwise_perm = compute_permanova(
             dist_matrix,
@@ -1069,6 +1099,7 @@ def main():
     # Read metadata
     try:
         metadata = read_tsv(args.metadata)
+        metadata[args.sample_col] = normalize_sample_id_series(metadata[args.sample_col])
     except Exception as e:
         print(f"[ERROR] Failed to read metadata: {e}", file=sys.stderr)
         sys.exit(1)
@@ -1089,6 +1120,10 @@ def main():
     if args.alpha_table:
         try:
             alpha_table = read_tsv(args.alpha_table, index_col=0)
+            alpha_table.index = pd.Index(
+                [normalize_sample_id_value(v) for v in alpha_table.index],
+                name=alpha_table.index.name
+            )
         except Exception as e:
             warnings.warn(f"Could not read alpha table: {e}")
     
@@ -1097,13 +1132,17 @@ def main():
     
     if args.distance_bray:
         try:
-            distance_matrices['bray'] = read_tsv(args.distance_bray, index_col=0)
+            distance_matrices['bray'] = normalize_distance_matrix_ids(
+                read_tsv(args.distance_bray, index_col=0)
+            )
         except Exception as e:
             warnings.warn(f"Could not read Bray matrix: {e}")
     
     if args.distance_jaccard:
         try:
-            distance_matrices['jaccard'] = read_tsv(args.distance_jaccard, index_col=0)
+            distance_matrices['jaccard'] = normalize_distance_matrix_ids(
+                read_tsv(args.distance_jaccard, index_col=0)
+            )
         except Exception as e:
             warnings.warn(f"Could not read Jaccard matrix: {e}")
     
@@ -1150,19 +1189,27 @@ def main():
         if args.mito_alpha:
             try:
                 mito_alpha = read_tsv(args.mito_alpha, index_col=0)
+                mito_alpha.index = pd.Index(
+                    [normalize_sample_id_value(v) for v in mito_alpha.index],
+                    name=mito_alpha.index.name
+                )
             except Exception as e:
                 warnings.warn(f"Could not read mito alpha table: {e}")
         
         mito_distances = {}
         if args.mito_bray:
             try:
-                mito_distances['bray'] = read_tsv(args.mito_bray, index_col=0)
+                mito_distances['bray'] = normalize_distance_matrix_ids(
+                    read_tsv(args.mito_bray, index_col=0)
+                )
             except Exception as e:
                 warnings.warn(f"Could not read mito Bray matrix: {e}")
         
         if args.mito_jaccard:
             try:
-                mito_distances['jaccard'] = read_tsv(args.mito_jaccard, index_col=0)
+                mito_distances['jaccard'] = normalize_distance_matrix_ids(
+                    read_tsv(args.mito_jaccard, index_col=0)
+                )
             except Exception as e:
                 warnings.warn(f"Could not read mito Jaccard matrix: {e}")
         

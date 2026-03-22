@@ -17,6 +17,16 @@ from simulate_data import bootstrap_patients, spike_in_fold_change
 warnings.filterwarnings('ignore')
 
 
+def resolve_sample_col(df, sample_col):
+    if sample_col in df.columns:
+        return sample_col
+    alias = 'lmp_id' if sample_col == 'sample' else 'sample' if sample_col == 'lmp_id' else None
+    if alias and alias in df.columns:
+        print(f"[WARN] Sample column '{sample_col}' not found; using legacy alias '{alias}'.")
+        return alias
+    raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
+
+
 def bray_curtis_from_counts(count_matrix):
     """Compute Bray-Curtis dissimilarity from count matrix (samples × ASVs)."""
     bc = pdist(count_matrix, metric='braycurtis')
@@ -131,6 +141,9 @@ def main():
     parser.add_argument("--n-perm", type=int, default=199, help="Number of permutations per test")
     parser.add_argument("--alpha", type=float, default=0.05, help="Significance level")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--sample-col", default="sample", help="Sample ID column in long-format data")
+    parser.add_argument("--patient-col", default="Participant_ID", help="Patient ID column in long-format data")
+    parser.add_argument("--case-col", default="Case", help="Case/control label column in long-format data")
     parser.add_argument("--outdir", required=True, help="Output directory")
     args = parser.parse_args()
     
@@ -141,14 +154,15 @@ def main():
     print("Loading data...")
     wide_df = pd.read_csv(args.data_wide, sep='\t', index_col=0)
     long_df = pd.read_csv(args.data_long, sep='\t')
-    
+    sample_col = resolve_sample_col(long_df, args.sample_col)
+
     # Get metadata
-    metadata = long_df[['lmp_id', 'Participant_ID', 'Case']].drop_duplicates().set_index('lmp_id')
+    metadata = long_df[[sample_col, args.patient_col, args.case_col]].drop_duplicates().set_index(sample_col)
     sample_ids = metadata.index.intersection(wide_df.columns)
-    
+
     count_matrix = wide_df[sample_ids].T.values
-    patient_ids = metadata.loc[sample_ids, 'Participant_ID'].values
-    case_status = metadata.loc[sample_ids, 'Case'].values
+    patient_ids = metadata.loc[sample_ids, args.patient_col].values
+    case_status = metadata.loc[sample_ids, args.case_col].values
     asv_names = wide_df.index.tolist()
     
     print(f"Loaded {count_matrix.shape[0]} samples, {count_matrix.shape[1]} ASVs")

@@ -98,6 +98,33 @@ def sanitize_token(text: str) -> str:
     return out or "field"
 
 
+def source_prefix(kind: str, path: Path) -> str:
+    parts = [sanitize_token(kind)]
+    path_parts = list(path.parts)
+    try:
+        anchor_idx = max(i for i, part in enumerate(path_parts) if part == kind)
+        rel_parts = path_parts[anchor_idx + 1 :]
+    except ValueError:
+        rel_parts = [path.name]
+
+    for part in rel_parts[:-1]:
+        token = sanitize_token(part)
+        if token:
+            parts.append(token)
+    parts.append(sanitize_token(path.stem))
+    return "__".join(parts)
+
+
+def build_unique_rename_map(value_cols: list[object], prefix: str) -> dict[object, str]:
+    rename_map: dict[object, str] = {}
+    seen: Counter[str] = Counter()
+    for col in value_cols:
+        base = f"{prefix}__{sanitize_token(col)}"
+        seen[base] += 1
+        rename_map[col] = base if seen[base] == 1 else f"{base}__dup{seen[base]}"
+    return rename_map
+
+
 def read_table(path: Path) -> pd.DataFrame:
     sep = DELIM_BY_SUFFIX.get(path.suffix.lower(), ",")
     return pd.read_csv(path, sep=sep, header=0, low_memory=False)
@@ -361,7 +388,7 @@ def table_to_asv_features(
             table_meta["feature_cols"] = int(len(out_cols))
             return out, table_meta
 
-    rename_map = {c: f"{prefix}__{sanitize_token(c)}" for c in value_cols}
+    rename_map = build_unique_rename_map(value_cols, prefix)
     keep = work[["ASV_ID"] + value_cols].rename(columns=rename_map)
     out = collapse_by_asv(keep)
 
@@ -437,7 +464,7 @@ def build_asv_feature_table(
     for kind, table_path in selected_paths:
         basename = table_path.name
         preferred_key = PREFERRED_KEY_BY_BASENAME.get(basename)
-        prefix = f"{kind}__{sanitize_token(table_path.stem)}"
+        prefix = source_prefix(kind, table_path)
         if basename in GLOBAL_NETWORK_SUMMARY_BASENAMES:
             feats, meta = table_to_global_features(table_path, prefix=prefix)
             included = feats is not None and not feats.empty

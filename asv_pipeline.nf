@@ -791,7 +791,7 @@ def fastpOutputFiles = generalStatsEnabled ? sampleRecords.collectMany { rec ->
     return outputs
 } : []
 def filteredOutputFiles = generalStatsEnabled ? sampleRecords.collect { rec ->
-    new File(dirMap.filter, "${rec.sample_id}.filtered.fasta").absolutePath
+    new File(dirMap.filter, "${rec.sample_id}.filtered.fasta.gz").absolutePath
 } : []
 def generalStatsRawArgs = joinShellArgs(rawInputFiles)
 def generalStatsFastpArgs = joinShellArgs(fastpOutputFiles)
@@ -841,6 +841,8 @@ def taxonomyRefSequences = taxonomyRefSequencesFile.canonicalPath
 def taxonomyOutputName = taxonomyConfig.output_tsv ?: 'ASV_SILVA_tax.full-length.vsearch.tsv'
 def taxonomyStatsName = taxonomyConfig.stats_tsv ?: 'ASV_SILVA_stats.full-length.vsearch.tsv'
 def taxonomyUppercaseName = taxonomyConfig.uppercase_fasta ?: 'ASVs.upper.fasta'
+def taxonomyUppercasePlainName = taxonomyUppercaseName.toString().endsWith('.gz') ? taxonomyUppercaseName.toString()[0..-4] : taxonomyUppercaseName.toString()
+def taxonomyUppercaseGzName = taxonomyUppercaseName.toString().endsWith('.gz') ? taxonomyUppercaseName.toString() : "${taxonomyUppercasePlainName}.gz"
 def taxonomyThreads = taxonomyConfig.threads ? (taxonomyConfig.threads as int) : pipelineThreads
 def mitoConfig = config.mito ?: [:]
 def mitoEnabled = mitoConfig.containsKey('enabled') ? (mitoConfig.enabled as boolean) : true
@@ -998,6 +1000,14 @@ if( metadataKeepTypesRaw instanceof List ) {
     metadataKeepTypes = metadataKeepTypesRaw.collect { it.toString().trim() }.findAll { it }
 } else if( metadataKeepTypesRaw ) {
     metadataKeepTypes = metadataKeepTypesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+}
+def metadataPlotsSubtractionCol = metadataPlotsConfig.subtraction_group_col ?: metadataPlotsTypeCol
+def metadataSubtractionGroupsRaw = metadataPlotsConfig.subtraction_groups
+List<String> metadataPlotsSubtractionGroups = []
+if( metadataSubtractionGroupsRaw instanceof List ) {
+    metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.collect { it.toString().trim() }.findAll { it }
+} else if( metadataSubtractionGroupsRaw ) {
+    metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
 }
 def metadataGroupOrderRaw = metadataPlotsConfig.group_order
 List<String> metadataPlotsGroupOrder = []
@@ -1589,7 +1599,6 @@ def powerAnalysisSampleSizesStypeRaw = powerAnalysisConfig.sample_sizes_stype ?:
 def powerAnalysisSampleSizesStype = powerAnalysisSampleSizesStypeRaw instanceof List ?
     powerAnalysisSampleSizesStypeRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
     powerAnalysisSampleSizesStypeRaw.toString().trim()
-def powerAnalysisNControl = powerAnalysisConfig.n_control ? (powerAnalysisConfig.n_control as int) : 25
 def powerAnalysisNSimulations = powerAnalysisConfig.n_simulations ? (powerAnalysisConfig.n_simulations as int) : 1000
 def powerAnalysisNPerm = powerAnalysisConfig.n_perm ? (powerAnalysisConfig.n_perm as int) : 199
 def powerAnalysisAlpha = powerAnalysisConfig.alpha != null ? (powerAnalysisConfig.alpha as double) : 0.05d
@@ -1739,11 +1748,9 @@ workflow {
         reads_for_concat = relabeled_stage.relabeled
     }
     def relabeled_fasta_files = reads_for_concat.map { parts -> parts[1] }
-
-    def concat_for_derep = relabeled_fasta_files
-        .collectFile(name: 'concat.fasta', storeDir: dirMap.concat, newLine: true)
-    def concat_for_counts = relabeled_fasta_files
-        .collectFile(name: 'concat_counts.fasta', storeDir: dirMap.concat, newLine: true)
+    def concat_stage = CONCAT_FASTAS(relabeled_fasta_files.collect())
+    def concat_for_derep = concat_stage.concat_for_derep
+    def concat_for_counts = concat_stage.concat_for_counts
 
     def derep_input = DEREPLICATE(concat_for_derep)
     def denoise_input = DENOISE(derep_input)
@@ -1766,7 +1773,7 @@ workflow {
             filter_counts_stage = FILTER_COUNTS(filtered_channel, taxonomy_stage.taxonomy_table, mito_summary.nontarget_table)
         }
     }
-    if( metadataPlotsEnabled && !filter_counts_stage ) {
+    if( metadataPlotsEnabled && filter_counts_stage == null ) {
         exit 1, "metadata_plots.enabled requires filter_counts outputs but filter_counts stage was not executed"
     }
     def general_stats_stage = null
@@ -1777,13 +1784,33 @@ workflow {
 def metadata_stage = null
 def metaMicroForBatch = null
 def metaMicroForOutlier = null
+def metaMicroForPlotUpset = null
 def metaMicroForCollectors = null
+def metaMicroForDiversity = null
+def metaMicroForIndicspecies = null
+def metaMicroForIndicspeciesPlots = null
+def metaMicroForClustermaps = null
 def asvMetaForBatch = null
+def asvMetaSeedForCorrection = null
+def asvMetaForBubbleplotter = null
+def asvMetaForUmap = null
 def asvMetaForClustermaps = null
-def asvMetaForBubbleUmap = null
+def asvMetaForPowerAnalysis = null
+def asvMetaForBrayPatientAware = null
+def asvMetaForTaxonomyPatientAware = null
+def asvMetaForLungStatus = null
+def asvMetaForMasterSummary = null
 def asvFinalForBatch = null
 def asvFinalForCollectors = null
+def asvFinalForDiversity = null
+def asvFinalForIndicspecies = null
 def asvFinalForSpieceasi = null
+def asvFinalForNetwork = null
+def asvFinalForPowerAnalysis = null
+def asvFinalForBrayPatientAware = null
+def asvFinalForTaxonomyPatientAware = null
+def asvFinalForLungStatus = null
+def asvFinalForMasterSummary = null
     if( metadataPlotsEnabled ) {
         metadata_stage = PLOT_METADATA(
             general_stats_stage.fastq_stats,
@@ -1791,19 +1818,41 @@ def asvFinalForSpieceasi = null
             filter_counts_stage.filtered_mito,
             taxonomy_stage.taxonomy_table
         )
-        metaMicroForBatch = metadata_stage.metadata_micro
-        metaMicroForOutlier = metadata_stage.metadata_micro
-        metaMicroForCollectors = metadata_stage.metadata_micro
-        asvMetaForBatch = metadata_stage.asv_meta_micro
-        asvMetaForClustermaps = metadata_stage.asv_meta_micro
-        asvMetaForBubbleUmap = metadata_stage.asv_meta_micro
-        asvFinalForBatch = metadata_stage.asv_final_micro
-        asvFinalForCollectors = metadata_stage.asv_final_micro
-        asvFinalForSpieceasi = metadata_stage.asv_final_micro
+        metaMicroForBatch = metadata_stage.metadata_micro.map { it }
+        metaMicroForOutlier = metadata_stage.metadata_micro.map { it }
+        metaMicroForPlotUpset = metadata_stage.metadata_micro.map { it }
+        metaMicroForCollectors = metadata_stage.metadata_micro.map { it }
+        metaMicroForDiversity = metadata_stage.metadata_micro.map { it }
+        metaMicroForIndicspecies = metadata_stage.metadata_micro.map { it }
+        metaMicroForIndicspeciesPlots = metadata_stage.metadata_micro.map { it }
+        metaMicroForClustermaps = metadata_stage.metadata_micro.map { it }
+
+        asvMetaForBatch = metadata_stage.asv_meta_micro.map { it }
+        asvMetaSeedForCorrection = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForBubbleplotter = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForUmap = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForClustermaps = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForPowerAnalysis = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForBrayPatientAware = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForTaxonomyPatientAware = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForLungStatus = metadata_stage.asv_meta_micro.map { it }
+        asvMetaForMasterSummary = metadata_stage.asv_meta_micro.map { it }
+
+        asvFinalForBatch = metadata_stage.asv_final_micro.map { it }
+        asvFinalForCollectors = metadata_stage.asv_final_micro.map { it }
+        asvFinalForDiversity = metadata_stage.asv_final_micro.map { it }
+        asvFinalForIndicspecies = metadata_stage.asv_final_micro.map { it }
+        asvFinalForSpieceasi = metadata_stage.asv_final_micro.map { it }
+        asvFinalForNetwork = metadata_stage.asv_final_micro.map { it }
+        asvFinalForPowerAnalysis = metadata_stage.asv_final_micro.map { it }
+        asvFinalForBrayPatientAware = metadata_stage.asv_final_micro.map { it }
+        asvFinalForTaxonomyPatientAware = metadata_stage.asv_final_micro.map { it }
+        asvFinalForLungStatus = metadata_stage.asv_final_micro.map { it }
+        asvFinalForMasterSummary = metadata_stage.asv_final_micro.map { it }
     }
 
     if( plotUpsetEnabled ) {
-        PLOT_UPSET(metaMicroForCollectors)
+        PLOT_UPSET(metaMicroForPlotUpset)
     }
 
     def batch_stage = null
@@ -1815,23 +1864,37 @@ def asvFinalForSpieceasi = null
             asvFinalForBatch
         )
         asvClrForOutlier = batch_stage.asv_clr_after
-        asvFinalForCollectors = batch_stage.asv_corrected_counts_int
-        asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int
+        asvFinalForCollectors = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForDiversity = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForIndicspecies = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForNetwork = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForPowerAnalysis = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForBrayPatientAware = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForTaxonomyPatientAware = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForLungStatus = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForMasterSummary = batch_stage.asv_corrected_counts_int.map { it }
         umapResultsForTrajectory = batch_stage.umap_results
         if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled || masterSummaryEnabled || powerAnalysisEnabled || brayPatientAwareEnabled || taxonomyPatientAwareEnabled || lungStatusAnalysisEnabled ) {
             def corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
-                asvMetaForClustermaps,
+                asvMetaSeedForCorrection,
                 batch_stage.asv_corrected_counts_int
             )
-            asvMetaForClustermaps = corrected_asv_meta_stage.asv_meta_corrected
-            asvMetaForBubbleUmap = corrected_asv_meta_stage.asv_meta_corrected
+            asvMetaForBubbleplotter = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForUmap = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForClustermaps = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForPowerAnalysis = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForBrayPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForTaxonomyPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForLungStatus = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForMasterSummary = corrected_asv_meta_stage.asv_meta_corrected.map { it }
         }
     }
     if( bubbleplotterEnabled ) {
-        BUBBLEPLOTTER(asvMetaForBubbleUmap)
+        BUBBLEPLOTTER(asvMetaForBubbleplotter)
     }
     if( umapClusteringEnabled ) {
-        UMAP_CLUSTERING(asvMetaForBubbleUmap)
+        UMAP_CLUSTERING(asvMetaForUmap)
     }
 
     if( outlierEnabled ) {
@@ -1849,8 +1912,8 @@ def asvFinalForSpieceasi = null
     def diversity_stage = null
     if( diversityEnabled ) {
         diversity_stage = DIVERSITY_ANALYSIS(
-            metaMicroForCollectors,
-            asvFinalForCollectors
+            metaMicroForDiversity,
+            asvFinalForDiversity
         )
     }
     def indicspecies_stage = null
@@ -1858,12 +1921,12 @@ def asvFinalForSpieceasi = null
     def indicspecies_aligned_stage = null
     if( indicspeciesEnabled ) {
         indicspecies_stage = INDICSPECIES(
-            metaMicroForCollectors,
-            asvFinalForCollectors
+            metaMicroForIndicspecies,
+            asvFinalForIndicspecies
         )
         if( indicspeciesPlotEnabled ) {
             indicspecies_plots_stage = INDICSPECIES_PLOTS(
-                metaMicroForCollectors,
+                metaMicroForIndicspeciesPlots,
                 indicspecies_stage.all_tables.collect()
             )
         }
@@ -1873,41 +1936,51 @@ def asvFinalForSpieceasi = null
             )
         }
     }
-    def indicspeciesReadyForClustermaps = indicspeciesEnabled ? indicspecies_stage.done.map { true } : Channel.value(false)
+    def indicspeciesReadyForClustermaps = null
+    def indicspeciesReadyForPowerAnalysis = null
+    if( indicspeciesEnabled ) {
+        indicspeciesReadyForClustermaps = indicspecies_stage.done.map { true }
+        indicspeciesReadyForPowerAnalysis = indicspecies_stage.done.map { true }
+    } else {
+        indicspeciesReadyForClustermaps = Channel.value(false)
+        indicspeciesReadyForPowerAnalysis = Channel.value(false)
+    }
     if( clustermapsEnabled ) {
         CLUSTERMAPS(
             asvMetaForClustermaps,
-            metaMicroForCollectors,
+            metaMicroForClustermaps,
             indicspeciesReadyForClustermaps
         )
     }
     if( powerAnalysisEnabled ) {
         POWER_ANALYSIS_PIPELINE(
-            asvMetaForClustermaps,
-            asvFinalForCollectors,
-            indicspeciesReadyForClustermaps
+            asvMetaForPowerAnalysis,
+            asvFinalForPowerAnalysis,
+            indicspeciesReadyForPowerAnalysis
         )
     }
     if( brayPatientAwareEnabled ) {
         BRAY_PATIENT_AWARE(
-            asvMetaForClustermaps,
-            asvFinalForCollectors
+            asvMetaForBrayPatientAware,
+            asvFinalForBrayPatientAware
         )
     }
     if( taxonomyPatientAwareEnabled ) {
         TAXONOMY_PATIENT_AWARE(
-            asvMetaForClustermaps,
-            asvFinalForCollectors
+            asvMetaForTaxonomyPatientAware,
+            asvFinalForTaxonomyPatientAware
         )
     }
     if( lungStatusAnalysisEnabled ) {
         LUNG_STATUS_ANALYSIS(
-            asvMetaForClustermaps,
-            asvFinalForCollectors
+            asvMetaForLungStatus,
+            asvFinalForLungStatus
         )
     }
     def spieceasi_stage = null
+    def graphAllForModules = null
     def graphAllForNetwork = null
+    def graphThrForModules = null
     def graphThrForNetwork = null
     def nodeFeaturesForNetwork = null
     def modulesSubForNetwork = null
@@ -1916,19 +1989,23 @@ def asvFinalForSpieceasi = null
         spieceasi_stage = SPIECEASI(
             asvFinalForSpieceasi
         )
-        graphAllForNetwork = spieceasi_stage.graph_all
-        graphThrForNetwork = spieceasi_stage.graph_thr
+        graphAllForModules = spieceasi_stage.graph_all.map { it }
+        graphAllForNetwork = spieceasi_stage.graph_all.map { it }
+        graphThrForModules = spieceasi_stage.graph_thr.map { it }
+        graphThrForNetwork = spieceasi_stage.graph_thr.map { it }
         nodeFeaturesForNetwork = spieceasi_stage.node_features
     } else if( networkEnabled ) {
+        graphAllForModules = Channel.value(file(networkGraphAllPath))
         graphAllForNetwork = Channel.value(file(networkGraphAllPath))
+        graphThrForModules = Channel.value(file(networkGraphThrPath))
         graphThrForNetwork = Channel.value(file(networkGraphThrPath))
         nodeFeaturesForNetwork = Channel.value(file(networkNodeFeaturesPath))
     }
     if( networkEnabled ) {
         if( networkModulesEnabled ) {
             def network_modules_stage = NETWORK_MODULES(
-                graphAllForNetwork,
-                graphThrForNetwork
+                graphAllForModules,
+                graphThrForModules
             )
             modulesSubForNetwork = network_modules_stage.modules_sub
             modulesAllForNetwork = network_modules_stage.modules_all
@@ -1945,7 +2022,7 @@ def asvFinalForSpieceasi = null
             graphAllForNetwork,
             graphThrForNetwork,
             nodeFeaturesForNetwork,
-            asvFinalForSpieceasi,
+            asvFinalForNetwork,
             taxonomy_stage.taxonomy_table,
             indicspecies_stage.group1_summary,
             indicspecies_stage.group2_summary,
@@ -1964,14 +2041,14 @@ def asvFinalForSpieceasi = null
         )
     }
     if( masterSummaryEnabled ) {
-        if( !asvMetaForClustermaps || !asvFinalForSpieceasi ) {
+        if( asvMetaForMasterSummary == null || asvFinalForMasterSummary == null ) {
             exit 1, "master_summary.enabled requires ASV_meta and ASV_final inputs from metadata/batch stages"
         }
-        def masterSummaryNetworkDone = graph_network_stage ? graph_network_stage.done : Channel.value(file(emptyModulesPath))
-        def masterSummarySankeyDone = sankey_stage ? sankey_stage.done : Channel.value(file(emptyModulesPath))
+        def masterSummaryNetworkDone = graph_network_stage != null ? graph_network_stage.done : Channel.value(file(emptyModulesPath))
+        def masterSummarySankeyDone = sankey_stage != null ? sankey_stage.done : Channel.value(file(emptyModulesPath))
         MASTER_SUMMARY(
-            asvMetaForClustermaps,
-            asvFinalForSpieceasi,
+            asvMetaForMasterSummary,
+            asvFinalForMasterSummary,
             masterSummaryNetworkDone,
             masterSummarySankeyDone
         )
@@ -2672,19 +2749,20 @@ process MERGE_READS {
     cpus sampleThreads
     conda "${condaEnvPath}"
     publishDir dirMap.merge, mode: 'copy', saveAs: { filename ->
-        filename == 'merged.fastq' ? "${meta.sample_id}.merged.fastq" : filename
+        filename == 'merged.fastq.gz' ? "${meta.sample_id}.merged.fastq.gz" : filename
     }
 
     input:
     tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("merged.fastq")
+    tuple val(meta), path("merged.fastq.gz")
 
     script:
     def allowStagger = mergeAllowStagger ? '--fastq_allowmergestagger' : ''
     if( meta.paired && r2 ) {
         """
+set -euo pipefail
 vsearch --fastq_mergepairs "${r1}" \\
         --reverse "${r2}" \\
         --fastqout merged.fastq \\
@@ -2693,14 +2771,17 @@ vsearch --fastq_mergepairs "${r1}" \\
         --fastq_truncqual ${mergeTruncQuality} \\
         ${allowStagger} \\
         --threads ${task.cpus}
+gzip -n merged.fastq
 """
     } else {
         """
+set -euo pipefail
 if [[ "${r1}" == *.gz ]]; then
   gunzip -c "${r1}" > merged.fastq
 else
   cat "${r1}" > merged.fastq
 fi
+gzip -n merged.fastq
 """
     }
 }
@@ -2710,23 +2791,27 @@ process FILTER_READS {
     cpus sampleThreads
     conda "${condaEnvPath}"
     publishDir dirMap.filter, mode: 'copy', saveAs: { filename ->
-        filename == 'filtered.fasta' ? "${meta.sample_id}.filtered.fasta" : filename
+        filename == 'filtered.fasta.gz' ? "${meta.sample_id}.filtered.fasta.gz" : filename
     }
 
     input:
     tuple val(meta), path(merged_fastq)
 
     output:
-    tuple val(meta), path("filtered.fasta")
+    tuple val(meta), path("${meta.sample_id}.filtered.fasta.gz")
 
     script:
     def filterCfg = config.filter ?: [:]
+    def filteredOut = "${meta.sample_id}.filtered.fasta"
     """
-vsearch --fastx_filter "${merged_fastq}" \\
+set -euo pipefail
+gzip -cd "${merged_fastq}" > merged.fastq
+vsearch --fastx_filter merged.fastq \\
         --fastq_maxee ${filterCfg.max_ee ?: 1.0} \\
         --fastq_minlen ${filterCfg.min_len ?: 245} \\
         --fastq_maxlen ${filterCfg.max_len ?: 1500} \\
-        --fastaout filtered.fasta
+        --fastaout "${filteredOut}"
+gzip -n "${filteredOut}"
 """
 }
 
@@ -2734,18 +2819,19 @@ process RELABEL_FILTERED {
     tag { meta.sample_id }
     cpus 1
     conda "${condaEnvPath}"
-    publishDir dirMap.concat, mode: 'copy', pattern: '*.fasta', saveAs: { filename ->
-        filename == 'filtered_relabel.fasta' ? "${meta.sample_id}.filtered.relabel.fasta" : filename
+    publishDir dirMap.concat, mode: 'copy', pattern: '*.fasta.gz', saveAs: { filename ->
+        filename == 'filtered_relabel.fasta.gz' ? "${meta.sample_id}.filtered.relabel.fasta.gz" : filename
     }
 
     input:
     tuple val(meta), path(filtered_fasta)
 
     output:
-    tuple val(meta), path("filtered_relabel.fasta"), emit: relabeled
+    tuple val(meta), path("${meta.sample_id}.filtered.relabel.fasta.gz"), emit: relabeled
 
     script:
     def labelSep = concatLabelSep
+    def relabeledOut = "${meta.sample_id}.filtered.relabel.fasta.gz"
     """
 awk -v pref="${meta.sample_id}" -v sep="${labelSep}" '{
   if (\$0 ~ /^>/) {
@@ -2753,7 +2839,31 @@ awk -v pref="${meta.sample_id}" -v sep="${labelSep}" '{
     if (\$0 !~ "^>" pref sep) \$0 = ">" pref sep substr(\$0, 2)
   }
   print
-}' "${filtered_fasta}" > filtered_relabel.fasta
+}' <(gzip -cd "${filtered_fasta}") | gzip -n > "${relabeledOut}"
+"""
+}
+
+process CONCAT_FASTAS {
+    cpus 1
+    conda "${condaEnvPath}"
+    publishDir dirMap.concat, mode: 'copy', pattern: '*.fasta.gz'
+
+    input:
+    path(filtered_fastas)
+
+    output:
+    path("concat.fasta.gz"), emit: concat_for_derep
+    path("concat_counts.fasta.gz"), emit: concat_for_counts
+
+    script:
+    def concatInputs = filtered_fastas.collect { "\"${it}\"" }.join(' ')
+    """
+set -euo pipefail
+for f in ${concatInputs}; do
+  gzip -cd "\${f}" || cat "\${f}"
+done > concat.fasta
+gzip -n -c concat.fasta > concat.fasta.gz
+cp concat.fasta.gz concat_counts.fasta.gz
 """
 }
 
@@ -2766,15 +2876,18 @@ process DEREPLICATE {
     path(concat_fasta)
 
     output:
-    path("derep.fasta")
+    path("derep.fasta.gz")
 
     script:
     """
-vsearch --derep_fulllength "${concat_fasta}" \\
+set -euo pipefail
+gzip -cd "${concat_fasta}" > concat.fasta
+vsearch --derep_fulllength concat.fasta \\
         --output derep.fasta \\
         --sizeout \\
         --threads ${task.cpus} \\
         --log "${dirMap.logs}/derep.log"
+gzip -n derep.fasta
 """
 }
 
@@ -2787,8 +2900,8 @@ process SINA_TRIM {
     path(derep_fasta)
 
     output:
-    path("derep_trimmed.fasta"), emit: trimmed_fasta
-    path("derep_SINA.fasta")
+    path("derep_trimmed.fasta.gz"), emit: trimmed_fasta
+    path("derep_SINA.fasta.gz")
     path("derep_SINA.log")
     path("derep_v_regions.tsv")
 
@@ -2798,8 +2911,9 @@ process SINA_TRIM {
     def keepGapsArg = sinaKeepGaps ? ' --keep-gaps' : ''
     """
 set -euo pipefail
+gzip -cd "${derep_fasta}" > derep_input.fasta
 sina \\
-    -i "${derep_fasta}" \\
+    -i derep_input.fasta \\
     -o derep_SINA.fasta \\
     -r "${sinaReferencePath}" \\
     -v \\
@@ -2818,6 +2932,8 @@ python "${trimSinaScriptPath}" \\
   --id-column "${sinaIdColumn}" \\
   --threads ${task.cpus} \\
   --batch-size ${sinaBatchSize}${keepGapsArg}
+gzip -n derep_SINA.fasta
+gzip -n derep_trimmed.fasta
 """
 }
 process DENOISE {
@@ -2829,17 +2945,20 @@ process DENOISE {
     path(trimmed_fasta)
 
     output:
-    path("centroids.fasta")
+    path("centroids.fasta.gz")
 
     script:
     def unoiseCfg = config.unoise ?: [:]
     """
-vsearch --cluster_unoise "${trimmed_fasta}" \\
+set -euo pipefail
+gzip -cd "${trimmed_fasta}" > derep_trimmed.fasta
+vsearch --cluster_unoise derep_trimmed.fasta \\
         --centroids centroids.fasta \\
         --sizein --sizeout --relabel ASV \\
         --minsize ${unoiseCfg.min_size ?: 3} \\
         --threads ${task.cpus} \\
         --log "${dirMap.logs}/denoise.log"
+gzip -n centroids.fasta
 """
 }
 
@@ -2852,15 +2971,18 @@ process CHIMERA_CHECK {
     path(centroids)
 
     output:
-    path("nochimeras.fasta")
+    path("nochimeras.fasta.gz")
 
     script:
     """
-vsearch --uchime3_denovo "${centroids}" \\
+set -euo pipefail
+gzip -cd "${centroids}" > centroids.fasta
+vsearch --uchime3_denovo centroids.fasta \\
         --nonchimeras nochimeras.fasta \\
         --sizein \\
         --threads ${task.cpus} \\
         --log "${dirMap.logs}/nochimera.log"
+gzip -n nochimeras.fasta
 """
 }
 
@@ -2874,17 +2996,20 @@ process CREATE_COUNT_MATRIX {
     path(nochimeras)
 
     output:
-    tuple path("ASV_counts.tsv"), path("ASVs.fasta"), emit: count_matrix
+    tuple path("ASV_counts.tsv"), path("ASVs.fasta.gz"), emit: count_matrix
 
     script:
     """
-cp "${nochimeras}" ASVs.fasta
-vsearch --usearch_global "${concat_fasta}" \\
+set -euo pipefail
+gzip -cd "${nochimeras}" > ASVs.fasta
+gzip -cd "${concat_fasta}" > concat_counts.fasta
+vsearch --usearch_global concat_counts.fasta \\
         --db ASVs.fasta \\
         --id 0.999 \\
         --otutabout ASV_counts.tsv \\
         --threads ${task.cpus} \\
         --log "${dirMap.logs}/count.log"
+gzip -n ASVs.fasta
 """
 }
 
@@ -2896,18 +3021,21 @@ process FILTER_TABLE {
     tuple path(count_table), path(asv_fasta)
 
     output:
-    tuple path("ASV_filtered.tsv"), path("ASVs_filtered.fasta"), emit: filtered
+    tuple path("ASV_filtered.tsv"), path("ASVs_filtered.fasta.gz"), emit: filtered
 
     script:
     def tableCfg = config.table_filter ?: [:]
     """
+set -euo pipefail
+gzip -cd "${asv_fasta}" > ASVs.fasta
 python "${tableScriptFile}" \\
        "${count_table}" \\
        ASV_filtered.tsv \\
        ${tableCfg.min_sample_sum ?: 5000} \\
        ${tableCfg.min_asv_sum ?: 0.01} \\
-       "${asv_fasta}" \\
+       ASVs.fasta \\
        ASVs_filtered.fasta
+gzip -n ASVs_filtered.fasta
 """
 }
 
@@ -2920,14 +3048,15 @@ process TAXONOMY {
     path(filtered_fasta)
 
     output:
-    path("${taxonomyUppercaseName}")
+    path("${taxonomyUppercaseGzName}")
     path("${taxonomyOutputName}"), emit: taxonomy_table
     path("${taxonomyStatsName}")
 
     script:
     """
 set -euo pipefail
-python - <<'PY' '${filtered_fasta}' '${taxonomyUppercaseName}'
+gzip -cd "${filtered_fasta}" > filtered_input.fasta
+python - <<'PY' filtered_input.fasta '${taxonomyUppercasePlainName}'
 import sys
 from pathlib import Path
 src = Path(sys.argv[1])
@@ -2941,12 +3070,13 @@ with src.open() as inp, dst.open('w') as out:
 PY
 
 python "${taxonomyScriptPath}" \\
-  --input-fasta "${taxonomyUppercaseName}" \\
+  --input-fasta "${taxonomyUppercasePlainName}" \\
   --ref-taxonomy "${taxonomyRefTaxonomy}" \\
   --ref-seqs "${taxonomyRefSequences}" \\
   --output-tsv "${taxonomyOutputName}" \\
   --stats-output "${taxonomyStatsName}" \\
   --threads ${task.cpus}
+gzip -n -c "${taxonomyUppercasePlainName}" > "${taxonomyUppercaseGzName}"
 """
 }
 
@@ -2967,7 +3097,8 @@ process MITOMASTER {
 set -euo pipefail
 rm -rf "${mitoChunkDirPath}"
 mkdir -p "${mitoChunkDirPath}"
-FILTERED_FASTA=\$(realpath "${filteredFastaPath}")
+gzip -cd "${filteredFastaPath}" > filtered_input.fasta
+FILTERED_FASTA=\$(realpath filtered_input.fasta)
 
 seqkit split -s ${mitoChunkSize} -O "${mitoChunkDirPath}" "\${FILTERED_FASTA}"
 
@@ -3100,6 +3231,7 @@ process SANKEY {
 
     script:
     def keepTypesArg = sankeyKeepTypes && !sankeyKeepTypes.isEmpty() ? "  --keep-types \"${sankeyKeepTypes.join(',')}\" \\\n" : ''
+    def rawOutputPrefix = "${sankeyOutputPrefix}_raw"
     def labeledFlag = sankeyMakeLabeled ? "  --make-labeled \\\n" : ''
     def unlabeledFlag = sankeyMakeUnlabeled ? "  --make-unlabeled \\\n" : ''
     """
@@ -3122,6 +3254,25 @@ ${keepTypesArg}  --fastq-stats stats/"${fastq_stats}" \\
   --arrangement "${sankeyArrangement}" \\
   --output-prefix "${sankeyOutputPrefix}" \\
 ${labeledFlag}${unlabeledFlag}  --verbose
+
+python3 "${sankeyScriptPath}" \\
+  --data-dir "${outputDir}" \\
+  --sub-dir "${sankeySubDir}" \\
+  --metadata "${sankeyMetadataPath}" \\
+  --sample-manifest "${manifestPath}" \\
+  --samp-col "${sankeySampCol}" \\
+  --group1-col "${sankeyGroupCol}" \\
+  --color-col "${sankeyColorCol}" \\
+  --fastq-stats stats/"${fastq_stats}" \\
+  --filtered-stats stats/"${filtered_stats}" \\
+  --asv-raw ASVs/"${asv_counts}" \\
+  --asv-decon ASVs/"${asv_decon_counts}" \\
+  --asv-micro ASVs/"${asv_micro_counts}" \\
+  --title "${sankeyTitle}" \\
+  --arrangement "${sankeyArrangement}" \\
+  --output-prefix "${rawOutputPrefix}" \\
+${labeledFlag}${unlabeledFlag}  --all-samples \\
+  --verbose
 
 touch sankey.done
 """
@@ -3196,6 +3347,7 @@ process PLOT_METADATA {
     def metadataStratTable = metadataPlotsStratificationTimeseriesPath ?: (biochemPreAsvEnabled ? "${biochemStratIndexDirAbs}/stratification_timeseries.tsv" : '')
     def metadataStratIncludeCsv = metadataPlotsStratIncludeCols && !metadataPlotsStratIncludeCols.isEmpty() ? metadataPlotsStratIncludeCols.join(',') : ''
     def metadataKeepTypesCsv = metadataKeepTypes && !metadataKeepTypes.isEmpty() ? metadataKeepTypes.join(',') : ''
+    def metadataSubtractionGroupsCsv = metadataPlotsSubtractionGroups && !metadataPlotsSubtractionGroups.isEmpty() ? metadataPlotsSubtractionGroups.join(',') : ''
     def metadataGroupOrderCsv = metadataPlotsGroupOrder && !metadataPlotsGroupOrder.isEmpty() ? metadataPlotsGroupOrder.join(',') : ''
     def metadataMicroFile = "${outputDir}/metadata/metadata_updated_micro.tsv"
     def metadataMitoFile = "${outputDir}/mito/metadata/metadata_updated_mito.tsv"
@@ -3220,11 +3372,13 @@ cmd=(
   --sample-id-col "${metadataPlotsSampleCol}"
   --group1-col "${metadataPlotsTypeCol}"
   --color-col "${metadataPlotsColorCol}"
+  --subtraction-group-col "${metadataPlotsSubtractionCol}"
   --sample-manifest "${manifestPath}"
   --make-micro
   --make-mito
   --verbose
 )
+cmd+=( --subtraction-groups "${metadataSubtractionGroupsCsv}" )
 ${includeRankAppend}
 if [[ -n "${metadataKeepTypesCsv}" ]]; then
   cmd+=( --keep-types "${metadataKeepTypesCsv}" )
@@ -3305,6 +3459,15 @@ process PLOT_UPSET {
     def skipVennArg = plotUpsetSkipVenn ? "  --skip-venn \\\n" : ''
     def rawOnlyArg = plotUpsetRawOnly ? "  --raw-only \\\n" : ''
     def finalOnlyArg = plotUpsetFinalOnly ? "  --final-only \\\n" : ''
+    def rawMicroMetadataPath = "${outputDir}/metadata/metadata_updated_micro_raw.tsv"
+    def rawMicroFinalAsvPath = "${outputDir}/ASVs/ASV_final_raw.micro.tsv"
+    def rawMicroAsvTargetPath = "${outputDir}/ASVs/ASV_target.micro.tsv"
+    def rawMitoMetadataPath = "${outputDir}/mito/metadata/metadata_updated_mito_raw.tsv"
+    def rawMitoFinalAsvPath = "${outputDir}/mito/ASVs/ASV_final_raw.mito.tsv"
+    def rawMitoAsvTargetPath = "${outputDir}/mito/ASVs/ASV_target.mito.tsv"
+    def rawMetadataPathSingle = plotUpsetDomain == 'mito' ? rawMitoMetadataPath : rawMicroMetadataPath
+    def rawFinalAsvPathSingle = plotUpsetDomain == 'mito' ? rawMitoFinalAsvPath : rawMicroFinalAsvPath
+    def rawAsvTargetPathSingle = plotUpsetDomain == 'mito' ? rawMitoAsvTargetPath : rawMicroAsvTargetPath
     """
 set -euo pipefail
 
@@ -3317,6 +3480,50 @@ ${taxonomyArg}  --sample-id-col "${plotUpsetSampleIdCol}" \\
   --color-col "${plotUpsetColorCol}" \\
 ${groupOrderArg}${subsetGroupsArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}  --formats "${plotUpsetFormats}" \\
   --font-size ${plotUpsetFontSize}
+
+if [[ "${plotUpsetDomain}" == "both" ]]; then
+  python "${plotUpsetScriptPath}" \\
+    --data-dir "${outputDir}" \\
+    --subdir "${plotUpsetSubDir}" \\
+    --domain "micro" \\
+${taxonomyArg}    --sample-id-col "${plotUpsetSampleIdCol}" \\
+    --group-col "${plotUpsetGroupCol}" \\
+    --color-col "${plotUpsetColorCol}" \\
+${groupOrderArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}    --formats "${plotUpsetFormats}" \\
+    --font-size ${plotUpsetFontSize} \\
+    --metadata-path "${rawMicroMetadataPath}" \\
+    --asv-raw-path "${rawMicroAsvTargetPath}" \\
+    --asv-final-path "${rawMicroFinalAsvPath}" \\
+    --output-tag raw
+
+  python "${plotUpsetScriptPath}" \\
+    --data-dir "${outputDir}" \\
+    --subdir "${plotUpsetSubDir}" \\
+    --domain "mito" \\
+${taxonomyArg}    --sample-id-col "${plotUpsetSampleIdCol}" \\
+    --group-col "${plotUpsetGroupCol}" \\
+    --color-col "${plotUpsetColorCol}" \\
+${groupOrderArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}    --formats "${plotUpsetFormats}" \\
+    --font-size ${plotUpsetFontSize} \\
+    --metadata-path "${rawMitoMetadataPath}" \\
+    --asv-raw-path "${rawMitoAsvTargetPath}" \\
+    --asv-final-path "${rawMitoFinalAsvPath}" \\
+    --output-tag raw
+else
+  python "${plotUpsetScriptPath}" \\
+    --data-dir "${outputDir}" \\
+    --subdir "${plotUpsetSubDir}" \\
+    --domain "${plotUpsetDomain}" \\
+${taxonomyArg}    --sample-id-col "${plotUpsetSampleIdCol}" \\
+    --group-col "${plotUpsetGroupCol}" \\
+    --color-col "${plotUpsetColorCol}" \\
+${groupOrderArg}${skipVennArg}${rawOnlyArg}${finalOnlyArg}    --formats "${plotUpsetFormats}" \\
+    --font-size ${plotUpsetFontSize} \\
+    --metadata-path "${rawMetadataPathSingle}" \\
+    --asv-raw-path "${rawAsvTargetPathSingle}" \\
+    --asv-final-path "${rawFinalAsvPathSingle}" \\
+    --output-tag raw
+fi
 
 touch plot_upset.done
 """
@@ -4105,7 +4312,6 @@ bash "${powerAnalysisScriptPath}" \\
   --type-col "${powerAnalysisTypeCol}" \\
   --sample-sizes-cancer "${powerAnalysisSampleSizesCancer}" \\
   --sample-sizes-stype "${powerAnalysisSampleSizesStype}" \\
-  --n-control ${powerAnalysisNControl} \\
   --n-simulations ${powerAnalysisNSimulations} \\
   --n-perm ${powerAnalysisNPerm} \\
   --alpha ${powerAnalysisAlpha} \\
@@ -4350,7 +4556,7 @@ fi
 
 IFS=',' read -r -a LUNG_SAMPLE_TYPES <<< "${lungStatusAnalysisSampleTypes}"
 for sample_type in "\${LUNG_SAMPLE_TYPES[@]}"; do
-  sample_type="\$(echo "\${sample_type}" | sed 's/^ *//; s/ *$//')"
+  sample_type="\$(printf '%s' "\${sample_type}" | xargs)"
   [[ -n "\${sample_type}" ]] || continue
   sample_slug="\${sample_type// /_}"
   sample_root="${lungStatusAnalysisOutputDirAbs}/\${sample_slug}"
@@ -4445,35 +4651,35 @@ if [[ -n "${isaFileArg}" ]]; then
   fi
 fi
 
-if [[ -z "${ISA_SOURCE_DIR}" && -n "${isaSearchDirArg}" && -d "${isaSearchDirArg}" ]]; then
+if [[ -z "\${ISA_SOURCE_DIR}" && -n "${isaSearchDirArg}" && -d "${isaSearchDirArg}" ]]; then
   ISA_SOURCE_DIR="${isaSearchDirArg}"
 fi
 
-if [[ -z "${ISA_SOURCE_DIR}" && "${indicspeciesReadyFlag}" == "1" && -d "${indicspeciesOutputDirAbs}" ]]; then
+if [[ -z "\${ISA_SOURCE_DIR}" && "${indicspeciesReadyFlag}" == "1" && -d "${indicspeciesOutputDirAbs}" ]]; then
   ISA_SOURCE_DIR="${indicspeciesOutputDirAbs}"
 fi
 
-if [[ -z "${ISA_RESOLVED}" && -n "${ISA_SOURCE_DIR}" ]]; then
+if [[ -z "\${ISA_RESOLVED}" && -n "\${ISA_SOURCE_DIR}" ]]; then
   IFS=',' read -r -a ISA_CANDIDATES <<< "${isaAutoCandidatesCsv}"
   for isa_name in "\${ISA_CANDIDATES[@]}"; do
     [[ -n "\${isa_name}" ]] || continue
-    if [[ -f "${ISA_SOURCE_DIR}/\${isa_name}" ]]; then
-      ISA_RESOLVED="${ISA_SOURCE_DIR}/\${isa_name}"
+    if [[ -f "\${ISA_SOURCE_DIR}/\${isa_name}" ]]; then
+      ISA_RESOLVED="\${ISA_SOURCE_DIR}/\${isa_name}"
       break
     fi
   done
 
-  if [[ -z "${ISA_RESOLVED}" ]]; then
-    first_summary=\$(find "${ISA_SOURCE_DIR}" -maxdepth 1 -type f -name '*_indicator_species*_summary.tsv' | sort | head -n 1 || true)
+  if [[ -z "\${ISA_RESOLVED}" ]]; then
+    first_summary=\$(find "\${ISA_SOURCE_DIR}" -maxdepth 1 -type f -name '*_indicator_species*_summary.tsv' | sort | head -n 1 || true)
     if [[ -n "\${first_summary}" ]]; then
       ISA_RESOLVED="\${first_summary}"
     fi
   fi
 fi
 
-if [[ -n "${ISA_RESOLVED}" ]]; then
-  echo "[i] CLUSTERMAPS using ISA table: ${ISA_RESOLVED}" >&2
-  ISA_ARGS=(--isa "${ISA_RESOLVED}")
+if [[ -n "\${ISA_RESOLVED}" ]]; then
+  echo "[i] CLUSTERMAPS using ISA table: \${ISA_RESOLVED}" >&2
+  ISA_ARGS=(--isa "\${ISA_RESOLVED}")
 fi
 
 if [[ "${clustermapsRunMitoFlag}" == "1" && -f "${clustermapsMitoInputPath}" ]]; then

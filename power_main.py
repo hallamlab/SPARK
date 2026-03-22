@@ -9,6 +9,7 @@ Runs all analyses: cancer vs control, sample type comparisons, taxonomic abundan
 import argparse
 import subprocess
 from pathlib import Path
+import sys
 
 
 def run_command(cmd, description):
@@ -44,6 +45,10 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none",
                        help="Compositional transform for non-Shannon analyses")
+    parser.add_argument("--sample-col", default="sample", help="Sample ID column in long-format data")
+    parser.add_argument("--patient-col", default="Participant_ID", help="Patient ID column in long-format data")
+    parser.add_argument("--case-col", default="Case", help="Case/control label column in long-format data")
+    parser.add_argument("--type-col", default="type_group", help="Sample type column in long-format data")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
     parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
@@ -63,10 +68,13 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    script_dir = Path(__file__).resolve().parent
 
     # Determine which analyses to run
     analyses = args.analyses.lower().split(",")
     run_all = "all" in analyses
+    contralateral_types = [x.strip() for x in args.contralateral_sample_types.split(",") if x.strip()]
+    brush_label = next((x for x in contralateral_types if x != "BAL"), "Lung Brush")
 
     run_cancer = run_all or "cancer_vs_control" in analyses
     run_stype = run_all or "sample_type" in analyses
@@ -106,7 +114,7 @@ def main():
 
     if run_cancer and not args.skip_cancer_permanova:
         cmd = [
-            'python', 'power_permanova_stratified.py',
+            sys.executable, str(script_dir / 'power_permanova_stratified.py'),
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_cancer,
@@ -116,6 +124,10 @@ def main():
             '--seed', str(args.seed),
             '--outdir', str(outdir),
             '--transform', args.transform,
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--case-col', args.case_col,
+            '--type-col', args.type_col,
             '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
             '--contralateral-sample-types', args.contralateral_sample_types,
             '--scenarios', args.scenarios
@@ -131,7 +143,7 @@ def main():
 
     if run_cancer and not args.skip_cancer_shannon:
         cmd = [
-            'python', 'power_shannon_stratified.py',
+            sys.executable, str(script_dir / 'power_shannon_stratified.py'),
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_cancer,
@@ -139,6 +151,10 @@ def main():
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--case-col', args.case_col,
+            '--type-col', args.type_col,
             '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
             '--contralateral-sample-types', args.contralateral_sample_types,
             '--scenarios', args.scenarios
@@ -155,7 +171,7 @@ def main():
 
     if run_stype and not args.skip_stype_permanova:
         cmd = [
-            'python', 'power_sample_type_permanova.py',
+            sys.executable, str(script_dir / 'power_sample_type_permanova.py'),
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_stype,
@@ -164,7 +180,10 @@ def main():
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
-            '--transform', args.transform
+            '--transform', args.transform,
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--type-col', args.type_col
         ]
 
         if run_command(cmd, "3. Sample Type Comparisons - PERMANOVA"):
@@ -174,14 +193,17 @@ def main():
 
     if run_stype and not args.skip_stype_shannon:
         cmd = [
-            'python', 'power_sample_type_shannon.py',
+            sys.executable, str(script_dir / 'power_sample_type_shannon.py'),
             '--data-wide', args.data_wide,
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_stype,
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
-            '--outdir', str(outdir)
+            '--outdir', str(outdir),
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--type-col', args.type_col
         ]
 
         if run_command(cmd, "4. Sample Type Comparisons - Shannon Paired Wilcoxon"):
@@ -196,7 +218,7 @@ def main():
     if run_taxonomic and not args.skip_taxonomic:
         # 3a. Cancer vs Control (stratified by sample type)
         cmd = [
-            'python', 'power_taxonomic_abundance.py',
+            sys.executable, str(script_dir / 'power_taxonomic_abundance.py'),
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_cancer,
             '--n-simulations', str(args.n_simulations),
@@ -204,6 +226,10 @@ def main():
             '--seed', str(args.seed),
             '--outdir', str(outdir),
             '--transform', args.transform,
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--case-col', args.case_col,
+            '--type-col', args.type_col,
             '--exclude-contralateral-in-cancer', str(args.exclude_contralateral_in_cancer),
             '--contralateral-sample-types', args.contralateral_sample_types,
             '--scenarios', args.scenarios
@@ -219,14 +245,17 @@ def main():
 
         # 3b. Sample Type Comparison
         cmd = [
-            'python', 'power_taxonomic_sample_type.py',
+            sys.executable, str(script_dir / 'power_taxonomic_sample_type.py'),
             '--data-long', args.data_long,
             '--sample-sizes', args.sample_sizes_stype,
             '--n-simulations', str(args.n_simulations),
             '--alpha', str(args.alpha),
             '--seed', str(args.seed),
             '--outdir', str(outdir),
-            '--transform', args.transform
+            '--transform', args.transform,
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
+            '--type-col', args.type_col
         ]
 
         if run_command(cmd, "5b. Taxonomic Abundance - Sample Type Comparison (Phylum + Family)"):
@@ -240,9 +269,12 @@ def main():
 
     if run_isa and not args.skip_isa:
         cmd = [
-            'Rscript', 'power_indicspecies.R',
+            'Rscript', str(script_dir / 'power_indicspecies.R'),
             '--data-long', args.data_long,
             '--data-wide', args.data_wide,
+            '--group-cols', f"status,{args.type_col}",
+            '--status-contralateral-sites', args.contralateral_sample_types,
+            '--lung-brush-label', brush_label,
             '--sample-sizes-cancer', args.sample_sizes_cancer,
             '--sample-sizes-stype', args.sample_sizes_stype,
             '--n-simulations', str(args.n_simulations),
@@ -251,6 +283,8 @@ def main():
             '--seed', str(args.seed),
             '--outdir', str(outdir),
             '--transform', args.transform,
+            '--sample-col', args.sample_col,
+            '--patient-col', args.patient_col,
             '--scenarios', args.scenarios
         ]
 

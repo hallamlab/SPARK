@@ -414,28 +414,49 @@ def add_taxonomy(long_asv: pd.DataFrame, tax_df: pd.DataFrame) -> pd.DataFrame:
     return merged.reset_index()
 
 
-def correct_counts_against_controls(asv_meta: pd.DataFrame, meta: pd.DataFrame,
-                                    meta_sample_col: str, type_col: str,
-                                    scope_label='Scope Flush', skin_label='Skin Brush') -> pd.DataFrame:
-    """Subtract per-ASV means from control groups (scope, skin)."""
-    # Determine control ASV sets
-    ctrl = meta[[meta_sample_col, type_col]].copy()
-    df = asv_meta.merge(ctrl, left_on=meta_sample_col, right_on=meta_sample_col, how='left', suffixes=('', '_meta'))
+def correct_counts_against_controls(
+    asv_meta: pd.DataFrame,
+    meta: pd.DataFrame,
+    meta_sample_col: str,
+    subtraction_col: str,
+    subtraction_groups: Sequence[str],
+    drop_control_groups: bool = True,
+) -> pd.DataFrame:
+    """Subtract per-ASV means from explicit control groups in a metadata column."""
+    ctrl = meta[[meta_sample_col, subtraction_col]].copy()
+    df = asv_meta.merge(ctrl, on=meta_sample_col, how='left', suffixes=('', '_meta'))
+    groups = [str(g).strip() for g in subtraction_groups if str(g).strip()]
+    if not groups:
+        out = df.copy()
+        out['control_mean_sum'] = 0.0
+        out['corr_count'] = out['count'].clip(lower=0).astype(int)
+        return out
 
-    # Compute per-ASV mean in control types
     keep_cols = ['ASV_ID', meta_sample_col, 'count']
-    scope_mean = df[df[type_col] == scope_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
-    scope_mean.columns = ['ASV_ID', 'nctrl_mean']
-    skin_mean = df[df[type_col] == skin_label][keep_cols].groupby('ASV_ID')['count'].mean().reset_index().fillna(0)
-    skin_mean.columns = ['ASV_ID', 'offtarg_mean']
+    control_means = []
+    for idx, group in enumerate(groups, start=1):
+        mean_df = (
+            df[df[subtraction_col] == group][keep_cols]
+            .groupby('ASV_ID', as_index=False)['count']
+            .mean()
+            .fillna(0)
+        )
+        mean_col = f'control_mean_{idx}'
+        mean_df.columns = ['ASV_ID', mean_col]
+        control_means.append(mean_df)
 
-    out = df.merge(scope_mean, on='ASV_ID', how='left').merge(skin_mean, on='ASV_ID', how='left')
-    out['nctrl_mean'] = out['nctrl_mean'].fillna(0)
-    out['offtarg_mean'] = out['offtarg_mean'].fillna(0)
-    out['corr_count'] = (out['count'] - out['nctrl_mean'] - out['offtarg_mean']).clip(lower=0).astype(int)
+    out = df.copy()
+    mean_cols: List[str] = []
+    for mean_df in control_means:
+        mean_col = mean_df.columns[1]
+        out = out.merge(mean_df, on='ASV_ID', how='left')
+        out[mean_col] = out[mean_col].fillna(0)
+        mean_cols.append(mean_col)
 
-    # Remove control types from downstream matrix
-    out = out[~out[type_col].isin([scope_label, skin_label])].copy()
+    out['control_mean_sum'] = out[mean_cols].sum(axis=1) if mean_cols else 0.0
+    out['corr_count'] = (out['count'] - out['control_mean_sum']).clip(lower=0).astype(int)
+    if drop_control_groups:
+        out = out[~out[subtraction_col].isin(groups)].copy()
     return out
 
 
@@ -624,9 +645,63 @@ def compute_and_save_block(
     fastq_stats_df: pd.DataFrame,
     dashed_line_y: Optional[float] = None,   # Only used in mito box+swarm
     include_rank_filters: Optional[Dict[str, set[str]]] = None,
+    subtraction_col: Optional[str] = None,
+    subtraction_groups: Optional[Sequence[str]] = None,
 ) -> None:
     ensure_dir(out_root)
     ensure_dir(asv_out_root)
+
+    def save_swarmplot(
+        long_df_in: pd.DataFrame,
+        observed_groups_in: Sequence[str],
+        file_suffix: str,
+        value_col: str,
+        y_label: str,
+    ) -> None:
+        if group_order:
+            specified = [str(g).strip() for g in group_order if str(g).strip()]
+            plot_groups_local = [g for g in specified if g in observed_groups_in] + [g for g in observed_groups_in if g not in specified]
+        elif keep_types and not file_suffix:
+            specified = [str(g).strip() for g in keep_types if str(g).strip()]
+            plot_groups_local = [g for g in specified if g in observed_groups_in] + [g for g in observed_groups_in if g not in specified]
+        else:
+            plot_groups_local = list(observed_groups_in)
+
+        if long_df_in.empty:
+            print(f"[w] No corrected-count rows available for {mode_name} box/swarm plot{file_suffix or ''}; skipping.")
+            return
+
+        plt.figure(figsize=(10, 10))
+        ax = sns.boxplot(
+            x=type_col,
+            y=value_col,
+            data=long_df_in,
+            color='white',
+            fliersize=0,
+            linewidth=1,
+            showcaps=True,
+            order=list(plot_groups_local),
+        )
+        sns.stripplot(
+            data=long_df_in,
+            x=type_col,
+            y=value_col,
+            hue='pass_filter',
+            alpha=0.75,
+            ax=ax,
+            legend=False,
+            jitter=0.25,
+            palette=type_palette,
+        )
+        if dashed_line_y is not None:
+            plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
+        ax.set_ylabel(y_label)
+        plt.title("Sample Type")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}{file_suffix}.svg")
+        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}{file_suffix}.png")
+        plt.close()
 
     # Long ASV
     long_asv = read_asv_wide_to_long(asv_path, meta_sample_col, tax_df.index)
@@ -650,9 +725,14 @@ def compute_and_save_block(
             print(f"[w] No ASVs matched include-rank filters {include_rank_filters}; skipping {mode_name} block.")
             return
     sample_list = asv_tax[meta_sample_col].unique().tolist()
-    meta = meta[meta[meta_sample_col].isin(sample_list)].copy()
+    meta_all = meta.copy()
+    meta = meta_all[meta_all[meta_sample_col].isin(sample_list)].copy()
+    if keep_types:
+        meta_out = meta[meta[type_col].isin(keep_types)].copy()
+    else:
+        meta_out = meta.copy()
 
-    observed_groups = [str(g) for g in pd.unique(meta[type_col].dropna()).tolist()]
+    observed_groups = [str(g) for g in pd.unique(meta_out[type_col].dropna()).tolist()]
     if group_order:
         specified = [str(g).strip() for g in group_order if str(g).strip()]
         plot_groups = [g for g in specified if g in observed_groups] + [g for g in observed_groups if g not in specified]
@@ -665,8 +745,25 @@ def compute_and_save_block(
     # Merge with metadata
     asv_meta = asv_tax.merge(meta, on=meta_sample_col, how='inner')
 
-    # Control subtraction (scope+skin); used downstream for corrected outputs and plots
-    corr_meta = correct_counts_against_controls(asv_meta, meta, meta_sample_col, type_col)
+    # Control subtraction is driven by an explicit metadata column + value list.
+    corr_meta = correct_counts_against_controls(
+        asv_meta,
+        meta,
+        meta_sample_col,
+        subtraction_col=(subtraction_col or type_col),
+        subtraction_groups=(subtraction_groups or []),
+        drop_control_groups=True,
+    )
+    corr_meta_all = correct_counts_against_controls(
+        asv_meta,
+        meta,
+        meta_sample_col,
+        subtraction_col=(subtraction_col or type_col),
+        subtraction_groups=(subtraction_groups or []),
+        drop_control_groups=False,
+    )
+    if keep_types:
+        corr_meta = corr_meta[corr_meta[type_col].isin(keep_types)].copy()
     
     # Stats per sample for raw reads
     reads_df = fastq_stats_df.copy()
@@ -675,46 +772,64 @@ def compute_and_save_block(
 
     # Build per-sample summary table
     cnt_df = asv_meta.groupby([meta_sample_col])['count'].sum().reset_index()
+    cnt_all_df = asv_meta.groupby([meta_sample_col])['count'].sum().reset_index()
+    corr_cnt_all_df = corr_meta_all.groupby([meta_sample_col])['corr_count'].sum().reset_index()
     corr_cnt_df = corr_meta.groupby([meta_sample_col])['corr_count'].sum().reset_index()
-    metastat = meta.merge(reads_df[[meta_sample_col, 'raw_count']], on=meta_sample_col, how='left') \
+    metastat_all = meta_all.merge(reads_df[[meta_sample_col, 'raw_count']], on=meta_sample_col, how='left') \
+                       .merge(cnt_all_df, on=meta_sample_col, how='left') \
+                       .merge(corr_cnt_all_df, on=meta_sample_col, how='left')
+    metastat_all['pass_filter'] = [t if s in set(asv_meta[meta_sample_col]) else 'Failed-QC'
+                                   for s, t in zip(metastat_all[meta_sample_col], metastat_all[type_col])]
+    metastat = meta_out.merge(reads_df[[meta_sample_col, 'raw_count']], on=meta_sample_col, how='left') \
                    .merge(cnt_df, on=meta_sample_col, how='left') \
                    .merge(corr_cnt_df, on=meta_sample_col, how='left')
     metastat['pass_filter'] = [t if s in set(asv_meta[meta_sample_col]) else 'Failed-QC'
                                for s, t in zip(metastat[meta_sample_col], metastat[type_col])]
+    for df_counts in (metastat_all, metastat):
+        for col in ('raw_count', 'count', 'corr_count'):
+            if col in df_counts.columns:
+                df_counts[col] = pd.to_numeric(df_counts[col], errors='coerce').fillna(0)
+
+    long_df_all = metastat_all.groupby([type_col, 'pass_filter', meta_sample_col])['count'].sum().reset_index()
     long_df = metastat.groupby([type_col, 'pass_filter', meta_sample_col])['corr_count'].sum().reset_index()
     long_df = long_df[long_df['corr_count'] > 0]
 
     # Box + swarm (corrected counts)
-    if long_df.empty:
-        print(f"[w] No corrected-count rows available for {mode_name} box/swarm plot; skipping.")
-    else:
-        plt.figure(figsize=(10, 10))
-        ax = sns.boxplot(x=type_col, y='corr_count', data=long_df, color='white', fliersize=0, linewidth=1, showcaps=True,
-                         order=list(plot_groups))
-        sns.stripplot(data=long_df, x=type_col, y='corr_count', hue='pass_filter', alpha=0.75, ax=ax, legend=False,
-                      jitter=0.25, palette=type_palette)
-        if dashed_line_y is not None:
-            plt.axhline(y=dashed_line_y, linestyle='--', color='black', linewidth=1)
-        ax.set_ylabel("Corrected Count")
-        plt.title("Sample Type"); plt.xticks(rotation=45); plt.tight_layout()
-        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.svg")
-        plt.savefig(out_root / f"type_group_swarmplot_{mode_name}.png")
-        plt.close()
+    observed_groups_all = [str(g) for g in pd.unique(meta_all[type_col].dropna()).tolist()]
+    save_swarmplot(long_df_all, observed_groups_all, "_raw", "count", "Count")
+    save_swarmplot(long_df, plot_groups, "", "corr_count", "Corrected Count")
 
-    # Pivot to ASV x sample corrected counts
+    # Pivot to ASV x sample counts
     cleaned = corr_meta.pivot_table(index='ASV_ID', columns=meta_sample_col, values='corr_count', aggfunc='sum', fill_value=0)
+    cleaned_all = asv_meta.pivot_table(index='ASV_ID', columns=meta_sample_col, values='count', aggfunc='sum', fill_value=0)
+    cleaned_all.columns = cleaned_all.columns.map(str)
+    all_sample_ids = [str(s) for s in meta_all[meta_sample_col].astype(str).tolist()]
+    cleaned_all = cleaned_all.reindex(columns=all_sample_ids, fill_value=0)
 
-    # Keep only assigned Domain and only kept samples
-    keep_asvs = corr_meta[corr_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
+    # Microbial outputs exclude taxonomy-unassigned ASVs, but mito outputs must retain
+    # candidate mitochondrial ASVs even when SILVA taxonomy is unassigned.
+    if mode_name == "mito":
+        keep_asvs = cleaned.index.unique()
+        keep_asvs_all = cleaned_all.index.unique()
+    else:
+        keep_asvs = corr_meta[corr_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
+        keep_asvs_all = asv_meta[asv_meta['Domain'] != 'Unassigned']['ASV_ID'].unique()
     kept_samples = metastat[metastat['pass_filter'] != 'Failed-QC'][meta_sample_col].unique().tolist()
+    kept_samples_all = metastat_all[metastat_all['pass_filter'] != 'Failed-QC'][meta_sample_col].unique().tolist()
     final_mat = cleaned.reindex(index=keep_asvs).dropna(how='all')
     final_mat = final_mat[[c for c in final_mat.columns if c in kept_samples]].fillna(0).astype(int)
+    final_mat_all = cleaned_all.reindex(index=keep_asvs_all).dropna(how='all')
+    final_mat_all = final_mat_all[[c for c in final_mat_all.columns if c in kept_samples_all]].fillna(0).astype(int)
 
     # Write outputs
+    save_df(asv_meta, out_root / f"ASV_meta_{mode_name}_raw.tsv")
     save_df(corr_meta, out_root / f"ASV_meta_{mode_name}.tsv")
+    save_mat(final_mat_all, asv_out_root / f"ASV_final_raw.{mode_name}.tsv")
     save_mat(final_mat, asv_out_root / f"ASV_final.{mode_name}.tsv")
+    save_df(metastat_all, out_root / f"master_table_{mode_name}_raw.tsv")
     save_df(metastat, out_root / f"master_table_{mode_name}.tsv")
-    save_df(meta, out_root / f"metadata_updated_{mode_name}.tsv")
+    save_df(meta_all, out_root / f"metadata_updated_{mode_name}_raw.tsv")
+    save_df(meta_out, out_root / f"metadata_updated_{mode_name}.tsv")
 
     # Legends (sample colors)
     m_df = metastat[metastat[meta_sample_col].isin(final_mat.columns)].set_index(meta_sample_col)
@@ -754,7 +869,7 @@ def compute_and_save_block(
     if plot_groups:
         fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
         _, tidy = plot_grouppair_violins_sns(
-            shared_pct, meta,
+            shared_pct, meta_out,
             sample_id_col=meta_sample_col, group_col=type_col,
             include_within=True,
             group_order=plot_groups,
@@ -845,6 +960,16 @@ def get_parser() -> argparse.ArgumentParser:
         default="",
         help="Comma-separated explicit order for group1/type plots (order-only; does not filter).",
     )
+    cols.add_argument(
+        "--subtraction-group-col",
+        default="",
+        help="Metadata column whose values define subtraction controls. Defaults to --group1-col.",
+    )
+    cols.add_argument(
+        "--subtraction-groups",
+        default="Scope Flush,Skin Brush",
+        help="Comma-separated metadata values to subtract as controls. Use an empty string to disable subtraction.",
+    )
 
     reads = p.add_argument_group("Read Stats")
     reads.add_argument("--fastq-stats", default="stats/fastq_stats.tsv", help="TSV with columns: file, num_seqs")
@@ -884,6 +1009,7 @@ def main():
     meta_path = args.metadata
     keep_types = parse_list_csv(args.keep_types)
     group_order = parse_list_csv(args.group_order)
+    subtraction_groups = parse_list_csv(args.subtraction_groups)
     include_rank_filters = parse_rank_filters(args.include_rank)
     
     # Resolve canonical paths
@@ -907,12 +1033,16 @@ def main():
             "--biochem-meta-join-cols and --biochem-join-cols must be provided together for composite joins."
         )
 
+    subtraction_col = args.subtraction_group_col.strip() if args.subtraction_group_col else args.group1_col
+
     if args.verbose:
         print(f"[i] Metadata: {meta_path}")
         print(f"[i] Taxonomy: {taxonomy_path}")
         print(f"[i] Fastq stats: {fastq_stats_path}")
         print(f"[i] ASV micro: {asv_micro_path}")
         print(f"[i] ASV mito : {asv_mito_path}")
+        print(f"[i] Subtraction column: {subtraction_col}")
+        print(f"[i] Subtraction groups: {subtraction_groups if subtraction_groups else 'none'}")
         if biochem_assignments_path:
             print(f"[i] Biochem assignments: {biochem_assignments_path}")
         if stratification_timeseries_path:
@@ -920,7 +1050,9 @@ def main():
 
     # Read data
     meta_sample_col = args.sample_id_col
-    meta = read_metadata(meta_path, meta_sample_col, keep_types, type_col=args.group1_col)
+    meta = read_metadata(meta_path, meta_sample_col, None, type_col=args.group1_col)
+    if subtraction_col not in meta.columns:
+        raise ValueError(f"Subtraction column '{subtraction_col}' not found in metadata.")
     if biochem_assignments_path:
         biochem_df = load_biochem_assignments(biochem_assignments_path)
         meta = merge_biochem_assignments(
@@ -989,6 +1121,8 @@ def main():
             fastq_stats_df=fastq_df.copy(),
             dashed_line_y=None,
             include_rank_filters=include_rank_filters,
+            subtraction_col=subtraction_col,
+            subtraction_groups=subtraction_groups,
         )
 
     # MITO
@@ -1009,6 +1143,8 @@ def main():
             fastq_stats_df=fastq_df.copy(),
             dashed_line_y=(args.mito_threshold_line if args.mito_threshold_line >= 0 else None),
             include_rank_filters=include_rank_filters,
+            subtraction_col=subtraction_col,
+            subtraction_groups=subtraction_groups,
         )
 
     if args.verbose:
