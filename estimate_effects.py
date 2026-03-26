@@ -702,7 +702,7 @@ def main():
 
     # Sample Type Comparisons
     print("\n" + "="*60)
-    print("Sample Type Comparisons (Oral vs BAL vs Lung Brush)")
+    print("Sample Type Comparisons (Oral vs BAL vs Bronchial Brush)")
 
     # PERMANOVA R² for sample type differences
     print("\n--- PERMANOVA R² (Sample Type Effect) ---")

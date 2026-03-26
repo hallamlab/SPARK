@@ -24,7 +24,7 @@ Usage:
     [--skip-estimate] [--skip-plot] \
     [--transform none|rclr] \
     [--indicspecies-dir <main_analysis_output/indicspecies>] \
-    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Lung Brush,BAL"]
+    [--keep-contralateral-in-cancer] [--contralateral-sample-types "Bronchial Brush,BAL"]
 USAGE
 }
 
@@ -46,7 +46,7 @@ SKIP_PLOT="false"
 TRANSFORM="none"
 INDICSPECIES_DIR=""
 EXCLUDE_CONTRALATERAL="true"
-CONTRALATERAL_SAMPLE_TYPES="Lung Brush,BAL"
+CONTRALATERAL_SAMPLE_TYPES="Bronchial Brush,BAL"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

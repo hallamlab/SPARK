@@ -3,7 +3,7 @@
 power_taxonomic_sample_type.py
 
 Power analysis for taxonomic abundance differences BETWEEN sample types.
-Tests: "Is Phylum A more abundant in BAL vs Oral Rinse vs Lung Brush?"
+Tests: "Is Phylum A more abundant in BAL vs Oral Rinse vs Bronchial Brush?"
 """
 
 import argparse

@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--case-col", default="Case", help="Case/control label column in long-format data")
     parser.add_argument("--type-col", default="type_group", help="Sample type column in long-format data")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
-    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
                        help="Comma-separated: observed, null, weak, moderate, strong")
 
@@ -74,7 +74,7 @@ def main():
     analyses = args.analyses.lower().split(",")
     run_all = "all" in analyses
     contralateral_types = [x.strip() for x in args.contralateral_sample_types.split(",") if x.strip()]
-    brush_label = next((x for x in contralateral_types if x != "BAL"), "Lung Brush")
+    brush_label = next((x for x in contralateral_types if x != "BAL"), "Bronchial Brush")
 
     run_cancer = run_all or "cancer_vs_control" in analyses
     run_stype = run_all or "sample_type" in analyses

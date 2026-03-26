@@ -29,7 +29,7 @@ def resolve_sample_col(df, sample_col):
     raise KeyError(f"Sample column '{sample_col}' not found in long-format data.")
 
 
-def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Lung Brush,BAL',
+def filter_contralateral_long_df(df, case_col='Case', type_col='type_group', contralateral_sample_types='Bronchial Brush,BAL',
                                  contralateral_col='lung_status', cancer_site_col='Cancer_Site',
                                  lung_side_col='lung_code', contralateral_value='Contralateral'):
     work = df.copy()
@@ -363,7 +363,7 @@ def main():
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--transform", choices=["none", "rclr"], default="none")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
-    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
                        help="Comma-separated: observed, null, weak, moderate, strong")
     args = parser.parse_args()

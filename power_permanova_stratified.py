@@ -29,7 +29,7 @@ def resolve_sample_col(df, sample_col):
 
 
 def filter_contralateral_metadata(meta_df, case_col='Case', type_col='type_group',
-                                  contralateral_sample_types='Lung Brush,BAL',
+                                  contralateral_sample_types='Bronchial Brush,BAL',
                                   contralateral_col='lung_status',
                                   cancer_site_col='Cancer_Site',
                                   lung_side_col='lung_code',
@@ -253,7 +253,7 @@ def main():
     parser.add_argument("--case-col", default="Case")
     parser.add_argument("--type-col", default="type_group")
     parser.add_argument("--exclude-contralateral-in-cancer", type=lambda x: str(x).lower()=="true", default=True)
-    parser.add_argument("--contralateral-sample-types", default="Lung Brush,BAL")
+    parser.add_argument("--contralateral-sample-types", default="Bronchial Brush,BAL")
     parser.add_argument("--scenarios", default="observed,null",
                        help="Comma-separated: observed, null, weak, moderate, strong")
     args = parser.parse_args()

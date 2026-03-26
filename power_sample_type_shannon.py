@@ -3,7 +3,7 @@
 power_sample_type_shannon.py
 
 Shannon diversity power analysis for sample type comparisons.
-Tests paired Wilcoxon comparisons (BAL vs Lung Brush vs Oral Rinse) with FDR correction.
+Tests paired Wilcoxon comparisons (BAL vs Bronchial Brush vs Oral Rinse) with FDR correction.
 """
 
 import argparse

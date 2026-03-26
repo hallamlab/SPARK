@@ -44,7 +44,7 @@ sns.set_style("white")
 
 # Color palettes (matching SPARK style)
 PALETTE_TYPES = {
-    'Lung Brush':  '#009E73',
+    'Bronchial Brush':  '#009E73',
     'BAL':         '#0072B2',
     'Oral Rinse':  '#6A3D9A',
 }
@@ -70,6 +70,19 @@ LINE_STYLES = {
 def ensure_dir(p: Path) -> None:
     """Create directory if it doesn't exist."""
     p.mkdir(parents=True, exist_ok=True)
+
+
+def load_tsv_if_nonempty(path: Path):
+    """Load a TSV if it exists and has parseable tabular content."""
+    if not path.exists() or path.stat().st_size <= 1:
+        return None
+    try:
+        df = pd.read_csv(path, sep='\t')
+    except pd.errors.EmptyDataError:
+        return None
+    if df.empty and len(df.columns) == 0:
+        return None
+    return df
 
 
 def add_power_threshold(ax, threshold=0.8):
@@ -110,10 +123,12 @@ def plot_cancer_vs_control(results_dir: Path, outdir: Path):
     Generates both full version (all scenarios) and simplified version (observed + null only).
     """
     # Load data
-    permanova_df = pd.read_csv(results_dir / 'permanova_power_stratified.tsv', sep='\t')
-    shannon_df = pd.read_csv(results_dir / 'shannon_power_stratified.tsv', sep='\t')
+    permanova_df = load_tsv_if_nonempty(results_dir / 'permanova_power_stratified.tsv')
+    shannon_df = load_tsv_if_nonempty(results_dir / 'shannon_power_stratified.tsv')
+    if permanova_df is None or shannon_df is None:
+        raise ValueError("Cancer-vs-control power result tables are missing or empty.")
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
 
     # ========== FULL VERSION (all scenarios) ==========
     fig, axes = plt.subplots(2, 3, figsize=(12, 7), sharex=True)
@@ -252,18 +267,20 @@ def plot_sample_type_comparison(results_dir: Path, outdir: Path):
     perm_file = results_dir / 'sample_type_permanova_power.tsv'
     perm_pairwise_file = results_dir / 'sample_type_permanova_power_pairwise.tsv'
 
-    if perm_pairwise_file.exists():
+    if load_tsv_if_nonempty(perm_pairwise_file) is not None:
         # New format: pairwise comparisons, need to aggregate
-        permanova_df = pd.read_csv(perm_pairwise_file, sep='\t')
+        permanova_df = load_tsv_if_nonempty(perm_pairwise_file)
         # Compute max power across pairwise comparisons per sample size (any pairwise difference)
         permanova_df = permanova_df.groupby('n_patients', as_index=False)['power'].max()
-    elif perm_file.exists():
+    elif load_tsv_if_nonempty(perm_file) is not None:
         # Old format: single power column
-        permanova_df = pd.read_csv(perm_file, sep='\t')
+        permanova_df = load_tsv_if_nonempty(perm_file)
     else:
-        raise FileNotFoundError(f"Neither {perm_file} nor {perm_pairwise_file} found")
+        raise ValueError("Sample-type PERMANOVA result tables are missing or empty.")
 
-    shannon_df = pd.read_csv(results_dir / 'sample_type_shannon_power.tsv', sep='\t')
+    shannon_df = load_tsv_if_nonempty(results_dir / 'sample_type_shannon_power.tsv')
+    if shannon_df is None:
+        raise ValueError("Sample-type Shannon result table is missing or empty.")
 
     # Create figure: 1 row × 2 cols (PERMANOVA, Shannon)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -277,7 +294,7 @@ def plot_sample_type_comparison(results_dir: Path, outdir: Path):
     add_power_threshold(ax_perm, 0.8)
     ax_perm.set_xlabel('Patients (n)', fontsize=12)
     ax_perm.set_ylabel('Power', fontsize=12)
-    ax_perm.set_title('PERMANOVA\n(BAL vs Oral Rinse vs Lung Brush)',
+    ax_perm.set_title('PERMANOVA\n(BAL vs Oral Rinse vs Bronchial Brush)',
                      fontsize=13)
     ax_perm.set_ylim(-0.05, 1.05)
     ax_perm.grid(alpha=0.3, linewidth=0.5)
@@ -318,10 +335,12 @@ def plot_taxonomic_abundance(results_dir: Path, outdir: Path):
     Generates both full version (all scenarios) and simplified version (observed + null only).
     """
     # Load data
-    tax_cancer_df = pd.read_csv(results_dir / 'taxonomic_abundance_power.tsv', sep='\t')
-    tax_stype_df = pd.read_csv(results_dir / 'taxonomic_sample_type_power.tsv', sep='\t')
+    tax_cancer_df = load_tsv_if_nonempty(results_dir / 'taxonomic_abundance_power.tsv')
+    tax_stype_df = load_tsv_if_nonempty(results_dir / 'taxonomic_sample_type_power.tsv')
+    if tax_cancer_df is None or tax_stype_df is None:
+        raise ValueError("Taxonomic power result tables are missing or empty.")
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
     tax_levels = ['Phylum', 'Family']
 
     # ========== FULL VERSION (all scenarios) ==========
@@ -461,19 +480,22 @@ def generate_summary_table(results_dir: Path, outdir: Path):
     Generate summary table with sample size recommendations for 80% power.
     """
     # Load data
-    permanova_df = pd.read_csv(results_dir / 'permanova_power_stratified.tsv', sep='\t')
-    shannon_df = pd.read_csv(results_dir / 'shannon_power_stratified.tsv', sep='\t')
+    permanova_df = load_tsv_if_nonempty(results_dir / 'permanova_power_stratified.tsv')
+    shannon_df = load_tsv_if_nonempty(results_dir / 'shannon_power_stratified.tsv')
+    if permanova_df is None or shannon_df is None:
+        raise ValueError("Cancer-vs-control power result tables are missing or empty.")
 
     # Load taxonomic data if available
     taxonomic_file = results_dir / 'taxonomic_abundance_power.tsv'
-    if taxonomic_file.exists():
-        taxonomic_df = pd.read_csv(taxonomic_file, sep='\t')
+    taxonomic_df = load_tsv_if_nonempty(taxonomic_file)
+    if taxonomic_df is not None:
+        taxonomic_df = taxonomic_df
     else:
         taxonomic_df = None
 
     summary_rows = []
 
-    sample_types = ['BAL', 'Lung Brush', 'Oral Rinse']
+    sample_types = ['BAL', 'Bronchial Brush', 'Oral Rinse']
 
     for stype in sample_types:
         # PERMANOVA - Observed scenario
@@ -569,30 +591,44 @@ def main():
 
     # Generate plots
     print("\n1. Cancer vs Control (PERMANOVA + Shannon)...")
-    if (args.results_dir / 'permanova_power_stratified.tsv').exists():
-        plot_cancer_vs_control(args.results_dir, args.outdir)
+    if load_tsv_if_nonempty(args.results_dir / 'permanova_power_stratified.tsv') is not None and \
+       load_tsv_if_nonempty(args.results_dir / 'shannon_power_stratified.tsv') is not None:
+        try:
+            plot_cancer_vs_control(args.results_dir, args.outdir)
+        except ValueError as exc:
+            print(f"  ⊘ Skipped: {exc}")
     else:
-        print("  ⊘ Skipped: permanova_power_stratified.tsv not found")
+        print("  ⊘ Skipped: cancer-vs-control power result tables missing or empty")
 
     print("\n2. Sample Type Comparisons...")
     perm_file = args.results_dir / 'sample_type_permanova_power.tsv'
     perm_pairwise = args.results_dir / 'sample_type_permanova_power_pairwise.tsv'
-    if perm_file.exists() or perm_pairwise.exists():
-        plot_sample_type_comparison(args.results_dir, args.outdir)
+    if load_tsv_if_nonempty(perm_file) is not None or load_tsv_if_nonempty(perm_pairwise) is not None:
+        try:
+            plot_sample_type_comparison(args.results_dir, args.outdir)
+        except ValueError as exc:
+            print(f"  ⊘ Skipped: {exc}")
     else:
-        print("  ⊘ Skipped: sample type files not found (analysis not run)")
+        print("  ⊘ Skipped: sample type power result tables missing or empty")
 
     print("\n3. Taxonomic Differential Abundance...")
-    if (args.results_dir / 'taxonomic_abundance_power.tsv').exists():
-        plot_taxonomic_abundance(args.results_dir, args.outdir)
+    if load_tsv_if_nonempty(args.results_dir / 'taxonomic_abundance_power.tsv') is not None:
+        try:
+            plot_taxonomic_abundance(args.results_dir, args.outdir)
+        except ValueError as exc:
+            print(f"  ⊘ Skipped: {exc}")
     else:
-        print("  ⊘ Skipped: taxonomic_abundance_power.tsv not found")
+        print("  ⊘ Skipped: taxonomic power result tables missing or empty")
 
     print("\n4. Summary Table...")
-    if (args.results_dir / 'permanova_power_stratified.tsv').exists():
-        generate_summary_table(args.results_dir, args.outdir)
+    if load_tsv_if_nonempty(args.results_dir / 'permanova_power_stratified.tsv') is not None and \
+       load_tsv_if_nonempty(args.results_dir / 'shannon_power_stratified.tsv') is not None:
+        try:
+            generate_summary_table(args.results_dir, args.outdir)
+        except ValueError as exc:
+            print(f"  ⊘ Skipped: {exc}")
     else:
-        print("  ⊘ Skipped: no power results available")
+        print("  ⊘ Skipped: cancer-vs-control summary inputs missing or empty")
 
     print("\n" + "="*60)
     print("✓ All visualizations complete!")

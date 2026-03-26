@@ -41,10 +41,10 @@ option_list <- list(
   make_option("--status-sites", type="character", default="",
               help="Optional comma-separated type_group levels for status power (default: all sites)"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
-              help="For Lung Brush status power, exclude contralateral cancer samples [default: %default]"),
+              help="For Bronchial Brush status power, exclude contralateral cancer samples [default: %default]"),
   make_option("--status-exclude-contralateral", type="logical", default=TRUE,
               help="Exclude contralateral cancer samples for selected status sample types [default: %default]"),
-  make_option("--status-contralateral-sites", type="character", default="Lung Brush,BAL",
+  make_option("--status-contralateral-sites", type="character", default="Bronchial Brush,BAL",
               help="Comma-separated type_group values where contralateral exclusion applies [default: %default]"),
   make_option("--contralateral-col", type="character", default="lung_status",
               help="Metadata column identifying contralateral samples [default: %default]"),
@@ -56,8 +56,8 @@ option_list <- list(
               help="Value in contralateral column marking contralateral samples [default: %default]"),
   make_option("--cancer-label", type="character", default="Cancer",
               help="Label in status column for cancer samples [default: %default]"),
-  make_option("--lung-brush-label", type="character", default="Lung Brush",
-              help="Value in type_group identifying Lung Brush samples [default: %default]"),
+  make_option("--lung-brush-label", type="character", default="Bronchial Brush",
+              help="Value in type_group identifying Bronchial Brush samples [default: %default]"),
   make_option("--sample-sizes", type="character", default="5,8,10,15,20,25,30,40,50,60,70,80,90,100",
               help="Fallback sample sizes if cancer/stype grids are not provided [default: %default]"),
   make_option("--sample-sizes-cancer", type="character", default="",
@@ -111,7 +111,7 @@ if (is.null(args$`sample-sizes-stype`)) args$`sample-sizes-stype` <- ""
 if (is.null(args$scenarios)) args$scenarios <- "observed,null"
 if (is.null(args$`group-cols`)) args$`group-cols` <- "status,type_group"
 if (is.null(args$`status-sites`)) args$`status-sites` <- ""
-if (is.null(args$`status-contralateral-sites`)) args$`status-contralateral-sites` <- "Lung Brush,BAL"
+if (is.null(args$`status-contralateral-sites`)) args$`status-contralateral-sites` <- "Bronchial Brush,BAL"
 
 if (!(args$transform %in% c("none", "rclr"))) {
   stop("--transform must be one of: none, rclr")
@@ -145,9 +145,21 @@ if (!(sample_col %in% names(long_df)) && identical(sample_col, "sample") && ("lm
 # Extract metadata (unique sample-level records)
 required_cols <- c(sample_col, args$`patient-col`)
 group_cols_vec <- strsplit(args$`group-cols`, ",", fixed = TRUE)[[1]] %>% trimws()
-if ("status" %in% group_cols_vec && !("type_group" %in% group_cols_vec)) {
-  # Needed for status stratification by sample type.
-  group_cols_vec <- c(group_cols_vec, "type_group")
+status_site_col <- NULL
+if ("status" %in% group_cols_vec) {
+  non_status_cols <- setdiff(group_cols_vec, "status")
+  if (length(non_status_cols) > 0) {
+    status_site_col <- non_status_cols[[1]]
+  } else if ("type_group" %in% names(long_df)) {
+    status_site_col <- "type_group"
+  } else if ("Type_Group" %in% names(long_df)) {
+    status_site_col <- "Type_Group"
+  }
+
+  if (!is.null(status_site_col) && !(status_site_col %in% group_cols_vec)) {
+    # Needed for status stratification by sample type.
+    group_cols_vec <- c(group_cols_vec, status_site_col)
+  }
 }
 optional_cols <- c()
 derive_contralateral_from_sides <- FALSE
@@ -165,7 +177,7 @@ if (isTRUE(args$`status-extra-no-contralateral`) && ("status" %in% group_cols_ve
     warning(
       "Optional column '", args$`contralateral-col`, "' not found and cannot derive from ",
       args$`cancer-site-col`, "/", args$`lung-side-col`,
-      "; Lung Brush no-contralateral power filter will be skipped."
+      "; Bronchial Brush no-contralateral power filter will be skipped."
     )
   }
 }
@@ -589,7 +601,7 @@ aggregate_to_patient_group_level <- function(counts, patient_ids, grouping) {
 #' Bootstrap patients for within-patient designs (preserves sample-level labels)
 #'
 #' Samples patients with replacement and keeps their original per-sample grouping
-#' labels (e.g., BAL/Lung Brush/Oral Rinse) intact.
+#' labels (e.g., BAL/Bronchial Brush/Oral Rinse) intact.
 #' Optionally generates a true null by shuffling labels within each bootstrap patient.
 #'
 #' @param counts Sample × ASV count matrix
@@ -954,11 +966,11 @@ for (gcol in group_cols) {
 
   # Status is analyzed within each sample type (between-patient per site).
   if (gcol == "status") {
-    if (!("type_group" %in% colnames(meta))) {
-      warning("Column 'type_group' not found; skipping status power analysis.")
+    if (is.null(status_site_col) || !(status_site_col %in% colnames(meta))) {
+      warning("Sample-type column for status power not found; skipping status power analysis.")
       next
     }
-    type_group_vec <- meta$type_group[keep_idx]
+    type_group_vec <- meta[[status_site_col]][keep_idx]
     sites <- unique(as.character(type_group_vec))
     sites <- sites[!is.na(sites)]
     if (length(status_sites_requested) > 0) {
@@ -969,7 +981,7 @@ for (gcol in group_cols) {
       }
     }
 
-    cat("  Design: BETWEEN-patient stratified by type_group\n")
+    cat("  Design: BETWEEN-patient stratified by ", status_site_col, "\n", sep = "")
     cat("  Sites:", paste(sites, collapse=", "), "\n\n")
 
     for (site in sites) {
@@ -993,12 +1005,12 @@ for (gcol in group_cols) {
         }
       }
 
-      # Optional: exclude contralateral samples from cancer patients in Lung Brush.
+      # Optional: exclude contralateral samples from cancer patients in Bronchial Brush.
       site_label_for_output <- site
       if (isTRUE(args$`status-extra-no-contralateral`) &&
           identical(as.character(site), as.character(args$`lung-brush-label`))) {
         if (!(effective_contralateral_col %in% colnames(meta_site))) {
-          warning("Skipping no-contralateral filter for Lung Brush status power: column '",
+          warning("Skipping no-contralateral filter for Bronchial Brush status power: column '",
                   effective_contralateral_col, "' not found.")
         } else {
           is_cancer <- as.character(meta_site[[gcol]]) == as.character(args$`cancer-label`)
@@ -1016,7 +1028,7 @@ for (gcol in group_cols) {
       }
 
       if (length(unique(grouping_site)) < 2) {
-        warning("Skipping status power for type_group='", site, "' (<2 status groups).")
+        warning("Skipping status power for ", status_site_col, "='", site, "' (<2 status groups).", sep = "")
         next
       }
 
