@@ -567,16 +567,8 @@ def augment_combo_palette(palette: Dict[str, str], labels: Iterable[str]) -> Dic
 
 
 def canonicalize_group2_palette_aliases(palette: Dict[str, str]) -> Dict[str, str]:
-    """Normalize common Case aliases to Non-Cancer labels."""
-    out = normalize_palette_keys(palette)
-    if "Control" in out and "Non-Cancer" not in out:
-        out["Non-Cancer"] = out["Control"]
-    if "Cancer+Control" in out and "Cancer+Non-Cancer" not in out:
-        out["Cancer+Non-Cancer"] = out["Cancer+Control"]
-    if "Control+Cancer" in out and "Cancer+Non-Cancer" not in out:
-        out["Cancer+Non-Cancer"] = out["Control+Cancer"]
-    out = normalize_palette_keys(out)
-    return out
+    """Normalize palette keys without imposing study-specific label aliases."""
+    return normalize_palette_keys(palette)
 
 
 def infer_index_map_from_summary(summary_df: pd.DataFrame) -> Dict[int, str]:
@@ -1764,9 +1756,16 @@ def main():
     pos_all = spring_layout_cached(G_all, seed=args.layout_seed,
                                    scale_xy=args.layout_scale,
                                    layout_json=args.layout_json_all)
-    pos_sub = spring_layout_cached(G_sub, seed=args.layout_seed,
-                                   scale_xy=args.layout_scale,
-                                   layout_json=args.layout_json_sub)
+    same_graph_structure = (
+        set(G_all.nodes()) == set(G_sub.nodes()) and
+        {frozenset((u, v)) for u, v in G_all.edges()} == {frozenset((u, v)) for u, v in G_sub.edges()}
+    )
+    if same_graph_structure:
+        pos_sub = dict(pos_all)
+    else:
+        pos_sub = spring_layout_cached(G_sub, seed=args.layout_seed,
+                                       scale_xy=args.layout_scale,
+                                       layout_json=args.layout_json_sub)
 
     # -------------------- Choose and render plots -----------------------------
     modes = set(args.modes)

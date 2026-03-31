@@ -77,8 +77,6 @@ def normalize_label(v) -> str:
     if pd.isna(v):
         return "Other"
     text = str(v).strip()
-    if text == "Control":
-        text = "Non-Cancer"
     return text if text else "Other"
 
 

@@ -326,14 +326,14 @@ indicspecies:
   enabled: true
   sample_col: sampleID
   group_cols:
-    - Season
-    - o2_subcompartment_final
     - anomaly_type 
+    - o2_subcompartment_final
   perms: 999
   min_n: 2
   plot_enabled: true
   plot_pairs_mode: all
   plot_output_dir: indicspecies/plots
+  use_duleg: true
   aligned_plot_enabled: false
   aligned_plot_output_dir: indicspecies/aligned
   aligned_alpha: 0.05
@@ -345,78 +345,18 @@ indicspecies:
 power_analysis:
   enabled: false
   output_dir: power_analysis
-  sample_col: sampleID
-  patient_col: Participant_ID
-  case_col: Case
-  type_col: Depth
-  sample_sizes_cancer: 6,8,10,15,20,25,30
-  sample_sizes_stype: 10,15,20,25,30,40,50
-  n_control: 25
-  n_simulations: 1000
-  n_perm: 199
-  alpha: 0.05
-  seed: 42
-  skip_estimate: false
-  skip_plot: false
-  transform: none
-  keep_contralateral_in_cancer: false
-  contralateral_sample_types: 20m,50m
 
 bray_patient_aware:
   enabled: false
   output_dir: bray_patient_aware
-  sample_col: sampleID
-  patient_col: Participant_ID
-  case_col: Case
-  type_col: Depth
-  sample_types: 20m,50m,150m
-  exclude_contralateral_in_cancer: false
-  contralateral_col: lung_status
-  cancer_site_col: Cancer_Site
-  lung_side_col: lung_code
-  contralateral_value: Contralateral
-  contralateral_sample_types: 20m,50m
-  transform: none
-  permutations: 9999
-  seed: 42
-  require_complete_types: false
 
 taxonomy_patient_aware:
   enabled: false
   output_dir: taxonomy_patient_aware
-  sample_col: sampleID
-  patient_col: Participant_ID
-  case_col: Case
-  type_col: Depth
-  count_col: count
-  tax_levels: Phylum,Family
-  sample_types: 20m,50m,150m
-  min_prevalence: 0.10
-  exclude_contralateral_in_cancer: false
-  contralateral_col: lung_status
-  cancer_site_col: Cancer_Site
-  lung_side_col: lung_code
-  contralateral_value: Contralateral
-  contralateral_sample_types: 20m,50m
-  skip_omnibus: false
-  transform: none
-  alpha: 0.05
-  top_n: 12
 
 lung_status_analysis:
   enabled: false
   output_dir: lung_status_analysis
-  sample_col: sampleID
-  type_col: Depth
-  sample_types: 20m,50m
-  case_col: Case
-  patient_col: Participant_ID
-  cancer_site_col: Cancer_Site
-  lung_code_col: lung_code
-  tumor_side_col: TumorSide
-  contralateral_col: Contralateral
-  healthy_col: Healthy
-  lung_status_col: lung_status
 
 clustermaps:
   enabled: true
@@ -463,11 +403,22 @@ spieceasi:
   graph_pos_all:
   graph_pos_sub:
   node_features:
+  all_pos_only: true
   network_modes:
-    - all
+    - degree_all
+    - abundance_all
+    - group1_isa_all
+    - group1_isa_all_labeled
+    - group2_isa_all
+    - group2_isa_all_labeled
+    - module_all
+    - module_all_labeled
+    - phylum_abund_all
+    - phylum_isa_all
+    - phylum_isa_all_labeled
   transpose: true
   min_rel_abund: 0.005
-  min_prevalence: 0.10
+  min_prevalence: 0.01
   remove_zero_var: true
   method: glasso
   lambda_min_ratio: 0.01
@@ -477,7 +428,7 @@ spieceasi:
   ncores: 8
   seed: 10010
   edge_threshold: 0.1
-  keep_negative: true
+  keep_negative: false
   layout_iters: 1000
   force_filter: true
   force_spieceasi: true

@@ -1361,7 +1361,7 @@ def indicspeciesPlotVennPath = indicspeciesConfig.venn ? resolveOptionalPath(ind
 def indicspeciesPlotTaxonomyPath = indicspeciesConfig.taxonomy ? resolveOptionalPath(indicspeciesConfig.taxonomy, configRoot) : new File(outputDir, 'taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv').canonicalPath
 def indicspeciesColorCol = indicspeciesConfig.color_col ?: metadataPlotsColorCol
 def indicspeciesGroup1Palette = indicspeciesConfig.group1_palette ?: ''
-def indicspeciesGroup2Palette = indicspeciesConfig.group2_palette ?: 'Non-Cancer=#FFFFFF,Cancer=#A50026,Cancer+Non-Cancer=#000000,not_indicator=#D3D3D3'
+def indicspeciesGroup2Palette = indicspeciesConfig.group2_palette ?: ''
 def indicspeciesGroup1OrderRaw = indicspeciesConfig.group1_order ?: metadataPlotsGroupOrder
 List<String> indicspeciesGroup1Order = []
 if( indicspeciesGroup1OrderRaw instanceof List ) {
@@ -1380,6 +1380,7 @@ def indicspeciesFocusGroup1Label = indicspeciesConfig.focus_group1_label ? indic
 def indicspeciesFocusGroup2Label = indicspeciesConfig.focus_group2_label ? indicspeciesConfig.focus_group2_label.toString().trim() : ''
 boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
 boolean indicspeciesAlignedEnabled = indicspeciesConfig.containsKey('aligned_plot_enabled') ? (indicspeciesConfig.aligned_plot_enabled as boolean) : false
+boolean indicspeciesUseDuleg = indicspeciesConfig.containsKey('use_duleg') ? (indicspeciesConfig.use_duleg as boolean) : false
 def indicspeciesAlignedOutputDir = indicspeciesConfig.aligned_plot_output_dir ?: 'indicspecies/aligned'
 def indicspeciesAlignedOutputDirAbs = new File(outputDir, indicspeciesAlignedOutputDir).canonicalPath
 def indicspeciesAlignedAlpha = indicspeciesConfig.aligned_alpha != null ? (indicspeciesConfig.aligned_alpha as double) : 0.05d
@@ -1460,6 +1461,7 @@ def spieceasiNcores = spieceasiConfig.ncores ? (spieceasiConfig.ncores as int) :
 def spieceasiSeed = spieceasiConfig.seed ? (spieceasiConfig.seed as int) : 10010
 def spieceasiEdgeThreshold = spieceasiConfig.edge_threshold != null ? (spieceasiConfig.edge_threshold as double) : 0.1d
 boolean spieceasiKeepNegative = spieceasiConfig.containsKey('keep_negative') ? (spieceasiConfig.keep_negative as boolean) : true
+boolean spieceasiAllPosOnly = spieceasiConfig.containsKey('all_pos_only') ? (spieceasiConfig.all_pos_only as boolean) : false
 def spieceasiLayoutIters = spieceasiConfig.layout_iters ? (spieceasiConfig.layout_iters as int) : 1000
 boolean spieceasiForceFilter = spieceasiConfig.containsKey('force_filter') ? (spieceasiConfig.force_filter as boolean) : false
 boolean spieceasiForceSpieceasi = spieceasiConfig.containsKey('force_spieceasi') ? (spieceasiConfig.force_spieceasi as boolean) : false
@@ -1486,8 +1488,45 @@ if( networkModesRaw instanceof List ) {
 } else if( networkModesRaw ) {
     networkModes = networkModesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
 }
+def allPosOnlyNetworkModes = [
+    'degree_all',
+    'abundance_all',
+    'group1_isa_all',
+    'group1_isa_all_labeled',
+    'group2_isa_all',
+    'group2_isa_all_labeled',
+    'module_all',
+    'module_all_labeled',
+    'phylum_abund_all',
+    'phylum_isa_all',
+    'phylum_isa_all_labeled'
+]
 if( networkModes.isEmpty() ) {
-    networkModes = ['all']
+    networkModes = spieceasiAllPosOnly ? allPosOnlyNetworkModes : ['all']
+}
+if( spieceasiAllPosOnly ) {
+    def modeRemap = [
+        'all': null,
+        'degree_sub': 'degree_all',
+        'abundance_sub': 'abundance_all',
+        'group1_isa': 'group1_isa_all',
+        'group1_isa_labeled': 'group1_isa_all_labeled',
+        'group1_isa_focus': 'group1_isa_focus_all',
+        'group1_isa_focus_labeled': 'group1_isa_focus_all_labeled',
+        'group2_isa': 'group2_isa_all',
+        'group2_isa_labeled': 'group2_isa_all_labeled',
+        'module_sub': 'module_all',
+        'module_sub_labeled': 'module_all_labeled',
+        'phylum_abund': 'phylum_abund_all',
+        'phylum_isa': 'phylum_isa_all',
+        'phylum_isa_labeled': 'phylum_isa_all_labeled'
+    ]
+    networkModes = networkModes.collect { modeRemap.containsKey(it) ? modeRemap[it] : it }
+        .findAll { it }
+        .unique()
+    if( networkModes.isEmpty() ) {
+        networkModes = allPosOnlyNetworkModes
+    }
 }
 def networkLayoutSeed = spieceasiConfig.layout_seed ? (spieceasiConfig.layout_seed as int) : 42
 def networkLayoutScale = spieceasiConfig.layout_scale != null ? (spieceasiConfig.layout_scale as double) : 3.0d
@@ -1991,14 +2030,14 @@ def asvFinalForMasterSummary = null
         )
         graphAllForModules = spieceasi_stage.graph_all.map { it }
         graphAllForNetwork = spieceasi_stage.graph_all.map { it }
-        graphThrForModules = spieceasi_stage.graph_thr.map { it }
-        graphThrForNetwork = spieceasi_stage.graph_thr.map { it }
+        graphThrForModules = spieceasiAllPosOnly ? spieceasi_stage.graph_all.map { it } : spieceasi_stage.graph_thr.map { it }
+        graphThrForNetwork = spieceasiAllPosOnly ? spieceasi_stage.graph_all.map { it } : spieceasi_stage.graph_thr.map { it }
         nodeFeaturesForNetwork = spieceasi_stage.node_features
     } else if( networkEnabled ) {
         graphAllForModules = Channel.value(file(networkGraphAllPath))
         graphAllForNetwork = Channel.value(file(networkGraphAllPath))
-        graphThrForModules = Channel.value(file(networkGraphThrPath))
-        graphThrForNetwork = Channel.value(file(networkGraphThrPath))
+        graphThrForModules = Channel.value(file(spieceasiAllPosOnly ? networkGraphAllPath : networkGraphThrPath))
+        graphThrForNetwork = Channel.value(file(spieceasiAllPosOnly ? networkGraphAllPath : networkGraphThrPath))
         nodeFeaturesForNetwork = Channel.value(file(networkNodeFeaturesPath))
     }
     if( networkEnabled ) {
@@ -3976,10 +4015,12 @@ process INDICSPECIES {
     script:
     def indicspeciesGroupColsArg = indicspeciesGroupCols.join(',')
     def indicspeciesBlockArg = indicspeciesBlockCol ? """  --block-col "${indicspeciesBlockCol}" \\\n""" : ''
-    def group1SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}_indicator_species_summary.tsv"
-    def group2SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup2}_indicator_species_summary.tsv"
-    def group1ResultsPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}_indicator_species_results.tsv"
-    def group2ResultsPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup2}_indicator_species_results.tsv"
+    def isaSummarySuffix = indicspeciesUseDuleg ? '_indicator_species_DULEG_summary.tsv' : '_indicator_species_summary.tsv'
+    def isaResultsSuffix = indicspeciesUseDuleg ? '_indicator_species_DULEG_results.tsv' : '_indicator_species_results.tsv'
+    def group1SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}${isaSummarySuffix}"
+    def group2SummaryPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup2}${isaSummarySuffix}"
+    def group1ResultsPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup1}${isaResultsSuffix}"
+    def group2ResultsPath = "${indicspeciesOutputDirAbs}/${indicspeciesGroup2}${isaResultsSuffix}"
     """
 set -euo pipefail
 mkdir -p "${indicspeciesOutputDirAbs}"
@@ -4799,8 +4840,8 @@ process NETWORK_MODULES {
     networkEnabled && networkModulesEnabled
 
     input:
-    path(graph_all)
-    path(graph_thr)
+    path(graph_all, stageAs: 'network_graph_all.graphml')
+    path(graph_thr, stageAs: 'network_graph_sub.graphml')
 
     output:
     path("network_modules_sub.tsv"), emit: modules_sub
@@ -4856,8 +4897,8 @@ process GRAPH_NETWORK {
     networkEnabled
 
     input:
-    path(graph_all)
-    path(graph_thr)
+    path(graph_all, stageAs: 'network_graph_all.graphml')
+    path(graph_thr, stageAs: 'network_graph_sub.graphml')
     path(node_features)
     path(asv_counts)
     path(taxonomy_table)

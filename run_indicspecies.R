@@ -87,12 +87,23 @@ message("Reading long format data: ", opt$`data-long`)
 long_df <- read_tsv(opt$`data-long`, show_col_types = FALSE)
 
 # Extract metadata (unique sample-level records)
-required_cols <- c(opt$`sample-col`, opt$`patient-col`)
 group_cols <- strsplit(opt$`group-cols`, ",", fixed = TRUE)[[1]] %>% trimws()
+blocked_cols <- strsplit(opt$`blocked-cols`, ",", fixed = TRUE)[[1]] %>% trimws() %>% discard(~ .x == "")
 if ("status" %in% group_cols && !("type_group" %in% group_cols)) {
   # Needed for status stratification by sample type.
   group_cols <- c(group_cols, "type_group")
 }
+
+required_cols <- c(opt$`sample-col`, group_cols)
+if ("status" %in% group_cols) {
+  # Status ISA aggregates within patient before testing between-status differences.
+  required_cols <- c(required_cols, opt$`patient-col`)
+}
+if (!is.null(opt$`block-col`) && nzchar(opt$`block-col`)) {
+  # Explicit blocking is a hard requirement when requested.
+  required_cols <- c(required_cols, opt$`block-col`)
+}
+
 optional_cols <- c()
 derive_contralateral_from_sides <- FALSE
 if (isTRUE(opt$`status-extra-no-contralateral`) && ("status" %in% group_cols)) {

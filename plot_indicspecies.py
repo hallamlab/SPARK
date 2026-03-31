@@ -257,7 +257,6 @@ def normalize_combo(label: str) -> str:
         return str(label)
     parts = [p.strip() for p in label.split("+")]
     parts = [p for p in parts if p]
-    parts = ["Non-Cancer" if p == "Control" else p for p in parts]
     uniq: list[str] = []
     for p in parts:
         if p not in uniq:
