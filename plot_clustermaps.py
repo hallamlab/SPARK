@@ -77,11 +77,56 @@ def normalize_label(v) -> str:
     if pd.isna(v):
         return "Other"
     text = str(v).strip()
-    return text if text else "Other"
+    if not text:
+        return "Other"
+    lowered = text.lower()
+    ambiguous_tokens = (
+        "unclassified",
+        "uncultured",
+        "unknown",
+        "unidentified",
+        "unassigned",
+        "ambiguous",
+        "incertae",
+        "metagenome",
+        "other",
+        "none",
+        "nan",
+        "na",
+    )
+    if any(tok in lowered for tok in ambiguous_tokens):
+        return "Other"
+    return text
 
 
-def dynamic_height(n_rows: int, per_row: float = 0.4, min_h: float = 8.0, max_h: float = 6000.0) -> float:
-    return float(np.clip(per_row * max(n_rows, 1), min_h, max_h))
+def dynamic_height(
+    n_rows: int,
+    row_labels: list[str] | None = None,
+    per_row: float = 0.4,
+    min_h: float = 8.0,
+    max_h: float = 1200.0,
+) -> float:
+    max_row_label_len = max((len(str(x)) for x in (row_labels or [])), default=0)
+    label_term = min(max_row_label_len * 0.02, 4.0)
+    height = (per_row * max(n_rows, 1)) + label_term + 2.0
+    return float(np.clip(height, min_h, max_h))
+
+
+def dynamic_width(
+    n_cols: int,
+    col_labels: list[str],
+    row_labels: list[str] | None = None,
+    base_w: float = 32.0,
+    per_col: float = 0.22,
+    min_w: float = 18.0,
+    max_w: float = 1200.0,
+) -> float:
+    max_col_label_len = max((len(str(x)) for x in col_labels), default=0)
+    max_row_label_len = max((len(str(x)) for x in (row_labels or [])), default=0)
+    col_label_term = min(max_col_label_len * 0.18, 10.0)
+    row_label_term = min(max_row_label_len * 0.12, 16.0)
+    width = max(base_w, min_w, (per_col * max(n_cols, 1)) + col_label_term + row_label_term + 6.0)
+    return float(np.clip(width, min_w, max_w))
 
 
 def auto_palette(values: list[str]) -> dict[str, str]:
@@ -292,6 +337,7 @@ def draw_clustermap(
     colors_ratio=0.02,
     cbar_pos=(1.02, 0.2, 0.03, 0.4),
     alpha: float = 0.75,
+    formats: list[str] | None = None,
 ):
     """Write two plots: `_code` (fixed columns) and `_clustered` (clustered columns)."""
     if pivot.empty:
@@ -315,7 +361,19 @@ def draw_clustermap(
     cmap = LinearSegmentedColormap.from_list("light_greyscale", ["#ffffff", "#d9d9d9", "#000000"], N=256)
     tick_vals_log = [np.log10(v + 1) for v in tick_vals_orig]
     vmax_log = np.log10(vmax_display + 1)
-    height = dynamic_height(pivot.shape[0], per_row=row_height, min_h=min_fig_h, max_h=max_fig_h)
+    height = dynamic_height(
+        pivot.shape[0],
+        row_labels=pivot.index.tolist(),
+        per_row=row_height,
+        min_h=min_fig_h,
+        max_h=max_fig_h,
+    )
+    width = dynamic_width(
+        pivot.shape[1],
+        col_labels=pivot.columns.tolist(),
+        row_labels=pivot.index.tolist(),
+        base_w=figsize_w,
+    )
 
     # 1) fixed sample-code order
     g = sns.clustermap(
@@ -331,7 +389,7 @@ def draw_clustermap(
         yticklabels=True,
         dendrogram_ratio=dendrogram_ratio,
         colors_ratio=colors_ratio,
-        figsize=(figsize_w, height),
+        figsize=(width, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
         row_cluster=row_cluster,
@@ -345,10 +403,9 @@ def draw_clustermap(
     g.ax_heatmap.set_xticklabels(pivot_log.columns, rotation=90, ha="center")
     g.ax_heatmap.tick_params(axis="x", bottom=True, labelbottom=True, length=5)
 
-    out_svg = outfile_prefix.with_suffix(".svg")
-    out_pdf = outfile_prefix.with_suffix(".pdf")
-    plt.savefig(out_svg, bbox_inches="tight")
-    plt.savefig(out_pdf, bbox_inches="tight")
+    formats = formats or ["pdf", "png"]
+    for fmt in formats:
+        plt.savefig(outfile_prefix.with_suffix(f".{fmt}"), bbox_inches="tight")
     plt.close()
 
     # 2) clustered columns
@@ -365,7 +422,7 @@ def draw_clustermap(
         yticklabels=True,
         dendrogram_ratio=dendrogram_ratio,
         colors_ratio=colors_ratio,
-        figsize=(figsize_w, height),
+        figsize=(width, height),
         cbar_pos=cbar_pos,
         alpha=alpha,
         row_cluster=row_cluster,
@@ -377,10 +434,9 @@ def draw_clustermap(
     cbar.set_label("ASV Count", rotation=270, labelpad=15)
     g.ax_heatmap.tick_params(axis="x", bottom=True, labelbottom=True, length=5)
 
-    out2_svg = outfile_prefix.with_name(outfile_prefix.stem.replace("_code", "_clustered")).with_suffix(".svg")
-    out2_pdf = out2_svg.with_suffix(".pdf")
-    plt.savefig(out2_svg, bbox_inches="tight")
-    plt.savefig(out2_pdf, bbox_inches="tight")
+    clustered_prefix = outfile_prefix.with_name(outfile_prefix.stem.replace("_code", "_clustered"))
+    for fmt in formats:
+        plt.savefig(clustered_prefix.with_suffix(f".{fmt}"), bbox_inches="tight")
     plt.close()
 
 
@@ -438,6 +494,8 @@ def main():
     ap.add_argument("--row-height", type=float, default=0.4, help="Row height scale (in/row).")
     ap.add_argument("--min-height", type=float, default=8.0, help="Minimum figure height (in).")
     ap.add_argument("--max-height", type=float, default=6000.0, help="Maximum figure height (in).")
+    ap.add_argument("--formats", type=str, default="pdf,png",
+                    help="Comma-separated output formats, e.g. 'pdf,png' or 'pdf,svg'.")
 
     # Mitochondrial (optional)
     ap.add_argument("--mito-asv", type=Path, default=None, help="Optional mitochondrial ASV table (TSV).")
@@ -458,6 +516,10 @@ def main():
     topn_map = {k: int(v) for k, v in topn_raw.items()}
     tick_vals_orig = [int(x.strip()) for x in args.tick_values.split(",") if x.strip()]
     vmax_display = int(args.vmax)
+    formats = [x.strip().lower() for x in args.formats.split(",") if x.strip()]
+    formats = [x for x in formats if x in {"pdf", "png", "svg"}]
+    if not formats:
+        formats = ["pdf", "png"]
 
     meta = pd.read_csv(args.metadata, sep="\t", header=0)
     asv_meta = pd.read_csv(args.asv_meta, sep="\t", header=0)
@@ -567,6 +629,7 @@ def main():
             row_height=args.row_height,
             min_fig_h=args.min_height,
             max_fig_h=args.max_height,
+            formats=formats,
         )
         pivot.to_csv(outdir / f"clustermap_{colname}.tsv", sep="\t")
 
@@ -620,6 +683,7 @@ def main():
                 row_height=args.row_height,
                 min_fig_h=args.min_height,
                 max_fig_h=args.max_height,
+                formats=formats,
             )
             pivot.to_csv(mito_outdir / "clustermap_ASV_mito.tsv", sep="\t")
         else:

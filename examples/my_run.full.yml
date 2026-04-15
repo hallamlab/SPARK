@@ -61,6 +61,9 @@ diversity:
 indicspecies:
   enabled: false
   aligned_plot_enabled: false
+  group_palettes: {}
+  group_orders: {}
+  focus_labels: {}
 
 power_analysis:
   enabled: false
@@ -79,6 +82,29 @@ clustermaps:
 
 spieceasi:
   enabled: false
+  isa_overlay_groups:
+  group_palettes: {}
+  group_orders: {}
+  focus_labels: {}
+
+asv_mag_link:
+  enabled: false
+  genome_qc_dir:
+  genome_qc_dirs:
+  barrnap_dir: /abs/path/to/barrnap_outputs
+  genome_fasta_dir:
+  plot_top_n: 20
+
+master_summary:
+  enabled: true
 
 biochem_pre_asv:
   enabled: false
+
+biochem_network_overlay:
+  enabled: false
+  isa_overlay_groups:
+  modes:
+    - module
+  group_palettes: {}
+  group_orders: {}

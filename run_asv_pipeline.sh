@@ -55,7 +55,10 @@ PROCESS_ORDER=(
   POWER_ANALYSIS_PIPELINE
   SPIECEASI
   NETWORK_MODULES
+  ASV_MAG_LINK
+  BIOCHEM_NETWORK_OVERLAY
   GRAPH_NETWORK
+  MODULE_MAG_ANCHORS
   SANKEY
   MASTER_SUMMARY
 )
@@ -357,7 +360,11 @@ if [[ -n "$RERUN_FROM" ]]; then
     mapfile -t candidate_workdirs < <(
       while IFS=$'\t' read -r process_name workdir _status; do
         [[ -n "$process_name" ]] || continue
-        [[ -n "${RERUN_STAGE_SET[$process_name]:-}" ]] || continue
+        process_key="$process_name"
+        if [[ "$process_key" == *:* ]]; then
+          process_key="${process_key##*:}"
+        fi
+        [[ -n "${RERUN_STAGE_SET[$process_name]:-}" || -n "${RERUN_STAGE_SET[$process_key]:-}" ]] || continue
         [[ -n "$workdir" && "$workdir" != "-" ]] || continue
         printf '%s\n' "$workdir"
       done <<< "$task_rows" | sort -u

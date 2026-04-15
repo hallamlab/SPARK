@@ -277,7 +277,7 @@ bubbleplotter:
   formats: pdf,png
   figsize: "32,60"
   bubble_scale: 10
-  no_auto_size: true
+  no_auto_size: false
 
 umap_clustering:
   enabled: true
@@ -331,6 +331,9 @@ indicspecies:
   group_cols:
     - Type_Group
     - Case
+  group_palettes: {}
+  group_orders: {}
+  focus_labels: {}
   group1_order:
     - Oral Rinse
     - BAL+Oral Rinse
@@ -471,6 +474,11 @@ clustermaps:
   isa_min_stat: 0.6
   isa_significance_cols:
   isa_stat_cols:
+  formats: pdf,png
+  figwidth: 32
+  row_height: 0.08
+  min_height: 8
+  max_height: 180
   mito_sample_mode: auto
 
 spieceasi:
@@ -498,6 +506,10 @@ spieceasi:
   graph_pos_all:
   graph_pos_sub:
   node_features:
+  isa_overlay_groups:
+  group_palettes: {}
+  group_orders: {}
+  focus_labels: {}
   network_modes:
     - all
   metadata: /home/ryan/Projects/UBC/LMP/spark_set1_metadata.tsv
@@ -540,6 +552,46 @@ spieceasi:
   degree_scale: 80.0
   edge_width_scale: 10.0
   isa_scale: 700.0
+  abundance_min_area: 8.0
+  abundance_max_area: 420.0
+  abundance_scale_power: 1.6
+
+asv_mag_link:
+  enabled: false
+  genome_qc_dir:
+  genome_qc_dirs:
+  id_token_indexes:
+  barrnap_dir:
+  genome_fasta_dir:
+  output_dir: asv_mag_link
+  threads: 8
+  min_pident: 97.0
+  min_qcov: 90.0
+  top_n: 5
+  plot_top_n: 20
+
+biochem_network_overlay:
+  enabled: false
+  output_dir: biochem_network_overlay
+  sample_col: sample
+  ordination_x: PC1
+  ordination_y: PC2
+  isa_overlay_groups:
+  modes:
+    - module
+    - mag_pair_phylum
+    - mag_pair_family
+  top_modules: 8
+  top_vectors: 10
+  module_hull_quantile: 0.75
+  min_samples_per_hull: 4
+  min_asvs_per_module: 3
+  group_palettes: {}
+  group_orders: {}
+  group1_palette:
+  group2_palette:
+  group1_order:
+  group2_order:
 
 master_summary:
   enabled: true
@@ -547,6 +599,7 @@ master_summary:
   clustermaps_dir: clustermaps
   indicspecies_dir: indicspecies
   spieceasi_dir: spieceasi
+  asv_mag_dir: asv_mag_link
   max_direct_cols: 300
   whitelist:
     - type_group_ISA_enriched.tsv
@@ -559,7 +612,11 @@ master_summary:
     - spieceasi_node_features.csv
     - spieceasi_modules_sub.tsv
     - spieceasi_modules_all.tsv
+    - module_asv_anchor_table.tsv
     - clustermap_ASV_ID_plot.tsv
+    - asv2mag_pairing.tsv
+    - asv2mag_summary.tsv
+    - asv2mag_genome_summary.tsv
 
 trajectory_analysis:
   enabled: false
@@ -613,3 +670,5 @@ environments:
   network_modules: envs/advanced.yml
   network: envs/advanced.yml
   master_summary: envs/advanced.yml
+  asv_mag_link: envs/asv_mag_link.yml
+  biochem_network_overlay: envs/advanced.yml

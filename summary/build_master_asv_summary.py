@@ -41,9 +41,14 @@ DEFAULT_WHITELIST = [
     "spieceasi_node_features.csv",
     "spieceasi_modules_sub.tsv",
     "spieceasi_modules_all.tsv",
+    "module_asv_anchor_table.tsv",
     "network_component_membership_POS_ALL.tsv",
     "network_component_membership_POS_SUB.tsv",
     "clustermap_ASV_ID_plot.tsv",
+    "asv2mag_pairing.tsv",
+    "asv2mag_summary.tsv",
+    "asv2mag_genome_summary.tsv",
+    "barrnap_16s_reference_catalog.tsv",
 ]
 
 # Enforced key mapping for known files
@@ -63,9 +68,13 @@ PREFERRED_KEY_BY_BASENAME = {
     "spieceasi_node_features.csv": "Taxon",
     "spieceasi_modules_sub.tsv": "Taxon",
     "spieceasi_modules_all.tsv": "Taxon",
+    "module_asv_anchor_table.tsv": "Taxon",
     "clustermap_ASV_ID_plot.tsv": "ASV_ID",
     "network_component_membership_POS_ALL.tsv": "ASV_ID",
     "network_component_membership_POS_SUB.tsv": "ASV_ID",
+    "asv2mag_pairing.tsv": "ASV_ID",
+    "asv2mag_genome_summary.tsv": "genome_id",
+    "barrnap_16s_reference_catalog.tsv": "genome_id",
 }
 
 GLOBAL_NETWORK_SUMMARY_BASENAMES = {
@@ -210,11 +219,13 @@ def collect_whitelist_paths(
     clustermaps_dir: Path | None,
     indicspecies_dir: Path | None,
     spieceasi_dir: Path | None,
+    asv_mag_dir: Path | None,
 ) -> list[tuple[str, Path]]:
     roots = [
         ("clustermaps", clustermaps_dir),
         ("indicspecies", indicspecies_dir),
         ("spieceasi", spieceasi_dir),
+        ("asv_mag_link", asv_mag_dir),
     ]
 
     found: list[tuple[str, Path]] = []
@@ -610,6 +621,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--clustermaps-dir", type=Path, default=None, help="clustermaps output directory (optional).")
     p.add_argument("--indicspecies-dir", type=Path, default=None, help="indicspecies output directory.")
     p.add_argument("--spieceasi-dir", type=Path, default=None, help="spieceasi output directory.")
+    p.add_argument("--asv-mag-dir", type=Path, default=None, help="ASV-to-genome/MAG linking output directory.")
 
     p.add_argument(
         "--whitelist",
@@ -662,6 +674,8 @@ def main() -> None:
         args.indicspecies_dir = args.data_dir / "indicspecies"
     if args.spieceasi_dir is None and args.data_dir is not None:
         args.spieceasi_dir = args.data_dir / "spieceasi"
+    if args.asv_mag_dir is None and args.data_dir is not None:
+        args.asv_mag_dir = args.data_dir / "asv_mag_link"
 
     if args.outdir is None:
         if args.data_dir is not None:
@@ -690,6 +704,7 @@ def main() -> None:
         clustermaps_dir=args.clustermaps_dir,
         indicspecies_dir=args.indicspecies_dir,
         spieceasi_dir=args.spieceasi_dir,
+        asv_mag_dir=args.asv_mag_dir,
     )
     info(f"Whitelisted downstream files found: {len(selected)}")
 

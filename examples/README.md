@@ -17,6 +17,11 @@ This folder contains copy-ready templates for running `asv_pipeline.nf` on a new
   - Enables `bray_patient_aware`, `taxonomy_patient_aware`, and `lung_status_analysis`.
   - Disables unrelated optional downstream modules to keep the test run small.
 
+- `my_run.asv_mag_test.yml`
+  - Minimal test template for the ASV-to-genome barrnap linkage branch.
+  - Enables `asv_mag_link` and `master_summary`.
+  - Disables unrelated optional downstream modules to keep the test run focused.
+
 - `manifest.example.tsv`
   - Manifest format used by the pipeline.
   - **No header** in machine-readable rows (comment lines beginning with `#` are allowed).
@@ -77,6 +82,16 @@ If you enable `taxonomy_patient_aware.enabled`, you also need the same patient-a
 If you enable `lung_status_analysis.enabled`, your metadata should include the lung-side fields required to assign `TumorSide`, `Contralateral`, and `Healthy`. The prep step now prefers explicit metadata columns for those labels when present, and otherwise falls back to deriving them from `Case`, `Cancer_Site`, and `lung_code`.
 
 If you enable `indicspecies.aligned_plot_enabled`, no extra input files are required beyond a successful `indicspecies.enabled: true` run.
+
+If you want more than two ISA groupings downstream, add extra entries to `indicspecies.group_cols` and then use matching `groupN_*` network / biochem overlay modes in the same configured order. You can also provide per-group defaults with:
+
+- `indicspecies.group_palettes`
+- `indicspecies.group_orders`
+- `indicspecies.focus_labels`
+- `spieceasi.isa_overlay_groups`
+- `biochem_network_overlay.isa_overlay_groups`
+
+If you enable `asv_mag_link.enabled`, the cleanest input is `asv_mag_link.genome_qc_dir` or `asv_mag_link.genome_qc_dirs`. In that mode SPARK autodetects `barrnap/`, prefers final QC MAGs from `dedupe/fasta` (falling back to `genomes_subset`), restricts the eligible references to MAGs that pass the genome-QC barrnap check, and enriches the ASV↔MAG tables with MAG metadata such as completeness, contamination, MIMAG tier, taxonomy, and source provenance. If you are not working from a genome_qc result directory, you can still provide `asv_mag_link.barrnap_dir` directly, and optionally `asv_mag_link.genome_fasta_dir` when only barrnap `*.gff`/`*.gff3` outputs are available.
 
 ## Manifest Rules (Important)
 

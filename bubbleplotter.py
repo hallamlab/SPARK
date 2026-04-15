@@ -572,29 +572,61 @@ def prepare_taxonomy_ordering(
     return ofg_updated, genera_updated, ofg_mapping_updated, genus_mapping_updated
 
 
-def calculate_figsize(n_samples: int, n_genera: int, 
-                     width_per_sample: float = 0.3,
-                     height_per_genus: float = 0.15,
-                     min_width: float = 12,
-                     max_width: float = 50,
-                     min_height: float = 10,
-                     max_height: float = 40) -> Tuple[float, float]:
+def calculate_figsize(
+    n_x: int,
+    n_y: int,
+    x_labels: Optional[List[str]] = None,
+    y_labels: Optional[List[str]] = None,
+    width_per_x: float = 0.55,
+    height_per_y: float = 0.26,
+    min_width: float = 16,
+    max_width: float = 180,
+    min_height: float = 12,
+    max_height: float = 180,
+    x_rotation: float = 0.0,
+    include_legend: bool = True,
+    include_taxonomy_gutters: bool = True
+) -> Tuple[float, float]:
     """
     Calculate appropriate figure size based on data dimensions.
     
     Args:
-        n_samples: Number of samples
-        n_genera: Number of genera/taxonomies
-        width_per_sample: Width in inches per sample
-        height_per_genus: Height in inches per genus
+        n_x: Number of x-axis entries
+        n_y: Number of y-axis entries
+        x_labels: X-axis label values
+        y_labels: Y-axis label values
+        width_per_x: Width in inches per x-axis entry
+        height_per_y: Height in inches per y-axis entry
         min_width/max_width: Bounds for width
         min_height/max_height: Bounds for height
+        x_rotation: Rotation angle for x-axis labels in degrees
+        include_legend: Reserve space for legend on the right
+        include_taxonomy_gutters: Reserve extra left margin for Order/Family labels
     
     Returns:
         Tuple of (width, height) in inches
     """
-    width = n_samples * width_per_sample
-    height = n_genera * height_per_genus
+    x_labels = [str(x) for x in (x_labels or [])]
+    y_labels = [str(y) for y in (y_labels or [])]
+
+    max_x_len = max((len(x) for x in x_labels), default=0)
+    max_y_len = max((len(y) for y in y_labels), default=0)
+
+    label_rotation_factor = 1.0 if abs(x_rotation) >= 45 else 0.45
+
+    # Main plotting area
+    width = (n_x * width_per_x) + (max_x_len * 0.11 * label_rotation_factor)
+    height = (n_y * height_per_y) + (max_y_len * 0.035) + (max_x_len * 0.03 * label_rotation_factor)
+
+    # Margins for taxonomy gutters and legends
+    left_margin = 2.5 + (max_y_len * 0.12)
+    if include_taxonomy_gutters:
+        left_margin += 4.0
+    right_margin = 4.5 if include_legend else 1.5
+    top_bottom_margin = 3.5
+
+    width += left_margin + right_margin
+    height += top_bottom_margin
     
     # Apply bounds
     width = max(min_width, min(width, max_width))
@@ -631,7 +663,21 @@ def plot_depth_bubble(
     
     # Calculate figure size
     if auto_size:
-        figsize = calculate_figsize(n_samples, n_genera)
+        figsize = calculate_figsize(
+            n_x=n_samples,
+            n_y=n_genera,
+            x_labels=samples,
+            y_labels=genera_list,
+            width_per_x=0.58,
+            height_per_y=0.28,
+            min_width=18,
+            max_width=220,
+            min_height=12,
+            max_height=180,
+            x_rotation=90,
+            include_legend=show_legend,
+            include_taxonomy_gutters=True
+        )
         print(f"[INFO] Auto-calculated figure size: {figsize[0]:.1f} × {figsize[1]:.1f} inches")
     else:
         figsize = base_figsize
@@ -785,14 +831,19 @@ def plot_summary_bubble(
     
     # Calculate figure size
     figsize = calculate_figsize(
-        n_samples=n_groups,
-        n_genera=n_genera,
-        width_per_sample=1.5,
-        height_per_genus=0.35,
-        min_width=32,
-        max_width=40,
-        min_height=40,
-        max_height=60
+        n_x=n_groups,
+        n_y=n_genera,
+        x_labels=groups,
+        y_labels=genera_list,
+        width_per_x=1.1,
+        height_per_y=0.34,
+        min_width=18,
+        max_width=180,
+        min_height=14,
+        max_height=180,
+        x_rotation=45,
+        include_legend=show_legend,
+        include_taxonomy_gutters=True
     )
     
     print(f"[INFO] Summary plot size: {figsize[0]:.1f} × {figsize[1]:.1f} inches")

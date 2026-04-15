@@ -85,6 +85,43 @@ def _safe_color(value, fallback: str = '#808080') -> str:
     return color if mcolors.is_color_like(color) else fallback
 
 
+def _prepare_biological_covariates(cov: pd.DataFrame) -> pd.DataFrame:
+    """
+    Preserve numeric covariates as numeric gradients for ConQuR.
+
+    - numeric or fully numeric-coercible columns stay numeric and are median-imputed
+    - non-numeric columns are treated as categorical and receive a "MISSING" label
+    - constant columns are dropped
+    """
+    prepared = pd.DataFrame(index=cov.index)
+
+    for col in cov.columns:
+        series = cov[col]
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+
+        numeric_cast = pd.to_numeric(series, errors="coerce")
+        is_numeric = pd.api.types.is_numeric_dtype(series) or (
+            len(non_null) > 0 and numeric_cast.notna().sum() == len(non_null)
+        )
+
+        if is_numeric:
+            filled = numeric_cast.astype(float)
+            median = filled.median()
+            if pd.isna(median):
+                continue
+            prepared[col] = filled.fillna(median)
+        else:
+            prepared[col] = series.fillna("MISSING").astype(str)
+
+    if prepared.shape[1] == 0:
+        return prepared
+
+    non_constant = prepared.nunique(dropna=False) > 1
+    return prepared.loc[:, non_constant]
+
+
 # ============================================================================
 # Batch Correction Functions
 # ============================================================================
@@ -395,9 +432,7 @@ def conqur_correction_wrapper(
         cov = cov.reindex(shared)
         cov = cov.loc[:, cov.notna().any(axis=0)]
         if cov.shape[1] > 0:
-            cov = cov.fillna("MISSING").astype(str)
-            non_constant = cov.nunique(dropna=False) > 1
-            cov = cov.loc[:, non_constant]
+            cov = _prepare_biological_covariates(cov)
             if cov.shape[1] > 0:
                 for c in cov.columns:
                     meta[c] = cov[c].values

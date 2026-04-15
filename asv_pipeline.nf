@@ -2,6 +2,7 @@
 nextflow.enable.dsl=2
 
 import groovy.yaml.YamlSlurper
+import groovy.json.JsonOutput
 import java.net.URL
 import java.nio.file.Paths
 import java.util.regex.Pattern
@@ -379,6 +380,24 @@ if( !masterSummaryEnvFile.exists() ) {
 }
 log.info "Using master summary Conda/Mamba env definition: ${masterSummaryCondaEnvPath}"
 
+def asvMagLinkEnvConfigPath = config.environments?.asv_mag_link
+def resolvedAsvMagLinkEnvPath = asvMagLinkEnvConfigPath ? resolveOptionalPath(asvMagLinkEnvConfigPath, configRoot) : null
+def asvMagLinkCondaEnvPath = resolvedAsvMagLinkEnvPath ?: defaultAdvancedEnvPath
+def asvMagLinkEnvFile = file(asvMagLinkCondaEnvPath)
+if( !asvMagLinkEnvFile.exists() ) {
+    exit 1, "ASV-MAG linking conda environment YAML not found: ${asvMagLinkCondaEnvPath}"
+}
+log.info "Using ASV-MAG linking Conda/Mamba env definition: ${asvMagLinkCondaEnvPath}"
+
+def biochemNetworkOverlayEnvConfigPath = config.environments?.biochem_network_overlay
+def resolvedBiochemNetworkOverlayEnvPath = biochemNetworkOverlayEnvConfigPath ? resolveOptionalPath(biochemNetworkOverlayEnvConfigPath, configRoot) : null
+def biochemNetworkOverlayCondaEnvPath = resolvedBiochemNetworkOverlayEnvPath ?: defaultAdvancedEnvPath
+def biochemNetworkOverlayEnvFile = file(biochemNetworkOverlayCondaEnvPath)
+if( !biochemNetworkOverlayEnvFile.exists() ) {
+    exit 1, "Biochem-network overlay conda environment YAML not found: ${biochemNetworkOverlayCondaEnvPath}"
+}
+log.info "Using biochem-network overlay Conda/Mamba env definition: ${biochemNetworkOverlayCondaEnvPath}"
+
 def powerAnalysisEnvConfigPath = config.environments?.power_analysis
 def resolvedPowerAnalysisEnvPath = powerAnalysisEnvConfigPath ? resolveOptionalPath(powerAnalysisEnvConfigPath, configRoot) : null
 def powerAnalysisCondaEnvPath = resolvedPowerAnalysisEnvPath ?: defaultAdvancedEnvPath
@@ -589,6 +608,26 @@ if( !masterSummaryScriptFile.exists() ) {
     exit 1, "summary/build_master_asv_summary.py not found in project directory"
 }
 def masterSummaryScriptPath = masterSummaryScriptFile.canonicalPath
+def asvMagLinkScriptFile = new File("${projectDir}/asv_mag_barrnap_linker.py")
+if( !asvMagLinkScriptFile.exists() ) {
+    exit 1, "asv_mag_barrnap_linker.py not found in project directory"
+}
+def asvMagLinkScriptPath = asvMagLinkScriptFile.canonicalPath
+def plotAsvMagLinkScriptFile = new File("${projectDir}/plot_asv_mag_link.py")
+if( !plotAsvMagLinkScriptFile.exists() ) {
+    exit 1, "plot_asv_mag_link.py not found in project directory"
+}
+def plotAsvMagLinkScriptPath = plotAsvMagLinkScriptFile.canonicalPath
+def moduleMagAnchorsScriptFile = new File("${projectDir}/summarize_module_mag_anchors.py")
+if( !moduleMagAnchorsScriptFile.exists() ) {
+    exit 1, "summarize_module_mag_anchors.py not found in project directory"
+}
+def moduleMagAnchorsScriptPath = moduleMagAnchorsScriptFile.canonicalPath
+def biochemNetworkOverlayScriptFile = new File("${projectDir}/plot_biochem_network_overlay.py")
+if( !biochemNetworkOverlayScriptFile.exists() ) {
+    exit 1, "plot_biochem_network_overlay.py not found in project directory"
+}
+def biochemNetworkOverlayScriptPath = biochemNetworkOverlayScriptFile.canonicalPath
 def powerAnalysisScriptFile = new File("${projectDir}/run_power_analysis_pipeline.sh")
 if( !powerAnalysisScriptFile.exists() ) {
     exit 1, "run_power_analysis_pipeline.sh not found in project directory"
@@ -942,816 +981,1394 @@ if( sankeyEnabled && !filterCountsEnabled ) {
 if( sankeyEnabled && !generalStatsEnabled ) {
     exit 1, "Sankey requires general_stats.enabled to be true"
 }
-def metadataPlotsConfig = config.metadata_plots ?: [:]
-boolean metadataPlotsEnabled = metadataPlotsConfig.containsKey('enabled') ? (metadataPlotsConfig.enabled as boolean) : true
-if( metadataPlotsEnabled && !filterCountsEnabled ) {
-    exit 1, "metadata_plots.enabled requires filter_counts.enabled to be true"
-}
-if( metadataPlotsEnabled && !generalStatsEnabled ) {
-    exit 1, "metadata_plots.enabled requires general_stats.enabled to be true"
-}
-def metadataPlotsMetadataPath = metadataPlotsConfig.metadata ? resolveOptionalPath(metadataPlotsConfig.metadata, configRoot) : resolveOptionalPath("ref_db/asv_cruise_metadata.tsv", configRoot)
-if( metadataPlotsEnabled && (!metadataPlotsMetadataPath || !new File(metadataPlotsMetadataPath).exists()) ) {
-    exit 1, "metadata_plots metadata file not found: ${metadataPlotsMetadataPath}"
-}
-def metadataPlotsSubDir = metadataPlotsConfig.sub_dir ?: '.'
-def metadataPlotsSampleCol = metadataPlotsConfig.sample_col ?: 'sampleID'
-def metadataPlotsTypeCol = metadataPlotsConfig.type_col ?: (metadataPlotsConfig.group1_col ?: 'Depth')
-def metadataPlotsColorCol = metadataPlotsConfig.color_col ?: 'Color'
-def metadataPlotsBiochemAssignmentsPath = metadataPlotsConfig.biochem_assignments ? resolveOptionalPath(metadataPlotsConfig.biochem_assignments, configRoot) : null
-def metadataPlotsBiochemSampleCol = metadataPlotsConfig.biochem_sample_col ?: 'cruise_year_month_depth'
-def metadataPlotsStratificationTimeseriesPath = metadataPlotsConfig.stratification_timeseries ? resolveOptionalPath(metadataPlotsConfig.stratification_timeseries, configRoot) : null
-def metadataPlotsStratMetaJoinCol = metadataPlotsConfig.strat_meta_join_col ?: 'Cruise'
-def metadataPlotsStratJoinCol = metadataPlotsConfig.strat_join_col ?: 'Cruise'
-def metadataBiochemIncludeRaw = metadataPlotsConfig.biochem_include_cols
-List<String> metadataPlotsBiochemIncludeCols = []
-if( metadataBiochemIncludeRaw instanceof List ) {
-    metadataPlotsBiochemIncludeCols = metadataBiochemIncludeRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataBiochemIncludeRaw ) {
-    metadataPlotsBiochemIncludeCols = metadataBiochemIncludeRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataStratIncludeRaw = metadataPlotsConfig.strat_include_cols
-List<String> metadataPlotsStratIncludeCols = []
-if( metadataStratIncludeRaw instanceof List ) {
-    metadataPlotsStratIncludeCols = metadataStratIncludeRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataStratIncludeRaw ) {
-    metadataPlotsStratIncludeCols = metadataStratIncludeRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataBiochemMetaJoinRaw = metadataPlotsConfig.biochem_meta_join_cols
-List<String> metadataPlotsBiochemMetaJoinCols = []
-if( metadataBiochemMetaJoinRaw instanceof List ) {
-    metadataPlotsBiochemMetaJoinCols = metadataBiochemMetaJoinRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataBiochemMetaJoinRaw ) {
-    metadataPlotsBiochemMetaJoinCols = metadataBiochemMetaJoinRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataBiochemJoinRaw = metadataPlotsConfig.biochem_join_cols
-List<String> metadataPlotsBiochemJoinCols = []
-if( metadataBiochemJoinRaw instanceof List ) {
-    metadataPlotsBiochemJoinCols = metadataBiochemJoinRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataBiochemJoinRaw ) {
-    metadataPlotsBiochemJoinCols = metadataBiochemJoinRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-if( metadataPlotsBiochemMetaJoinCols.size() != metadataPlotsBiochemJoinCols.size() ) {
-    exit 1, "metadata_plots.biochem_meta_join_cols and metadata_plots.biochem_join_cols must have the same number of entries"
-}
-def metadataKeepTypesRaw = metadataPlotsConfig.keep_types
-List<String> metadataKeepTypes = []
-if( metadataKeepTypesRaw instanceof List ) {
-    metadataKeepTypes = metadataKeepTypesRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataKeepTypesRaw ) {
-    metadataKeepTypes = metadataKeepTypesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataPlotsSubtractionCol = metadataPlotsConfig.subtraction_group_col ?: metadataPlotsTypeCol
-def metadataSubtractionGroupsRaw = metadataPlotsConfig.subtraction_groups
-List<String> metadataPlotsSubtractionGroups = []
-if( metadataSubtractionGroupsRaw instanceof List ) {
-    metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataSubtractionGroupsRaw ) {
-    metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataGroupOrderRaw = metadataPlotsConfig.group_order
-List<String> metadataPlotsGroupOrder = []
-if( metadataGroupOrderRaw instanceof List ) {
-    metadataPlotsGroupOrder = metadataGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataGroupOrderRaw ) {
-    metadataPlotsGroupOrder = metadataGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataIncludeRankRaw = metadataPlotsConfig.include_rank
-List<String> metadataIncludeRank = []
-if( metadataIncludeRankRaw instanceof List ) {
-    metadataIncludeRank = metadataIncludeRankRaw.collect { it.toString().trim() }.findAll { it }
-} else if( metadataIncludeRankRaw ) {
-    metadataIncludeRank = metadataIncludeRankRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def metadataPlotsMitoThreshold = metadataPlotsConfig.mito_threshold_line != null ? (metadataPlotsConfig.mito_threshold_line as double) : 1000d
-boolean metadataPlotsRunMicro = metadataPlotsConfig.containsKey('run_micro') ? (metadataPlotsConfig.run_micro as boolean) : true
-boolean metadataPlotsRunMito = metadataPlotsConfig.containsKey('run_mito') ? (metadataPlotsConfig.run_mito as boolean) : true
-if( metadataPlotsEnabled && !metadataPlotsRunMicro && !metadataPlotsRunMito ) {
-    exit 1, "metadata_plots configured to skip both micro and mito outputs; disable metadata_plots.enabled instead."
-}
-boolean metadataForceMicroOnly = metadataPlotsRunMicro && !metadataPlotsRunMito
-boolean metadataForceMitoOnly = metadataPlotsRunMito && !metadataPlotsRunMicro
+def analysisCfg = parseMetadataAndBasicAnalysisConfig(config, configRoot, outputDir, filterCountsEnabled as boolean, generalStatsEnabled as boolean, pipelineThreads as int, dirMap)
+analysisCfg.each { key, value -> binding.setVariable(key as String, value) }
 
-def batchCorrectionConfig = config.batch_correction ?: [:]
-boolean batchCorrectionEnabled = metadataPlotsEnabled && (batchCorrectionConfig.containsKey('enabled') ? (batchCorrectionConfig.enabled as boolean) : true)
-def batchCorrectionOutputDir = batchCorrectionConfig.output_dir ?: 'batch_correction'
-def batchCorrectionOutputDirAbs = new File(outputDir, batchCorrectionOutputDir).canonicalPath
-def batchCorrectionBatchCol = batchCorrectionConfig.batch_col ?: 'batch'
-def batchCorrectionSampleIdCol = batchCorrectionConfig.sample_id_col ?: metadataPlotsSampleCol
-def batchCorrectionOrientation = batchCorrectionConfig.asv_orientation ?: 'features_rows'
-def batchBiologicalCovariates = batchCorrectionConfig.biological_covariates ? batchCorrectionConfig.biological_covariates.toString().trim() : ''
-def batchBiologicalColorCols = batchCorrectionConfig.biological_color_col ?: 'Depth'
-def batchColorPaletteCols = batchCorrectionConfig.color_palette_col ?: 'Color'
-def batchUmapNeighbors = batchCorrectionConfig.umap_neighbors ? (batchCorrectionConfig.umap_neighbors as int) : 15
-def batchUmapMinDist = batchCorrectionConfig.umap_min_dist != null ? (batchCorrectionConfig.umap_min_dist as double) : 0.1d
-def batchHdbscanMinClusterSize = batchCorrectionConfig.hdbscan_min_cluster_size ? (batchCorrectionConfig.hdbscan_min_cluster_size as int) : 5
-def batchHdbscanMinSamples = batchCorrectionConfig.hdbscan_min_samples != null ? (batchCorrectionConfig.hdbscan_min_samples as int) : null
-def batchHdbscanSelectionMethod = batchCorrectionConfig.hdbscan_selection_method ?: 'eom'
-boolean batchOptimize = (batchCorrectionConfig.optimize_clustering ?: false) as boolean
-def batchTargetClusters = batchCorrectionConfig.target_clusters ?: '3-8'
-def batchNFeaturesPlot = batchCorrectionConfig.n_features_plot ? (batchCorrectionConfig.n_features_plot as int) : 5
-def batchRandomState = batchCorrectionConfig.random_state ? (batchCorrectionConfig.random_state as int) : 42
-def batchConqurMode = batchCorrectionConfig.conqur_mode ?: 'libsize'
-def batchConqurNumCore = batchCorrectionConfig.conqur_num_core ? (batchCorrectionConfig.conqur_num_core as int) : pipelineThreads
-def batchConqurBatchRef = batchCorrectionConfig.conqur_batch_ref ? batchCorrectionConfig.conqur_batch_ref.toString().trim() : ''
-boolean batchConqurLogisticLasso = (batchCorrectionConfig.conqur_logistic_lasso ?: false) as boolean
-def batchConqurQuantileType = batchCorrectionConfig.conqur_quantile_type ?: 'standard'
-boolean batchConqurSimpleMatch = (batchCorrectionConfig.conqur_simple_match ?: false) as boolean
-def batchConqurLambdaQuantile = batchCorrectionConfig.conqur_lambda_quantile ?: '2p/n'
-boolean batchConqurInterplt = (batchCorrectionConfig.conqur_interplt ?: false) as boolean
-def batchConqurDelta = batchCorrectionConfig.conqur_delta != null ? (batchCorrectionConfig.conqur_delta as double) : 0.4999d
-boolean batchConqurAutoInstall = (batchCorrectionConfig.conqur_auto_install ?: false) as boolean
+def indicatorCfg = parseIndicatorAndNetworkConfig(config, configRoot, outputDir, pipelineThreads as int, analysisCfg)
+indicatorCfg.each { key, value -> binding.setVariable(key as String, value) }
 
-def outlierConfig = config.outlier_detection ?: [:]
-boolean outlierEnabled = batchCorrectionEnabled && (outlierConfig.containsKey('enabled') ? (outlierConfig.enabled as boolean) : true)
-def outlierOutputDir = outlierConfig.output_dir ?: 'outliers_corrected'
-def outlierOutputDirAbs = new File(outputDir, outlierOutputDir).canonicalPath
-def outlierSampleIdCol = outlierConfig.sample_id_col ?: (outlierConfig.sample_col ?: metadataPlotsSampleCol)
-def outlierGroupColsRaw = outlierConfig.group_cols
-List<String> outlierGroupCols = []
-if( outlierGroupColsRaw instanceof List ) {
-    outlierGroupCols = outlierGroupColsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( outlierGroupColsRaw ) {
-    outlierGroupCols = outlierGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-if( outlierGroupCols.isEmpty() ) {
-    outlierGroupCols = ['none']
-}
-def outlierTransform = outlierConfig.transform ?: 'clr'
-def outlierOrientation = outlierConfig.asv_orientation ?: 'features_rows'
-boolean outlierPreTransformed = (outlierConfig.pre_transformed ?: false) as boolean
-boolean outlierScale = (outlierConfig.scale ?: false) as boolean
-boolean outlierUseIso = (outlierConfig.use_iso ?: false) as boolean
-boolean outlierUseSvm = (outlierConfig.use_svm ?: false) as boolean
-boolean outlierUseHdb = (outlierConfig.use_hdb ?: false) as boolean
-def outlierVoteThreshold = outlierConfig.vote_threshold ? (outlierConfig.vote_threshold as int) : 3
-def outlierIsoContamination = outlierConfig.iso_contamination ?: 'auto'
-def outlierIsoEstimators = outlierConfig.iso_estimators ? (outlierConfig.iso_estimators as int) : 100
-def outlierIsoRandomState = outlierConfig.iso_random_state ? (outlierConfig.iso_random_state as int) : 42
-def outlierSvmKernel = outlierConfig.svm_kernel ?: 'rbf'
-def outlierSvmGamma = outlierConfig.svm_gamma ?: 'scale'
-def outlierSvmNu = outlierConfig.svm_nu ? (outlierConfig.svm_nu as double) : 0.1d
-def outlierHdbMinClusterSize = outlierConfig.hdbscan_min_cluster_size ? (outlierConfig.hdbscan_min_cluster_size as int) : 5
-def outlierHdbMinSamples = outlierConfig.hdbscan_min_samples != null ? (outlierConfig.hdbscan_min_samples as int) : null
-def outlierHdbMetric = outlierConfig.hdbscan_metric ?: 'euclidean'
+def parseMetadataAndBasicAnalysisConfig(config, File configRoot, String outputDir, boolean filterCountsEnabled, boolean generalStatsEnabled, int pipelineThreads, Map dirMap) {
+    def metadataPlotsConfig = config.metadata_plots ?: [:]
+    boolean metadataPlotsEnabled = metadataPlotsConfig.containsKey('enabled') ? (metadataPlotsConfig.enabled as boolean) : true
+    if( metadataPlotsEnabled && !filterCountsEnabled ) {
+        exit 1, "metadata_plots.enabled requires filter_counts.enabled to be true"
+    }
+    if( metadataPlotsEnabled && !generalStatsEnabled ) {
+        exit 1, "metadata_plots.enabled requires general_stats.enabled to be true"
+    }
+    def metadataPlotsMetadataPath = metadataPlotsConfig.metadata ? resolveOptionalPath(metadataPlotsConfig.metadata, configRoot) : resolveOptionalPath("ref_db/asv_cruise_metadata.tsv", configRoot)
+    if( metadataPlotsEnabled && (!metadataPlotsMetadataPath || !new File(metadataPlotsMetadataPath).exists()) ) {
+        exit 1, "metadata_plots metadata file not found: ${metadataPlotsMetadataPath}"
+    }
+    def metadataPlotsSubDir = metadataPlotsConfig.sub_dir ?: '.'
+    def metadataPlotsSampleCol = metadataPlotsConfig.sample_col ?: 'sampleID'
+    def metadataPlotsTypeCol = metadataPlotsConfig.type_col ?: (metadataPlotsConfig.group1_col ?: 'Depth')
+    def metadataPlotsColorCol = metadataPlotsConfig.color_col ?: 'Color'
+    def metadataPlotsBiochemAssignmentsPath = metadataPlotsConfig.biochem_assignments ? resolveOptionalPath(metadataPlotsConfig.biochem_assignments, configRoot) : null
+    def metadataPlotsBiochemSampleCol = metadataPlotsConfig.biochem_sample_col ?: 'cruise_year_month_depth'
+    def metadataPlotsStratificationTimeseriesPath = metadataPlotsConfig.stratification_timeseries ? resolveOptionalPath(metadataPlotsConfig.stratification_timeseries, configRoot) : null
+    def metadataPlotsStratMetaJoinCol = metadataPlotsConfig.strat_meta_join_col ?: 'Cruise'
+    def metadataPlotsStratJoinCol = metadataPlotsConfig.strat_join_col ?: 'Cruise'
+    def metadataBiochemIncludeRaw = metadataPlotsConfig.biochem_include_cols
+    List<String> metadataPlotsBiochemIncludeCols = []
+    if( metadataBiochemIncludeRaw instanceof List ) {
+        metadataPlotsBiochemIncludeCols = metadataBiochemIncludeRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataBiochemIncludeRaw ) {
+        metadataPlotsBiochemIncludeCols = metadataBiochemIncludeRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataStratIncludeRaw = metadataPlotsConfig.strat_include_cols
+    List<String> metadataPlotsStratIncludeCols = []
+    if( metadataStratIncludeRaw instanceof List ) {
+        metadataPlotsStratIncludeCols = metadataStratIncludeRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataStratIncludeRaw ) {
+        metadataPlotsStratIncludeCols = metadataStratIncludeRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataBiochemMetaJoinRaw = metadataPlotsConfig.biochem_meta_join_cols
+    List<String> metadataPlotsBiochemMetaJoinCols = []
+    if( metadataBiochemMetaJoinRaw instanceof List ) {
+        metadataPlotsBiochemMetaJoinCols = metadataBiochemMetaJoinRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataBiochemMetaJoinRaw ) {
+        metadataPlotsBiochemMetaJoinCols = metadataBiochemMetaJoinRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataBiochemJoinRaw = metadataPlotsConfig.biochem_join_cols
+    List<String> metadataPlotsBiochemJoinCols = []
+    if( metadataBiochemJoinRaw instanceof List ) {
+        metadataPlotsBiochemJoinCols = metadataBiochemJoinRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataBiochemJoinRaw ) {
+        metadataPlotsBiochemJoinCols = metadataBiochemJoinRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( metadataPlotsBiochemMetaJoinCols.size() != metadataPlotsBiochemJoinCols.size() ) {
+        exit 1, "metadata_plots.biochem_meta_join_cols and metadata_plots.biochem_join_cols must have the same number of entries"
+    }
+    def metadataKeepTypesRaw = metadataPlotsConfig.keep_types
+    List<String> metadataKeepTypes = []
+    if( metadataKeepTypesRaw instanceof List ) {
+        metadataKeepTypes = metadataKeepTypesRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataKeepTypesRaw ) {
+        metadataKeepTypes = metadataKeepTypesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataPlotsSubtractionCol = metadataPlotsConfig.subtraction_group_col ?: metadataPlotsTypeCol
+    def metadataSubtractionGroupsRaw = metadataPlotsConfig.subtraction_groups
+    List<String> metadataPlotsSubtractionGroups = []
+    if( metadataSubtractionGroupsRaw instanceof List ) {
+        metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataSubtractionGroupsRaw ) {
+        metadataPlotsSubtractionGroups = metadataSubtractionGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataGroupOrderRaw = metadataPlotsConfig.group_order
+    List<String> metadataPlotsGroupOrder = []
+    if( metadataGroupOrderRaw instanceof List ) {
+        metadataPlotsGroupOrder = metadataGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataGroupOrderRaw ) {
+        metadataPlotsGroupOrder = metadataGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataIncludeRankRaw = metadataPlotsConfig.include_rank
+    List<String> metadataIncludeRank = []
+    if( metadataIncludeRankRaw instanceof List ) {
+        metadataIncludeRank = metadataIncludeRankRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( metadataIncludeRankRaw ) {
+        metadataIncludeRank = metadataIncludeRankRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def metadataPlotsMitoThreshold = metadataPlotsConfig.mito_threshold_line != null ? (metadataPlotsConfig.mito_threshold_line as double) : 1000d
+    boolean metadataPlotsRunMicro = metadataPlotsConfig.containsKey('run_micro') ? (metadataPlotsConfig.run_micro as boolean) : true
+    boolean metadataPlotsRunMito = metadataPlotsConfig.containsKey('run_mito') ? (metadataPlotsConfig.run_mito as boolean) : true
+    if( metadataPlotsEnabled && !metadataPlotsRunMicro && !metadataPlotsRunMito ) {
+        exit 1, "metadata_plots configured to skip both micro and mito outputs; disable metadata_plots.enabled instead."
+    }
+    boolean metadataForceMicroOnly = metadataPlotsRunMicro && !metadataPlotsRunMito
+    boolean metadataForceMitoOnly = metadataPlotsRunMito && !metadataPlotsRunMicro
 
-def collectorsConfig = config.collectors_curve ?: [:]
-boolean collectorsEnabled = metadataPlotsEnabled && (collectorsConfig.containsKey('enabled') ? (collectorsConfig.enabled as boolean) : true)
-def collectorsSampleCol = collectorsConfig.sample_col ?: metadataPlotsSampleCol
-def collectorsGroupCol = collectorsConfig.group_col ?: (collectorsConfig.group1_col ?: metadataPlotsTypeCol)
-def collectorsColorCol = collectorsConfig.color_col ?: 'Color'
-def collectorsGroupOrderRaw = collectorsConfig.group_order ?: metadataPlotsGroupOrder
-List<String> collectorsGroupOrder = []
-if( collectorsGroupOrderRaw instanceof List ) {
-    collectorsGroupOrder = collectorsGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( collectorsGroupOrderRaw ) {
-    collectorsGroupOrder = collectorsGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def collectorsPermutations = collectorsConfig.permutations ? (collectorsConfig.permutations as int) : 999
-def collectorsSeed = collectorsConfig.seed ? (collectorsConfig.seed as int) : 42
-def collectorsOutPrefix = collectorsConfig.out_prefix ?: 'metadata/collectors_curve'
-def collectorsOutPrefixAbs = new File(outputDir, collectorsOutPrefix).canonicalPath
-def collectorsTitle = collectorsConfig.title ?: ''
-def collectorsFormats = collectorsConfig.formats ?: 'pdf'
-def collectorsXpad = collectorsConfig.xpad != null ? (collectorsConfig.xpad as double) : 0.5d
-def collectorsMaxCols = collectorsConfig.max_cols ? (collectorsConfig.max_cols as int) : 3
-def collectorsShowPerms = collectorsConfig.show_perms ? (collectorsConfig.show_perms as int) : 10
-def collectorsPresenceThreshold = collectorsConfig.presence_threshold != null ? (collectorsConfig.presence_threshold as double) : 0d
+    def batchCorrectionConfig = config.batch_correction ?: [:]
+    boolean batchCorrectionEnabled = metadataPlotsEnabled && (batchCorrectionConfig.containsKey('enabled') ? (batchCorrectionConfig.enabled as boolean) : true)
+    def batchCorrectionOutputDir = batchCorrectionConfig.output_dir ?: 'batch_correction'
+    def batchCorrectionOutputDirAbs = new File(outputDir, batchCorrectionOutputDir).canonicalPath
+    def batchCorrectionBatchCol = batchCorrectionConfig.batch_col ?: 'batch'
+    def batchCorrectionSampleIdCol = batchCorrectionConfig.sample_id_col ?: metadataPlotsSampleCol
+    def batchCorrectionOrientation = batchCorrectionConfig.asv_orientation ?: 'features_rows'
+    def batchBiologicalCovariates = batchCorrectionConfig.biological_covariates ? batchCorrectionConfig.biological_covariates.toString().trim() : ''
+    def batchBiologicalColorCols = batchCorrectionConfig.biological_color_col ?: 'Depth'
+    def batchColorPaletteCols = batchCorrectionConfig.color_palette_col ?: 'Color'
+    def batchUmapNeighbors = batchCorrectionConfig.umap_neighbors ? (batchCorrectionConfig.umap_neighbors as int) : 15
+    def batchUmapMinDist = batchCorrectionConfig.umap_min_dist != null ? (batchCorrectionConfig.umap_min_dist as double) : 0.1d
+    def batchHdbscanMinClusterSize = batchCorrectionConfig.hdbscan_min_cluster_size ? (batchCorrectionConfig.hdbscan_min_cluster_size as int) : 5
+    def batchHdbscanMinSamples = batchCorrectionConfig.hdbscan_min_samples != null ? (batchCorrectionConfig.hdbscan_min_samples as int) : null
+    def batchHdbscanSelectionMethod = batchCorrectionConfig.hdbscan_selection_method ?: 'eom'
+    boolean batchOptimize = (batchCorrectionConfig.optimize_clustering ?: false) as boolean
+    def batchTargetClusters = batchCorrectionConfig.target_clusters ?: '3-8'
+    def batchNFeaturesPlot = batchCorrectionConfig.n_features_plot ? (batchCorrectionConfig.n_features_plot as int) : 5
+    def batchRandomState = batchCorrectionConfig.random_state ? (batchCorrectionConfig.random_state as int) : 42
+    def batchConqurMode = batchCorrectionConfig.conqur_mode ?: 'libsize'
+    def batchConqurNumCore = batchCorrectionConfig.conqur_num_core ? (batchCorrectionConfig.conqur_num_core as int) : pipelineThreads
+    def batchConqurBatchRef = batchCorrectionConfig.conqur_batch_ref ? batchCorrectionConfig.conqur_batch_ref.toString().trim() : ''
+    boolean batchConqurLogisticLasso = (batchCorrectionConfig.conqur_logistic_lasso ?: false) as boolean
+    def batchConqurQuantileType = batchCorrectionConfig.conqur_quantile_type ?: 'standard'
+    boolean batchConqurSimpleMatch = (batchCorrectionConfig.conqur_simple_match ?: false) as boolean
+    def batchConqurLambdaQuantile = batchCorrectionConfig.conqur_lambda_quantile ?: '2p/n'
+    boolean batchConqurInterplt = (batchCorrectionConfig.conqur_interplt ?: false) as boolean
+    def batchConqurDelta = batchCorrectionConfig.conqur_delta != null ? (batchCorrectionConfig.conqur_delta as double) : 0.4999d
+    boolean batchConqurAutoInstall = (batchCorrectionConfig.conqur_auto_install ?: false) as boolean
 
-def plotUpsetConfig = config.plot_upset ?: [:]
-boolean plotUpsetRequested = plotUpsetConfig.containsKey('enabled') ? (plotUpsetConfig.enabled as boolean) : false
-if( plotUpsetRequested && !metadataPlotsEnabled ) {
-    exit 1, "plot_upset.enabled requires metadata_plots.enabled to be true"
-}
-boolean plotUpsetEnabled = plotUpsetRequested
-def plotUpsetSubDir = plotUpsetConfig.sub_dir ?: '.'
-def plotUpsetDomain = plotUpsetConfig.domain ?: 'micro'
-def plotUpsetTaxonomyPath = plotUpsetConfig.taxonomy_path ? resolveOptionalPath(plotUpsetConfig.taxonomy_path, configRoot) : null
-def plotUpsetSampleIdCol = plotUpsetConfig.sample_id_col ?: metadataPlotsSampleCol
-def plotUpsetGroupCol = plotUpsetConfig.group_col ?: (plotUpsetConfig.group1_col ?: metadataPlotsTypeCol)
-def plotUpsetColorCol = plotUpsetConfig.color_col ?: metadataPlotsColorCol
-def plotUpsetGroupOrderRaw = plotUpsetConfig.group_order ?: metadataPlotsGroupOrder
-List<String> plotUpsetGroupOrder = []
-if( plotUpsetGroupOrderRaw instanceof List ) {
-    plotUpsetGroupOrder = plotUpsetGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( plotUpsetGroupOrderRaw ) {
-    plotUpsetGroupOrder = plotUpsetGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def plotUpsetSubsetGroupsRaw = plotUpsetConfig.subset_groups
-List<String> plotUpsetSubsetGroups = []
-if( plotUpsetSubsetGroupsRaw instanceof List ) {
-    plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( plotUpsetSubsetGroupsRaw ) {
-    plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-boolean plotUpsetSkipVenn = plotUpsetConfig.containsKey('skip_venn') ? (plotUpsetConfig.skip_venn as boolean) : true
-def plotUpsetFormats = plotUpsetConfig.formats ?: 'pdf,svg,png'
-def plotUpsetFontSize = plotUpsetConfig.font_size != null ? (plotUpsetConfig.font_size as double) : 12d
-boolean plotUpsetRawOnly = plotUpsetConfig.containsKey('raw_only') ? (plotUpsetConfig.raw_only as boolean) : false
-boolean plotUpsetFinalOnly = plotUpsetConfig.containsKey('final_only') ? (plotUpsetConfig.final_only as boolean) : false
-if( plotUpsetRawOnly && plotUpsetFinalOnly ) {
-    exit 1, "plot_upset.raw_only and plot_upset.final_only cannot both be true"
-}
+    def outlierConfig = config.outlier_detection ?: [:]
+    boolean outlierEnabled = batchCorrectionEnabled && (outlierConfig.containsKey('enabled') ? (outlierConfig.enabled as boolean) : true)
+    def outlierOutputDir = outlierConfig.output_dir ?: 'outliers_corrected'
+    def outlierOutputDirAbs = new File(outputDir, outlierOutputDir).canonicalPath
+    def outlierSampleIdCol = outlierConfig.sample_id_col ?: (outlierConfig.sample_col ?: metadataPlotsSampleCol)
+    def outlierGroupColsRaw = outlierConfig.group_cols
+    List<String> outlierGroupCols = []
+    if( outlierGroupColsRaw instanceof List ) {
+        outlierGroupCols = outlierGroupColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( outlierGroupColsRaw ) {
+        outlierGroupCols = outlierGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( outlierGroupCols.isEmpty() ) {
+        outlierGroupCols = ['none']
+    }
+    def outlierTransform = outlierConfig.transform ?: 'clr'
+    def outlierOrientation = outlierConfig.asv_orientation ?: 'features_rows'
+    boolean outlierPreTransformed = (outlierConfig.pre_transformed ?: false) as boolean
+    boolean outlierScale = (outlierConfig.scale ?: false) as boolean
+    boolean outlierUseIso = (outlierConfig.use_iso ?: false) as boolean
+    boolean outlierUseSvm = (outlierConfig.use_svm ?: false) as boolean
+    boolean outlierUseHdb = (outlierConfig.use_hdb ?: false) as boolean
+    def outlierVoteThreshold = outlierConfig.vote_threshold ? (outlierConfig.vote_threshold as int) : 3
+    def outlierIsoContamination = outlierConfig.iso_contamination ?: 'auto'
+    def outlierIsoEstimators = outlierConfig.iso_estimators ? (outlierConfig.iso_estimators as int) : 100
+    def outlierIsoRandomState = outlierConfig.iso_random_state ? (outlierConfig.iso_random_state as int) : 42
+    def outlierSvmKernel = outlierConfig.svm_kernel ?: 'rbf'
+    def outlierSvmGamma = outlierConfig.svm_gamma ?: 'scale'
+    def outlierSvmNu = outlierConfig.svm_nu ? (outlierConfig.svm_nu as double) : 0.1d
+    def outlierHdbMinClusterSize = outlierConfig.hdbscan_min_cluster_size ? (outlierConfig.hdbscan_min_cluster_size as int) : 5
+    def outlierHdbMinSamples = outlierConfig.hdbscan_min_samples != null ? (outlierConfig.hdbscan_min_samples as int) : null
+    def outlierHdbMetric = outlierConfig.hdbscan_metric ?: 'euclidean'
 
-def bubbleplotterConfig = config.bubbleplotter ?: [:]
-boolean bubbleplotterRequested = bubbleplotterConfig.containsKey('enabled') ? (bubbleplotterConfig.enabled as boolean) : false
-if( bubbleplotterRequested && !metadataPlotsEnabled ) {
-    exit 1, "bubbleplotter.enabled requires metadata_plots.enabled to be true"
-}
-boolean bubbleplotterEnabled = bubbleplotterRequested
-def bubbleplotterOutputPrefix = bubbleplotterConfig.output_prefix ?: 'metadata/bubble_plot_asv'
-def bubbleplotterOutputPrefixAbs = new File(outputDir, bubbleplotterOutputPrefix).canonicalPath
-def bubbleplotterOutputDirAbs = (new File(bubbleplotterOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
-def bubbleplotterFormats = bubbleplotterConfig.formats ?: 'pdf,png'
-def bubbleplotterCountCol = bubbleplotterConfig.count_col ?: 'count'
-def bubbleplotterSampleCol = bubbleplotterConfig.sample_col ?: metadataPlotsSampleCol
-def bubbleplotterDepthCol = bubbleplotterConfig.group1_col ?: (bubbleplotterConfig.depth_col ?: metadataPlotsTypeCol)
-def bubbleplotterColorCol = bubbleplotterConfig.color_col ?: metadataPlotsColorCol
-def bubbleplotterMonthCol = bubbleplotterConfig.group2_col ?: (bubbleplotterConfig.month_col ?: 'Month')
-def bubbleplotterGroup1OrderRaw = bubbleplotterConfig.group1_order ?: metadataPlotsGroupOrder
-List<String> bubbleplotterGroup1Order = []
-if( bubbleplotterGroup1OrderRaw instanceof List ) {
-    bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( bubbleplotterGroup1OrderRaw ) {
-    bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def bubbleplotterGroup2OrderRaw = bubbleplotterConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
-List<String> bubbleplotterGroup2Order = []
-if( bubbleplotterGroup2OrderRaw instanceof List ) {
-    bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( bubbleplotterGroup2OrderRaw ) {
-    bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def bubbleplotterFigsize = bubbleplotterConfig.figsize ?: '32,60'
-def bubbleplotterScale = bubbleplotterConfig.bubble_scale != null ? (bubbleplotterConfig.bubble_scale as double) : 10d
-boolean bubbleplotterNoAutoSize = bubbleplotterConfig.containsKey('no_auto_size') ? (bubbleplotterConfig.no_auto_size as boolean) : true
+    def collectorsConfig = config.collectors_curve ?: [:]
+    boolean collectorsEnabled = metadataPlotsEnabled && (collectorsConfig.containsKey('enabled') ? (collectorsConfig.enabled as boolean) : true)
+    def collectorsSampleCol = collectorsConfig.sample_col ?: metadataPlotsSampleCol
+    def collectorsGroupCol = collectorsConfig.group_col ?: (collectorsConfig.group1_col ?: metadataPlotsTypeCol)
+    def collectorsColorCol = collectorsConfig.color_col ?: 'Color'
+    def collectorsGroupOrderRaw = collectorsConfig.group_order ?: metadataPlotsGroupOrder
+    List<String> collectorsGroupOrder = []
+    if( collectorsGroupOrderRaw instanceof List ) {
+        collectorsGroupOrder = collectorsGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( collectorsGroupOrderRaw ) {
+        collectorsGroupOrder = collectorsGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def collectorsPermutations = collectorsConfig.permutations ? (collectorsConfig.permutations as int) : 999
+    def collectorsSeed = collectorsConfig.seed ? (collectorsConfig.seed as int) : 42
+    def collectorsOutPrefix = collectorsConfig.out_prefix ?: 'metadata/collectors_curve'
+    def collectorsOutPrefixAbs = new File(outputDir, collectorsOutPrefix).canonicalPath
+    def collectorsTitle = collectorsConfig.title ?: ''
+    def collectorsFormats = collectorsConfig.formats ?: 'pdf'
+    def collectorsXpad = collectorsConfig.xpad != null ? (collectorsConfig.xpad as double) : 0.5d
+    def collectorsMaxCols = collectorsConfig.max_cols ? (collectorsConfig.max_cols as int) : 3
+    def collectorsShowPerms = collectorsConfig.show_perms ? (collectorsConfig.show_perms as int) : 10
+    def collectorsPresenceThreshold = collectorsConfig.presence_threshold != null ? (collectorsConfig.presence_threshold as double) : 0d
 
-def umapClusteringConfig = config.umap_clustering ?: [:]
-boolean umapClusteringRequested = umapClusteringConfig.containsKey('enabled') ? (umapClusteringConfig.enabled as boolean) : false
-if( umapClusteringRequested && !metadataPlotsEnabled ) {
-    exit 1, "umap_clustering.enabled requires metadata_plots.enabled to be true"
-}
-boolean umapClusteringEnabled = umapClusteringRequested
-def umapClusteringOutputPrefix = umapClusteringConfig.output_prefix ?: 'metadata/umap_clustering'
-def umapClusteringOutputPrefixAbs = new File(outputDir, umapClusteringOutputPrefix).canonicalPath
-def umapClusteringOutputDirAbs = (new File(umapClusteringOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
-def umapClusteringSampleCol = umapClusteringConfig.sample_col ?: metadataPlotsSampleCol
-def umapClusteringCountCol = umapClusteringConfig.count_col ?: 'count'
-def umapClusteringDepthCol = umapClusteringConfig.group1_col ?: (umapClusteringConfig.depth_col ?: metadataPlotsTypeCol)
-def umapClusteringColorCol = umapClusteringConfig.color_col ?: metadataPlotsColorCol
-def umapClusteringSecondaryCol = umapClusteringConfig.group2_col ?: (umapClusteringConfig.secondary_col ?: (umapClusteringConfig.month_col ?: 'Month'))
-def umapClusteringGroup1OrderRaw = umapClusteringConfig.group1_order ?: metadataPlotsGroupOrder
-List<String> umapClusteringGroup1Order = []
-if( umapClusteringGroup1OrderRaw instanceof List ) {
-    umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( umapClusteringGroup1OrderRaw ) {
-    umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def umapClusteringGroup2OrderRaw = umapClusteringConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
-List<String> umapClusteringGroup2Order = []
-if( umapClusteringGroup2OrderRaw instanceof List ) {
-    umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( umapClusteringGroup2OrderRaw ) {
-    umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def umapClusteringFormats = umapClusteringConfig.formats ?: 'pdf,png'
-def umapClusteringNormalize = umapClusteringConfig.normalize ?: 'clr'
-def umapClusteringTransform = umapClusteringConfig.transform ?: 'sqrt'
-def umapClusteringNeighbors = umapClusteringConfig.n_neighbors ? (umapClusteringConfig.n_neighbors as int) : 15
-def umapClusteringMinDist = umapClusteringConfig.min_dist != null ? (umapClusteringConfig.min_dist as double) : 0.1d
-def umapClusteringMetric = umapClusteringConfig.umap_metric ?: 'euclidean'
-def umapClusteringHdbscanMetric = umapClusteringConfig.hdbscan_metric ?: 'euclidean'
-def umapClusteringMinClusterSize = umapClusteringConfig.min_cluster_size ? (umapClusteringConfig.min_cluster_size as int) : 10
-def umapClusteringMinSamples = umapClusteringConfig.min_samples ? (umapClusteringConfig.min_samples as int) : 5
-boolean umapClusteringNoScale = (umapClusteringConfig.no_scale ?: false) as boolean
-def umapClusteringRandomState = umapClusteringConfig.random_state ? (umapClusteringConfig.random_state as int) : 42
+    def plotUpsetConfig = config.plot_upset ?: [:]
+    boolean plotUpsetRequested = plotUpsetConfig.containsKey('enabled') ? (plotUpsetConfig.enabled as boolean) : false
+    if( plotUpsetRequested && !metadataPlotsEnabled ) {
+        exit 1, "plot_upset.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean plotUpsetEnabled = plotUpsetRequested
+    def plotUpsetSubDir = plotUpsetConfig.sub_dir ?: '.'
+    def plotUpsetDomain = plotUpsetConfig.domain ?: 'micro'
+    def plotUpsetTaxonomyPath = plotUpsetConfig.taxonomy_path ? resolveOptionalPath(plotUpsetConfig.taxonomy_path, configRoot) : null
+    def plotUpsetSampleIdCol = plotUpsetConfig.sample_id_col ?: metadataPlotsSampleCol
+    def plotUpsetGroupCol = plotUpsetConfig.group_col ?: (plotUpsetConfig.group1_col ?: metadataPlotsTypeCol)
+    def plotUpsetColorCol = plotUpsetConfig.color_col ?: metadataPlotsColorCol
+    def plotUpsetGroupOrderRaw = plotUpsetConfig.group_order ?: metadataPlotsGroupOrder
+    List<String> plotUpsetGroupOrder = []
+    if( plotUpsetGroupOrderRaw instanceof List ) {
+        plotUpsetGroupOrder = plotUpsetGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( plotUpsetGroupOrderRaw ) {
+        plotUpsetGroupOrder = plotUpsetGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def plotUpsetSubsetGroupsRaw = plotUpsetConfig.subset_groups
+    List<String> plotUpsetSubsetGroups = []
+    if( plotUpsetSubsetGroupsRaw instanceof List ) {
+        plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( plotUpsetSubsetGroupsRaw ) {
+        plotUpsetSubsetGroups = plotUpsetSubsetGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    boolean plotUpsetSkipVenn = plotUpsetConfig.containsKey('skip_venn') ? (plotUpsetConfig.skip_venn as boolean) : true
+    def plotUpsetFormats = plotUpsetConfig.formats ?: 'pdf,svg,png'
+    def plotUpsetFontSize = plotUpsetConfig.font_size != null ? (plotUpsetConfig.font_size as double) : 12d
+    boolean plotUpsetRawOnly = plotUpsetConfig.containsKey('raw_only') ? (plotUpsetConfig.raw_only as boolean) : false
+    boolean plotUpsetFinalOnly = plotUpsetConfig.containsKey('final_only') ? (plotUpsetConfig.final_only as boolean) : false
+    if( plotUpsetRawOnly && plotUpsetFinalOnly ) {
+        exit 1, "plot_upset.raw_only and plot_upset.final_only cannot both be true"
+    }
 
-def biochemPreAsvConfig = config.biochem_pre_asv ?: [:]
-boolean biochemPreAsvEnabled = biochemPreAsvConfig.containsKey('enabled') ? (biochemPreAsvConfig.enabled as boolean) : false
-def biochemTableAPath = biochemPreAsvConfig.table_a ? resolveOptionalPath(biochemPreAsvConfig.table_a, configRoot) : resolveOptionalPath('../ref_db/new_biochem/SI_JA_Compiled_Geochem_Dec_09_Outlier_RM.csv', configRoot)
-def biochemTableBPath = biochemPreAsvConfig.table_b ? resolveOptionalPath(biochemPreAsvConfig.table_b, configRoot) : resolveOptionalPath('../ref_db/new_biochem/SI_JA_Compiled_CTD_Data_Dec_18_2025_Outlier_RM.csv', configRoot)
-if( biochemPreAsvEnabled && (!biochemTableAPath || !new File(biochemTableAPath).exists()) ) {
-    exit 1, "biochem_pre_asv.table_a not found: ${biochemTableAPath}"
-}
-if( biochemPreAsvEnabled && (!biochemTableBPath || !new File(biochemTableBPath).exists()) ) {
-    exit 1, "biochem_pre_asv.table_b not found: ${biochemTableBPath}"
-}
-def biochemOutputRoot = biochemPreAsvConfig.output_root ? resolveOutputRelative(biochemPreAsvConfig.output_root.toString(), outputDir) : outputDir
-def biochemProcessingDirAbs = new File(biochemOutputRoot, 'biochem_processing').canonicalPath
-def biochemStratMetricsDirAbs = new File(biochemProcessingDirAbs, 'stratification_metrics').canonicalPath
-def biochemPcaDirAbs = new File(biochemOutputRoot, 'env_pca').canonicalPath
-def biochemSelectkDirAbs = new File(biochemOutputRoot, 'env_compartments_selectk').canonicalPath
-def biochemGmmDirAbs = new File(biochemOutputRoot, 'env_compartments_gmm').canonicalPath
-def biochemO2DirAbs = new File(biochemOutputRoot, 'env_o2_soft_compartments').canonicalPath
-def biochemHybridDirAbs = new File(biochemOutputRoot, 'env_hybrid_soft_compartments').canonicalPath
-def biochemCompareDirAbs = new File(biochemOutputRoot, 'env_compare_compartments').canonicalPath
-def biochemSplitDirAbs = new File(biochemOutputRoot, 'env_o2_split_by_gmm').canonicalPath
-def biochemStratIndexDirAbs = new File(biochemOutputRoot, 'env_stratification_index').canonicalPath
-def biochemStateTransitionsDirAbs = new File(biochemOutputRoot, 'env_state_transitions').canonicalPath
-def biochemSuccessionDirAbs = new File(biochemOutputRoot, 'env_succession_graphs').canonicalPath
-def biochemFeatureAssocDirAbs = new File(biochemOutputRoot, 'env_compartment_feature_assoc').canonicalPath
-def biochemEofPcaDirAbs = new File(biochemOutputRoot, 'eof_pca').canonicalPath
-def biochemEofStatesDirAbs = new File(biochemOutputRoot, 'eof_states').canonicalPath
-def biochemEofPlotsDirAbs = new File(biochemOutputRoot, 'eof_plots').canonicalPath
-def biochemWithinGmmDirAbs = new File(biochemGmmDirAbs, 'within_gmm_hdbscan').canonicalPath
-def biochemMergedOxygenPath = new File(biochemProcessingDirAbs, '02_oxygen_best_available.tsv').canonicalPath
-def biochemDensityPath = new File(biochemProcessingDirAbs, '02_oxygen_best_available_density.tsv').canonicalPath
-def biochemDensityCleanedFile = biochemPreAsvConfig.cleaned_density_filename ?: '02_oxygen_best_available_density_RJM.tsv'
-def biochemDensityCleanedPath = new File(biochemProcessingDirAbs, biochemDensityCleanedFile.toString()).canonicalPath
-def biochemFeatureCols = biochemPreAsvConfig.feature_cols ?: 'Oxygen,Nitrate,Nitrite,Nitrous Oxide,Ammonium,Hydrogen Sulfide,Methane,Phosphate,Silicate,Temperature,Salinity,Density,Fe,Dimethyl Sulfide'
-def biochemGmmKRaw = biochemPreAsvConfig.gmm_k
-boolean biochemGmmKAuto = (biochemGmmKRaw == null) || (biochemGmmKRaw.toString().trim().equalsIgnoreCase('auto'))
-def biochemGmmK = biochemGmmKAuto ? 5 : (biochemGmmKRaw as int)
-def biochemEofPcs = biochemPreAsvConfig.eof_pcs ?: '1,2,4'
-def biochemCleanKeepRaw = biochemPreAsvConfig.clean_keep_cols
-List<String> biochemCleanKeepCols = []
-if( biochemCleanKeepRaw instanceof List ) {
-    biochemCleanKeepCols = biochemCleanKeepRaw.collect { it.toString().trim() }.findAll { it }
-} else if( biochemCleanKeepRaw ) {
-    biochemCleanKeepCols = biochemCleanKeepRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def biochemCleanDropRaw = biochemPreAsvConfig.clean_drop_cols
-List<String> biochemCleanDropCols = []
-if( biochemCleanDropRaw instanceof List ) {
-    biochemCleanDropCols = biochemCleanDropRaw.collect { it.toString().trim() }.findAll { it }
-} else if( biochemCleanDropRaw ) {
-    biochemCleanDropCols = biochemCleanDropRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def biochemCleanRenameRaw = biochemPreAsvConfig.clean_rename_map
-Map<String, String> biochemCleanRenameMap = [:]
-if( biochemCleanRenameRaw instanceof Map ) {
-    biochemCleanRenameRaw.each { k, v ->
-        if( k != null && v != null ) {
-            def kk = k.toString().trim()
-            def vv = v.toString().trim()
-            if( kk && vv ) {
-                biochemCleanRenameMap[kk] = vv
+    def bubbleplotterConfig = config.bubbleplotter ?: [:]
+    boolean bubbleplotterRequested = bubbleplotterConfig.containsKey('enabled') ? (bubbleplotterConfig.enabled as boolean) : false
+    if( bubbleplotterRequested && !metadataPlotsEnabled ) {
+        exit 1, "bubbleplotter.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean bubbleplotterEnabled = bubbleplotterRequested
+    def bubbleplotterOutputPrefix = bubbleplotterConfig.output_prefix ?: 'metadata/bubble_plot_asv'
+    def bubbleplotterOutputPrefixAbs = new File(outputDir, bubbleplotterOutputPrefix).canonicalPath
+    def bubbleplotterOutputDirAbs = (new File(bubbleplotterOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
+    def bubbleplotterFormats = bubbleplotterConfig.formats ?: 'pdf,png'
+    def bubbleplotterCountCol = bubbleplotterConfig.count_col ?: 'count'
+    def bubbleplotterSampleCol = bubbleplotterConfig.sample_col ?: metadataPlotsSampleCol
+    def bubbleplotterDepthCol = bubbleplotterConfig.group1_col ?: (bubbleplotterConfig.depth_col ?: metadataPlotsTypeCol)
+    def bubbleplotterColorCol = bubbleplotterConfig.color_col ?: metadataPlotsColorCol
+    def bubbleplotterMonthCol = bubbleplotterConfig.group2_col ?: (bubbleplotterConfig.month_col ?: 'Month')
+    def bubbleplotterGroup1OrderRaw = bubbleplotterConfig.group1_order ?: metadataPlotsGroupOrder
+    List<String> bubbleplotterGroup1Order = []
+    if( bubbleplotterGroup1OrderRaw instanceof List ) {
+        bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( bubbleplotterGroup1OrderRaw ) {
+        bubbleplotterGroup1Order = bubbleplotterGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def bubbleplotterGroup2OrderRaw = bubbleplotterConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
+    List<String> bubbleplotterGroup2Order = []
+    if( bubbleplotterGroup2OrderRaw instanceof List ) {
+        bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( bubbleplotterGroup2OrderRaw ) {
+        bubbleplotterGroup2Order = bubbleplotterGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def bubbleplotterFigsize = bubbleplotterConfig.figsize ?: '32,60'
+    def bubbleplotterScale = bubbleplotterConfig.bubble_scale != null ? (bubbleplotterConfig.bubble_scale as double) : 10d
+    boolean bubbleplotterNoAutoSize = bubbleplotterConfig.containsKey('no_auto_size') ? (bubbleplotterConfig.no_auto_size as boolean) : true
+
+    def umapClusteringConfig = config.umap_clustering ?: [:]
+    boolean umapClusteringRequested = umapClusteringConfig.containsKey('enabled') ? (umapClusteringConfig.enabled as boolean) : false
+    if( umapClusteringRequested && !metadataPlotsEnabled ) {
+        exit 1, "umap_clustering.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean umapClusteringEnabled = umapClusteringRequested
+    def umapClusteringOutputPrefix = umapClusteringConfig.output_prefix ?: 'metadata/umap_clustering'
+    def umapClusteringOutputPrefixAbs = new File(outputDir, umapClusteringOutputPrefix).canonicalPath
+    def umapClusteringOutputDirAbs = (new File(umapClusteringOutputPrefixAbs).parentFile ?: new File(outputDir)).canonicalPath
+    def umapClusteringSampleCol = umapClusteringConfig.sample_col ?: metadataPlotsSampleCol
+    def umapClusteringCountCol = umapClusteringConfig.count_col ?: 'count'
+    def umapClusteringDepthCol = umapClusteringConfig.group1_col ?: (umapClusteringConfig.depth_col ?: metadataPlotsTypeCol)
+    def umapClusteringColorCol = umapClusteringConfig.color_col ?: metadataPlotsColorCol
+    def umapClusteringSecondaryCol = umapClusteringConfig.group2_col ?: (umapClusteringConfig.secondary_col ?: (umapClusteringConfig.month_col ?: 'Month'))
+    def umapClusteringGroup1OrderRaw = umapClusteringConfig.group1_order ?: metadataPlotsGroupOrder
+    List<String> umapClusteringGroup1Order = []
+    if( umapClusteringGroup1OrderRaw instanceof List ) {
+        umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( umapClusteringGroup1OrderRaw ) {
+        umapClusteringGroup1Order = umapClusteringGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def umapClusteringGroup2OrderRaw = umapClusteringConfig.group2_order ?: (config.indicspecies?.group2_order ?: '')
+    List<String> umapClusteringGroup2Order = []
+    if( umapClusteringGroup2OrderRaw instanceof List ) {
+        umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( umapClusteringGroup2OrderRaw ) {
+        umapClusteringGroup2Order = umapClusteringGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def umapClusteringFormats = umapClusteringConfig.formats ?: 'pdf,png'
+    def umapClusteringNormalize = umapClusteringConfig.normalize ?: 'clr'
+    def umapClusteringTransform = umapClusteringConfig.transform ?: 'sqrt'
+    def umapClusteringNeighbors = umapClusteringConfig.n_neighbors ? (umapClusteringConfig.n_neighbors as int) : 15
+    def umapClusteringMinDist = umapClusteringConfig.min_dist != null ? (umapClusteringConfig.min_dist as double) : 0.1d
+    def umapClusteringMetric = umapClusteringConfig.umap_metric ?: 'euclidean'
+    def umapClusteringHdbscanMetric = umapClusteringConfig.hdbscan_metric ?: 'euclidean'
+    def umapClusteringMinClusterSize = umapClusteringConfig.min_cluster_size ? (umapClusteringConfig.min_cluster_size as int) : 10
+    def umapClusteringMinSamples = umapClusteringConfig.min_samples ? (umapClusteringConfig.min_samples as int) : 5
+    boolean umapClusteringNoScale = (umapClusteringConfig.no_scale ?: false) as boolean
+    def umapClusteringRandomState = umapClusteringConfig.random_state ? (umapClusteringConfig.random_state as int) : 42
+
+    def biochemPreAsvConfig = config.biochem_pre_asv ?: [:]
+    boolean biochemPreAsvEnabled = biochemPreAsvConfig.containsKey('enabled') ? (biochemPreAsvConfig.enabled as boolean) : false
+    def biochemTableAPath = biochemPreAsvConfig.table_a ? resolveOptionalPath(biochemPreAsvConfig.table_a, configRoot) : resolveOptionalPath('../ref_db/new_biochem/SI_JA_Compiled_Geochem_Dec_09_Outlier_RM.csv', configRoot)
+    def biochemTableBPath = biochemPreAsvConfig.table_b ? resolveOptionalPath(biochemPreAsvConfig.table_b, configRoot) : resolveOptionalPath('../ref_db/new_biochem/SI_JA_Compiled_CTD_Data_Dec_18_2025_Outlier_RM.csv', configRoot)
+    if( biochemPreAsvEnabled && (!biochemTableAPath || !new File(biochemTableAPath).exists()) ) {
+        exit 1, "biochem_pre_asv.table_a not found: ${biochemTableAPath}"
+    }
+    if( biochemPreAsvEnabled && (!biochemTableBPath || !new File(biochemTableBPath).exists()) ) {
+        exit 1, "biochem_pre_asv.table_b not found: ${biochemTableBPath}"
+    }
+    def biochemOutputRoot = biochemPreAsvConfig.output_root ? resolveOutputRelative(biochemPreAsvConfig.output_root.toString(), outputDir) : outputDir
+    def biochemProcessingDirAbs = new File(biochemOutputRoot, 'biochem_processing').canonicalPath
+    def biochemStratMetricsDirAbs = new File(biochemProcessingDirAbs, 'stratification_metrics').canonicalPath
+    def biochemPcaDirAbs = new File(biochemOutputRoot, 'env_pca').canonicalPath
+    def biochemSelectkDirAbs = new File(biochemOutputRoot, 'env_compartments_selectk').canonicalPath
+    def biochemGmmDirAbs = new File(biochemOutputRoot, 'env_compartments_gmm').canonicalPath
+    def biochemO2DirAbs = new File(biochemOutputRoot, 'env_o2_soft_compartments').canonicalPath
+    def biochemHybridDirAbs = new File(biochemOutputRoot, 'env_hybrid_soft_compartments').canonicalPath
+    def biochemCompareDirAbs = new File(biochemOutputRoot, 'env_compare_compartments').canonicalPath
+    def biochemSplitDirAbs = new File(biochemOutputRoot, 'env_o2_split_by_gmm').canonicalPath
+    def biochemStratIndexDirAbs = new File(biochemOutputRoot, 'env_stratification_index').canonicalPath
+    def biochemStateTransitionsDirAbs = new File(biochemOutputRoot, 'env_state_transitions').canonicalPath
+    def biochemSuccessionDirAbs = new File(biochemOutputRoot, 'env_succession_graphs').canonicalPath
+    def biochemFeatureAssocDirAbs = new File(biochemOutputRoot, 'env_compartment_feature_assoc').canonicalPath
+    def biochemEofPcaDirAbs = new File(biochemOutputRoot, 'eof_pca').canonicalPath
+    def biochemEofStatesDirAbs = new File(biochemOutputRoot, 'eof_states').canonicalPath
+    def biochemEofPlotsDirAbs = new File(biochemOutputRoot, 'eof_plots').canonicalPath
+    def biochemWithinGmmDirAbs = new File(biochemGmmDirAbs, 'within_gmm_hdbscan').canonicalPath
+    def biochemMergedOxygenPath = new File(biochemProcessingDirAbs, '02_oxygen_best_available.tsv').canonicalPath
+    def biochemDensityPath = new File(biochemProcessingDirAbs, '02_oxygen_best_available_density.tsv').canonicalPath
+    def biochemDensityCleanedFile = biochemPreAsvConfig.cleaned_density_filename ?: '02_oxygen_best_available_density_RJM.tsv'
+    def biochemDensityCleanedPath = new File(biochemProcessingDirAbs, biochemDensityCleanedFile.toString()).canonicalPath
+    def biochemFeatureCols = biochemPreAsvConfig.feature_cols ?: 'Oxygen,Nitrate,Nitrite,Nitrous Oxide,Ammonium,Hydrogen Sulfide,Methane,Phosphate,Silicate,Temperature,Salinity,Density,Fe,Dimethyl Sulfide'
+    def biochemGmmKRaw = biochemPreAsvConfig.gmm_k
+    boolean biochemGmmKAuto = (biochemGmmKRaw == null) || (biochemGmmKRaw.toString().trim().equalsIgnoreCase('auto'))
+    def biochemGmmK = biochemGmmKAuto ? 5 : (biochemGmmKRaw as int)
+    def biochemEofPcs = biochemPreAsvConfig.eof_pcs ?: '1,2,4'
+    def biochemCleanKeepRaw = biochemPreAsvConfig.clean_keep_cols
+    List<String> biochemCleanKeepCols = []
+    if( biochemCleanKeepRaw instanceof List ) {
+        biochemCleanKeepCols = biochemCleanKeepRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( biochemCleanKeepRaw ) {
+        biochemCleanKeepCols = biochemCleanKeepRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def biochemCleanDropRaw = biochemPreAsvConfig.clean_drop_cols
+    List<String> biochemCleanDropCols = []
+    if( biochemCleanDropRaw instanceof List ) {
+        biochemCleanDropCols = biochemCleanDropRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( biochemCleanDropRaw ) {
+        biochemCleanDropCols = biochemCleanDropRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def biochemCleanRenameRaw = biochemPreAsvConfig.clean_rename_map
+    Map<String, String> biochemCleanRenameMap = [:]
+    if( biochemCleanRenameRaw instanceof Map ) {
+        biochemCleanRenameRaw.each { k, v ->
+            if( k != null && v != null ) {
+                def kk = k.toString().trim()
+                def vv = v.toString().trim()
+                if( kk && vv ) {
+                    biochemCleanRenameMap[kk] = vv
+                }
             }
         }
     }
-}
 
-def diversityConfig = config.diversity ?: [:]
-boolean diversityRequested = diversityConfig.containsKey('enabled') ? (diversityConfig.enabled as boolean) : false
-if( diversityRequested && !metadataPlotsEnabled ) {
-    exit 1, "diversity.enabled requires metadata_plots.enabled to be true"
-}
-boolean diversityEnabled = diversityRequested
-def diversityOutputDir = diversityConfig.output_dir ?: 'diversity'
-def diversityOutputDirAbs = new File(outputDir, diversityOutputDir).canonicalPath
-def diversityMitoOutputDir = diversityConfig.mito_output_dir ?: 'mito/diversity'
-def diversityMitoOutputDirAbs = new File(outputDir, diversityMitoOutputDir).canonicalPath
-def diversityMitoInputPath = diversityConfig.mito_input ? resolveOptionalPath(diversityConfig.mito_input, configRoot) : new File(outputDir, 'mito/ASVs/ASV_target.mito.tsv').canonicalPath
-def diversitySampleCol = diversityConfig.sample_col ?: metadataPlotsSampleCol
-def diversityGroupCol = diversityConfig.group_col ?: (diversityConfig.group1_col ?: metadataPlotsTypeCol)
-def diversityColorCol = diversityConfig.color_col ?: 'Color'
-def diversitySecondaryCol = diversityConfig.group2_col ?: (diversityConfig.secondary_col ?: 'Month')
-def diversityExcludeGroupsRaw = diversityConfig.exclude_groups
-List<String> diversityExcludeGroups = []
-if( diversityExcludeGroupsRaw instanceof List ) {
-    diversityExcludeGroups = diversityExcludeGroupsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( diversityExcludeGroupsRaw ) {
-    diversityExcludeGroups = diversityExcludeGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def diversityGroupOrderRaw = diversityConfig.group_order ?: metadataPlotsGroupOrder
-List<String> diversityGroupOrder = []
-if( diversityGroupOrderRaw instanceof List ) {
-    diversityGroupOrder = diversityGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( diversityGroupOrderRaw ) {
-    diversityGroupOrder = diversityGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-boolean diversityRunMito = diversityConfig.containsKey('run_mito') ? (diversityConfig.run_mito as boolean) : true
-def diversityUmapNeighbors = diversityConfig.umap_neighbors ? (diversityConfig.umap_neighbors as int) : 30
-def diversityUmapMinDist = diversityConfig.umap_min_dist != null ? (diversityConfig.umap_min_dist as double) : 0.01d
-def diversityPermutations = diversityConfig.permanova_perms ? (diversityConfig.permanova_perms as int) : 999
-def diversityRandomState = diversityConfig.random_state ? (diversityConfig.random_state as int) : 42
-def diversityBlockCol = diversityConfig.block_col ? diversityConfig.block_col.toString().trim() : ''
-boolean diversityVerbose = diversityConfig.containsKey('verbose') ? (diversityConfig.verbose as boolean) : true
-
-def indicspeciesConfig = config.indicspecies ?: [:]
-boolean indicspeciesRequested = indicspeciesConfig.containsKey('enabled') ? (indicspeciesConfig.enabled as boolean) : false
-if( indicspeciesRequested && !metadataPlotsEnabled ) {
-    exit 1, "indicspecies.enabled requires metadata_plots.enabled to be true"
-}
-def indicspeciesGroupColsRaw = indicspeciesConfig.group_cols
-List<String> indicspeciesGroupCols = []
-if( indicspeciesGroupColsRaw instanceof List ) {
-    indicspeciesGroupCols = indicspeciesGroupColsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( indicspeciesGroupColsRaw ) {
-    indicspeciesGroupCols = indicspeciesGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-} else {
-    indicspeciesGroupCols = ['Depth', 'Month']
-}
-if( indicspeciesRequested && indicspeciesGroupCols.size() < 2 ) {
-    exit 1, "indicspecies.group_cols must contain at least two groups when indicspecies.enabled is true"
-}
-boolean indicspeciesEnabled = indicspeciesRequested
-def indicspeciesSampleCol = indicspeciesConfig.sample_col ?: metadataPlotsSampleCol
-def indicspeciesPerms = indicspeciesConfig.perms ? (indicspeciesConfig.perms as int) : 999
-def indicspeciesMinN = indicspeciesConfig.min_n ? (indicspeciesConfig.min_n as int) : 2
-def indicspeciesBlockCol = indicspeciesConfig.block_col ? indicspeciesConfig.block_col.toString().trim() : ''
-def indicspeciesGroup1 = indicspeciesGroupCols[0]
-def indicspeciesGroup2 = indicspeciesGroupCols[1]
-def indicspeciesOutputDirAbs = new File(outputDir, "indicspecies").canonicalPath
-boolean indicspeciesPlotEnabled = indicspeciesConfig.containsKey('plot_enabled') ? (indicspeciesConfig.plot_enabled as boolean) : true
-def indicspeciesPlotPairsMode = indicspeciesConfig.plot_pairs_mode ?: 'all'
-def indicspeciesPlotOutputDir = indicspeciesConfig.plot_output_dir ?: 'indicspecies/plots'
-def indicspeciesPlotOutputDirAbs = new File(outputDir, indicspeciesPlotOutputDir).canonicalPath
-def indicspeciesPlotVennPath = indicspeciesConfig.venn ? resolveOptionalPath(indicspeciesConfig.venn, configRoot) : null
-def indicspeciesPlotTaxonomyPath = indicspeciesConfig.taxonomy ? resolveOptionalPath(indicspeciesConfig.taxonomy, configRoot) : new File(outputDir, 'taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv').canonicalPath
-def indicspeciesColorCol = indicspeciesConfig.color_col ?: metadataPlotsColorCol
-def indicspeciesGroup1Palette = indicspeciesConfig.group1_palette ?: ''
-def indicspeciesGroup2Palette = indicspeciesConfig.group2_palette ?: ''
-def indicspeciesGroup1OrderRaw = indicspeciesConfig.group1_order ?: metadataPlotsGroupOrder
-List<String> indicspeciesGroup1Order = []
-if( indicspeciesGroup1OrderRaw instanceof List ) {
-    indicspeciesGroup1Order = indicspeciesGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( indicspeciesGroup1OrderRaw ) {
-    indicspeciesGroup1Order = indicspeciesGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def indicspeciesGroup2OrderRaw = indicspeciesConfig.group2_order
-List<String> indicspeciesGroup2Order = []
-if( indicspeciesGroup2OrderRaw instanceof List ) {
-    indicspeciesGroup2Order = indicspeciesGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( indicspeciesGroup2OrderRaw ) {
-    indicspeciesGroup2Order = indicspeciesGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def indicspeciesFocusGroup1Label = indicspeciesConfig.focus_group1_label ? indicspeciesConfig.focus_group1_label.toString().trim() : ''
-def indicspeciesFocusGroup2Label = indicspeciesConfig.focus_group2_label ? indicspeciesConfig.focus_group2_label.toString().trim() : ''
-boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
-boolean indicspeciesAlignedEnabled = indicspeciesConfig.containsKey('aligned_plot_enabled') ? (indicspeciesConfig.aligned_plot_enabled as boolean) : false
-boolean indicspeciesUseDuleg = indicspeciesConfig.containsKey('use_duleg') ? (indicspeciesConfig.use_duleg as boolean) : false
-def indicspeciesAlignedOutputDir = indicspeciesConfig.aligned_plot_output_dir ?: 'indicspecies/aligned'
-def indicspeciesAlignedOutputDirAbs = new File(outputDir, indicspeciesAlignedOutputDir).canonicalPath
-def indicspeciesAlignedAlpha = indicspeciesConfig.aligned_alpha != null ? (indicspeciesConfig.aligned_alpha as double) : 0.05d
-def indicspeciesAlignedMinStat = indicspeciesConfig.aligned_min_stat != null ? (indicspeciesConfig.aligned_min_stat as double) : 0.0d
-def indicspeciesAlignedTopN = indicspeciesConfig.aligned_top_n ? (indicspeciesConfig.aligned_top_n as int) : 25
-
-def clustermapsConfig = config.clustermaps ?: [:]
-boolean clustermapsRequested = clustermapsConfig.containsKey('enabled') ? (clustermapsConfig.enabled as boolean) : false
-if( clustermapsRequested && !metadataPlotsEnabled ) {
-    exit 1, "clustermaps.enabled requires metadata_plots.enabled to be true"
-}
-boolean clustermapsEnabled = clustermapsRequested
-def clustermapsOutputDir = clustermapsConfig.output_dir ?: 'clustermaps'
-def clustermapsOutputDirAbs = new File(outputDir, clustermapsOutputDir).canonicalPath
-def clustermapsMitoOutputDir = clustermapsConfig.mito_output_dir ?: 'mito/clustermaps'
-def clustermapsMitoOutputDirAbs = new File(outputDir, clustermapsMitoOutputDir).canonicalPath
-def clustermapsMitoInputPath = clustermapsConfig.mito_input ? resolveOptionalPath(clustermapsConfig.mito_input, configRoot) : new File(outputDir, 'mito/ASVs/ASV_target.mito.tsv').canonicalPath
-def clustermapsIsaFile = clustermapsConfig.isa_file ? resolveOptionalPath(clustermapsConfig.isa_file, configRoot) : null
-def clustermapsIsaSearchDir = (clustermapsIsaFile && new File(clustermapsIsaFile).isDirectory()) ? clustermapsIsaFile : null
-def clustermapsSampleCol = clustermapsConfig.sample_col ?: 'sample'
-def clustermapsSampleCodeCol = clustermapsConfig.sample_code_col ?: 'sample_code'
-def clustermapsAsvIdCol = clustermapsConfig.asv_id_col ?: 'ASV_ID'
-def clustermapsGroup1Col = clustermapsConfig.group1_col ?: 'type_group'
-def clustermapsGroup2Col = clustermapsConfig.group2_col ?: 'status'
-def clustermapsGroup3Col = clustermapsConfig.containsKey('group3_col') ? (clustermapsConfig.group3_col ?: '') : 'kit'
-def clustermapsGroup1OrderRaw = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: '')
-List<String> clustermapsGroup1Order = []
-if( clustermapsGroup1OrderRaw instanceof List ) {
-    clustermapsGroup1Order = clustermapsGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( clustermapsGroup1OrderRaw ) {
-    clustermapsGroup1Order = clustermapsGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: '')
-def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: '')
-def clustermapsGroup2Palette = clustermapsConfig.group2_palette ?: (clustermapsConfig.status_palette ?: '')
-def clustermapsGroup3Palette = clustermapsConfig.group3_palette ?: (clustermapsConfig.kit_palette ?: '')
-def clustermapsRanks = clustermapsConfig.ranks ?: 'Phylum,Class,Order,Family,Genus,Species,ASV_ID'
-def clustermapsTopN = clustermapsConfig.topN ?: 'Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000'
-def clustermapsCountCol = clustermapsConfig.count_col ?: 'corr_count'
-def clustermapsIsaMinStat = clustermapsConfig.isa_min_stat != null ? (clustermapsConfig.isa_min_stat as double) : 0.6d
-def clustermapsIsaSignificanceCols = clustermapsConfig.isa_significance_cols ?: ''
-def clustermapsIsaStatCols = clustermapsConfig.isa_stat_cols ?: ''
-def clustermapsMitoSampleMode = clustermapsConfig.mito_sample_mode ?: 'auto'
-boolean clustermapsRunMito = clustermapsConfig.containsKey('run_mito') ? (clustermapsConfig.run_mito as boolean) : true
-def clustermapsIsaAutoCandidates = [clustermapsGroup3Col, clustermapsGroup1Col, clustermapsGroup2Col, indicspeciesGroup1, indicspeciesGroup2]
-    .findAll { it }
-    .collect { "${it}_indicator_species_summary.tsv" }
-    .unique()
-def clustermapsIsaPathExists = clustermapsIsaFile ? new File(clustermapsIsaFile).exists() : false
-def clustermapsIsaMayBeProducedInRun = clustermapsIsaFile && indicspeciesEnabled && clustermapsIsaFile == indicspeciesOutputDirAbs
-if( clustermapsIsaFile && !clustermapsIsaPathExists ) {
-    if( clustermapsIsaMayBeProducedInRun ) {
-        log.info "clustermaps.isa_file points to the INDICSPECIES output directory and will be resolved at runtime: ${clustermapsIsaFile}"
-    } else {
-        log.warn "clustermaps.isa_file path not found; ISA-gated clustermaps will be skipped unless a matching table is produced at runtime: ${clustermapsIsaFile}"
+    def diversityConfig = config.diversity ?: [:]
+    boolean diversityRequested = diversityConfig.containsKey('enabled') ? (diversityConfig.enabled as boolean) : false
+    if( diversityRequested && !metadataPlotsEnabled ) {
+        exit 1, "diversity.enabled requires metadata_plots.enabled to be true"
     }
+    boolean diversityEnabled = diversityRequested
+    def diversityOutputDir = diversityConfig.output_dir ?: 'diversity'
+    def diversityOutputDirAbs = new File(outputDir, diversityOutputDir).canonicalPath
+    def diversityMitoOutputDir = diversityConfig.mito_output_dir ?: 'mito/diversity'
+    def diversityMitoOutputDirAbs = new File(outputDir, diversityMitoOutputDir).canonicalPath
+    def diversityMitoInputPath = diversityConfig.mito_input ? resolveOptionalPath(diversityConfig.mito_input, configRoot) : new File(outputDir, 'mito/ASVs/ASV_target.mito.tsv').canonicalPath
+    def diversitySampleCol = diversityConfig.sample_col ?: metadataPlotsSampleCol
+    def diversityGroupCol = diversityConfig.group_col ?: (diversityConfig.group1_col ?: metadataPlotsTypeCol)
+    def diversityColorCol = diversityConfig.color_col ?: 'Color'
+    def diversitySecondaryCol = diversityConfig.group2_col ?: (diversityConfig.secondary_col ?: 'Month')
+    def diversityExcludeGroupsRaw = diversityConfig.exclude_groups
+    List<String> diversityExcludeGroups = []
+    if( diversityExcludeGroupsRaw instanceof List ) {
+        diversityExcludeGroups = diversityExcludeGroupsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( diversityExcludeGroupsRaw ) {
+        diversityExcludeGroups = diversityExcludeGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def diversityGroupOrderRaw = diversityConfig.group_order ?: metadataPlotsGroupOrder
+    List<String> diversityGroupOrder = []
+    if( diversityGroupOrderRaw instanceof List ) {
+        diversityGroupOrder = diversityGroupOrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( diversityGroupOrderRaw ) {
+        diversityGroupOrder = diversityGroupOrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    boolean diversityRunMito = diversityConfig.containsKey('run_mito') ? (diversityConfig.run_mito as boolean) : true
+    def diversityUmapNeighbors = diversityConfig.umap_neighbors ? (diversityConfig.umap_neighbors as int) : 30
+    def diversityUmapMinDist = diversityConfig.umap_min_dist != null ? (diversityConfig.umap_min_dist as double) : 0.01d
+    def diversityPermutations = diversityConfig.permanova_perms ? (diversityConfig.permanova_perms as int) : 999
+    def diversityRandomState = diversityConfig.random_state ? (diversityConfig.random_state as int) : 42
+    def diversityBlockCol = diversityConfig.block_col ? diversityConfig.block_col.toString().trim() : ''
+    boolean diversityVerbose = diversityConfig.containsKey('verbose') ? (diversityConfig.verbose as boolean) : true
+    return [
+        metadataPlotsMetadataPath: metadataPlotsMetadataPath,
+        metadataPlotsSubDir: metadataPlotsSubDir,
+        metadataPlotsSampleCol: metadataPlotsSampleCol,
+        metadataPlotsTypeCol: metadataPlotsTypeCol,
+        metadataPlotsColorCol: metadataPlotsColorCol,
+        metadataPlotsBiochemAssignmentsPath: metadataPlotsBiochemAssignmentsPath,
+        metadataPlotsBiochemSampleCol: metadataPlotsBiochemSampleCol,
+        metadataPlotsStratificationTimeseriesPath: metadataPlotsStratificationTimeseriesPath,
+        metadataPlotsStratMetaJoinCol: metadataPlotsStratMetaJoinCol,
+        metadataPlotsStratJoinCol: metadataPlotsStratJoinCol,
+        metadataPlotsSubtractionCol: metadataPlotsSubtractionCol,
+        batchCorrectionOutputDir: batchCorrectionOutputDir,
+        batchCorrectionOutputDirAbs: batchCorrectionOutputDirAbs,
+        batchCorrectionBatchCol: batchCorrectionBatchCol,
+        batchCorrectionSampleIdCol: batchCorrectionSampleIdCol,
+        batchCorrectionOrientation: batchCorrectionOrientation,
+        batchBiologicalCovariates: batchBiologicalCovariates,
+        batchBiologicalColorCols: batchBiologicalColorCols,
+        batchColorPaletteCols: batchColorPaletteCols,
+        batchUmapNeighbors: batchUmapNeighbors,
+        batchUmapMinDist: batchUmapMinDist,
+        batchHdbscanMinClusterSize: batchHdbscanMinClusterSize,
+        batchHdbscanMinSamples: batchHdbscanMinSamples,
+        batchHdbscanSelectionMethod: batchHdbscanSelectionMethod,
+        batchTargetClusters: batchTargetClusters,
+        batchNFeaturesPlot: batchNFeaturesPlot,
+        batchRandomState: batchRandomState,
+        batchConqurMode: batchConqurMode,
+        batchConqurNumCore: batchConqurNumCore,
+        batchConqurBatchRef: batchConqurBatchRef,
+        batchConqurQuantileType: batchConqurQuantileType,
+        batchConqurLambdaQuantile: batchConqurLambdaQuantile,
+        batchConqurDelta: batchConqurDelta,
+        outlierOutputDirAbs: outlierOutputDirAbs,
+        outlierSampleIdCol: outlierSampleIdCol,
+        outlierTransform: outlierTransform,
+        outlierOrientation: outlierOrientation,
+        outlierVoteThreshold: outlierVoteThreshold,
+        outlierIsoContamination: outlierIsoContamination,
+        outlierIsoEstimators: outlierIsoEstimators,
+        outlierIsoRandomState: outlierIsoRandomState,
+        outlierSvmKernel: outlierSvmKernel,
+        outlierSvmGamma: outlierSvmGamma,
+        outlierSvmNu: outlierSvmNu,
+        outlierHdbMinClusterSize: outlierHdbMinClusterSize,
+        outlierHdbMinSamples: outlierHdbMinSamples,
+        outlierHdbMetric: outlierHdbMetric,
+        collectorsSampleCol: collectorsSampleCol,
+        collectorsGroupCol: collectorsGroupCol,
+        collectorsColorCol: collectorsColorCol,
+        collectorsPermutations: collectorsPermutations,
+        collectorsSeed: collectorsSeed,
+        collectorsOutPrefixAbs: collectorsOutPrefixAbs,
+        collectorsTitle: collectorsTitle,
+        collectorsFormats: collectorsFormats,
+        collectorsXpad: collectorsXpad,
+        collectorsMaxCols: collectorsMaxCols,
+        collectorsShowPerms: collectorsShowPerms,
+        collectorsPresenceThreshold: collectorsPresenceThreshold,
+        plotUpsetSubDir: plotUpsetSubDir,
+        plotUpsetDomain: plotUpsetDomain,
+        plotUpsetTaxonomyPath: plotUpsetTaxonomyPath,
+        plotUpsetSampleIdCol: plotUpsetSampleIdCol,
+        plotUpsetGroupCol: plotUpsetGroupCol,
+        plotUpsetColorCol: plotUpsetColorCol,
+        plotUpsetFormats: plotUpsetFormats,
+        plotUpsetFontSize: plotUpsetFontSize,
+        bubbleplotterOutputPrefixAbs: bubbleplotterOutputPrefixAbs,
+        bubbleplotterOutputDirAbs: bubbleplotterOutputDirAbs,
+        bubbleplotterFormats: bubbleplotterFormats,
+        bubbleplotterCountCol: bubbleplotterCountCol,
+        bubbleplotterSampleCol: bubbleplotterSampleCol,
+        bubbleplotterDepthCol: bubbleplotterDepthCol,
+        bubbleplotterColorCol: bubbleplotterColorCol,
+        bubbleplotterMonthCol: bubbleplotterMonthCol,
+        bubbleplotterFigsize: bubbleplotterFigsize,
+        bubbleplotterScale: bubbleplotterScale,
+        umapClusteringOutputPrefixAbs: umapClusteringOutputPrefixAbs,
+        umapClusteringOutputDirAbs: umapClusteringOutputDirAbs,
+        umapClusteringSampleCol: umapClusteringSampleCol,
+        umapClusteringCountCol: umapClusteringCountCol,
+        umapClusteringDepthCol: umapClusteringDepthCol,
+        umapClusteringColorCol: umapClusteringColorCol,
+        umapClusteringSecondaryCol: umapClusteringSecondaryCol,
+        umapClusteringFormats: umapClusteringFormats,
+        umapClusteringNormalize: umapClusteringNormalize,
+        umapClusteringTransform: umapClusteringTransform,
+        umapClusteringNeighbors: umapClusteringNeighbors,
+        umapClusteringMinDist: umapClusteringMinDist,
+        umapClusteringMetric: umapClusteringMetric,
+        umapClusteringHdbscanMetric: umapClusteringHdbscanMetric,
+        umapClusteringMinClusterSize: umapClusteringMinClusterSize,
+        umapClusteringMinSamples: umapClusteringMinSamples,
+        umapClusteringRandomState: umapClusteringRandomState,
+        biochemTableAPath: biochemTableAPath,
+        biochemTableBPath: biochemTableBPath,
+        biochemProcessingDirAbs: biochemProcessingDirAbs,
+        biochemStratMetricsDirAbs: biochemStratMetricsDirAbs,
+        biochemPcaDirAbs: biochemPcaDirAbs,
+        biochemSelectkDirAbs: biochemSelectkDirAbs,
+        biochemGmmDirAbs: biochemGmmDirAbs,
+        biochemO2DirAbs: biochemO2DirAbs,
+        biochemHybridDirAbs: biochemHybridDirAbs,
+        biochemCompareDirAbs: biochemCompareDirAbs,
+        biochemSplitDirAbs: biochemSplitDirAbs,
+        biochemStratIndexDirAbs: biochemStratIndexDirAbs,
+        biochemStateTransitionsDirAbs: biochemStateTransitionsDirAbs,
+        biochemSuccessionDirAbs: biochemSuccessionDirAbs,
+        biochemFeatureAssocDirAbs: biochemFeatureAssocDirAbs,
+        biochemEofPcaDirAbs: biochemEofPcaDirAbs,
+        biochemEofStatesDirAbs: biochemEofStatesDirAbs,
+        biochemEofPlotsDirAbs: biochemEofPlotsDirAbs,
+        biochemWithinGmmDirAbs: biochemWithinGmmDirAbs,
+        biochemMergedOxygenPath: biochemMergedOxygenPath,
+        biochemDensityPath: biochemDensityPath,
+        biochemDensityCleanedPath: biochemDensityCleanedPath,
+        biochemFeatureCols: biochemFeatureCols,
+        biochemGmmK: biochemGmmK,
+        biochemEofPcs: biochemEofPcs,
+        diversityOutputDirAbs: diversityOutputDirAbs,
+        diversityMitoOutputDirAbs: diversityMitoOutputDirAbs,
+        diversityMitoInputPath: diversityMitoInputPath,
+        diversitySampleCol: diversitySampleCol,
+        diversityGroupCol: diversityGroupCol,
+        diversityColorCol: diversityColorCol,
+        diversitySecondaryCol: diversitySecondaryCol,
+        diversityUmapNeighbors: diversityUmapNeighbors,
+        diversityUmapMinDist: diversityUmapMinDist,
+        diversityPermutations: diversityPermutations,
+        diversityRandomState: diversityRandomState,
+        diversityBlockCol: diversityBlockCol,
+        metadataPlotsEnabled: metadataPlotsEnabled,
+        metadataPlotsBiochemIncludeCols: metadataPlotsBiochemIncludeCols,
+        metadataPlotsStratIncludeCols: metadataPlotsStratIncludeCols,
+        metadataPlotsBiochemMetaJoinCols: metadataPlotsBiochemMetaJoinCols,
+        metadataPlotsBiochemJoinCols: metadataPlotsBiochemJoinCols,
+        metadataKeepTypes: metadataKeepTypes,
+        metadataPlotsSubtractionGroups: metadataPlotsSubtractionGroups,
+        metadataPlotsGroupOrder: metadataPlotsGroupOrder,
+        metadataIncludeRank: metadataIncludeRank,
+        batchCorrectionEnabled: batchCorrectionEnabled,
+        batchOptimize: batchOptimize,
+        batchConqurLogisticLasso: batchConqurLogisticLasso,
+        batchConqurSimpleMatch: batchConqurSimpleMatch,
+        batchConqurInterplt: batchConqurInterplt,
+        batchConqurAutoInstall: batchConqurAutoInstall,
+        outlierEnabled: outlierEnabled,
+        outlierGroupCols: outlierGroupCols,
+        outlierPreTransformed: outlierPreTransformed,
+        outlierScale: outlierScale,
+        outlierUseIso: outlierUseIso,
+        outlierUseSvm: outlierUseSvm,
+        outlierUseHdb: outlierUseHdb,
+        collectorsEnabled: collectorsEnabled,
+        collectorsGroupOrder: collectorsGroupOrder,
+        plotUpsetEnabled: plotUpsetEnabled,
+        plotUpsetGroupOrder: plotUpsetGroupOrder,
+        plotUpsetSubsetGroups: plotUpsetSubsetGroups,
+        plotUpsetSkipVenn: plotUpsetSkipVenn,
+        plotUpsetRawOnly: plotUpsetRawOnly,
+        plotUpsetFinalOnly: plotUpsetFinalOnly,
+        bubbleplotterEnabled: bubbleplotterEnabled,
+        bubbleplotterGroup1Order: bubbleplotterGroup1Order,
+        bubbleplotterGroup2Order: bubbleplotterGroup2Order,
+        bubbleplotterNoAutoSize: bubbleplotterNoAutoSize,
+        umapClusteringEnabled: umapClusteringEnabled,
+        umapClusteringGroup1Order: umapClusteringGroup1Order,
+        umapClusteringGroup2Order: umapClusteringGroup2Order,
+        umapClusteringNoScale: umapClusteringNoScale,
+        biochemPreAsvEnabled: biochemPreAsvEnabled,
+        biochemGmmKAuto: biochemGmmKAuto,
+        biochemCleanKeepCols: biochemCleanKeepCols,
+        biochemCleanDropCols: biochemCleanDropCols,
+        biochemCleanRenameMap: biochemCleanRenameMap,
+        diversityEnabled: diversityEnabled,
+        diversityExcludeGroups: diversityExcludeGroups,
+        diversityGroupOrder: diversityGroupOrder,
+        diversityRunMito: diversityRunMito,
+        diversityVerbose: diversityVerbose,
+    ]
 }
 
-def spieceasiConfig = config.spieceasi ?: [:]
-boolean spieceasiRequested = spieceasiConfig.containsKey('enabled') ? (spieceasiConfig.enabled as boolean) : false
-if( spieceasiRequested && !metadataPlotsEnabled ) {
-    exit 1, "spieceasi.enabled requires metadata_plots.enabled to be true"
-}
-boolean spieceasiEnabled = spieceasiRequested
-def spieceasiOutputDir = spieceasiConfig.output_dir ?: 'spieceasi'
-def spieceasiOutputDirAbs = new File(outputDir, spieceasiOutputDir).canonicalPath
-def spieceasiPrefix = spieceasiConfig.prefix ?: 'spieceasi'
-boolean spieceasiTranspose = spieceasiConfig.containsKey('transpose') ? (spieceasiConfig.transpose as boolean) : true
-def spieceasiMinRelAbund = spieceasiConfig.min_rel_abund != null ? (spieceasiConfig.min_rel_abund as double) : 0d
-def spieceasiMinPrevalence = spieceasiConfig.min_prevalence != null ? (spieceasiConfig.min_prevalence as double) : 0d
-boolean spieceasiRemoveZeroVar = spieceasiConfig.containsKey('remove_zero_var') ? (spieceasiConfig.remove_zero_var as boolean) : true
-def spieceasiMethod = spieceasiConfig.method ?: 'glasso'
-def spieceasiLambdaMinRatio = spieceasiConfig.lambda_min_ratio != null ? (spieceasiConfig.lambda_min_ratio as double) : 1e-2d
-def spieceasiNlambda = spieceasiConfig.nlambda ? (spieceasiConfig.nlambda as int) : 20
-def spieceasiRepNum = spieceasiConfig.rep_num ? (spieceasiConfig.rep_num as int) : 50
-def spieceasiThresh = spieceasiConfig.thresh != null ? (spieceasiConfig.thresh as double) : 0.1d
-def spieceasiNcores = spieceasiConfig.ncores ? (spieceasiConfig.ncores as int) : pipelineThreads
-def spieceasiSeed = spieceasiConfig.seed ? (spieceasiConfig.seed as int) : 10010
-def spieceasiEdgeThreshold = spieceasiConfig.edge_threshold != null ? (spieceasiConfig.edge_threshold as double) : 0.1d
-boolean spieceasiKeepNegative = spieceasiConfig.containsKey('keep_negative') ? (spieceasiConfig.keep_negative as boolean) : true
-boolean spieceasiAllPosOnly = spieceasiConfig.containsKey('all_pos_only') ? (spieceasiConfig.all_pos_only as boolean) : false
-def spieceasiLayoutIters = spieceasiConfig.layout_iters ? (spieceasiConfig.layout_iters as int) : 1000
-boolean spieceasiForceFilter = spieceasiConfig.containsKey('force_filter') ? (spieceasiConfig.force_filter as boolean) : false
-boolean spieceasiForceSpieceasi = spieceasiConfig.containsKey('force_spieceasi') ? (spieceasiConfig.force_spieceasi as boolean) : false
-boolean spieceasiForceGraphs = spieceasiConfig.containsKey('force_graphs') ? (spieceasiConfig.force_graphs as boolean) : true
-boolean networkRequested = spieceasiConfig.containsKey('network_enabled') ? (spieceasiConfig.network_enabled as boolean) : false
-if( networkRequested && !indicspeciesEnabled ) {
-    exit 1, "spieceasi.network_enabled requires indicspecies.enabled to be true"
-}
-boolean networkEnabled = networkRequested && indicspeciesEnabled
-def networkGraphAllPath = spieceasiConfig.graph_pos_all ? resolveOptionalPath(spieceasiConfig.graph_pos_all, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_network_pos_all.graphml").canonicalPath
-def networkGraphThrPath = spieceasiConfig.graph_pos_sub ? resolveOptionalPath(spieceasiConfig.graph_pos_sub, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_network_pos_thr.graphml").canonicalPath
-def networkNodeFeaturesPath = spieceasiConfig.node_features ? resolveOptionalPath(spieceasiConfig.node_features, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_node_features.csv").canonicalPath
-if( networkEnabled && !spieceasiEnabled ) {
-    [networkGraphAllPath, networkGraphThrPath, networkNodeFeaturesPath].each { p ->
-        if( !new File(p).exists() ) {
-            exit 1, "spieceasi.network_enabled is true while spieceasi.enabled is false, but required cached file is missing: ${p}"
+def parseIndicatorAndNetworkConfig(config, File configRoot, String outputDir, int pipelineThreads, Map analysisCfg) {
+    def metadataPlotsEnabled = analysisCfg.metadataPlotsEnabled
+    def metadataPlotsMetadataPath = analysisCfg.metadataPlotsMetadataPath
+    def metadataPlotsSampleCol = analysisCfg.metadataPlotsSampleCol
+    def metadataPlotsTypeCol = analysisCfg.metadataPlotsTypeCol
+    def metadataPlotsColorCol = analysisCfg.metadataPlotsColorCol
+    def metadataPlotsGroupOrder = analysisCfg.metadataPlotsGroupOrder
+    def biochemPreAsvEnabled = analysisCfg.biochemPreAsvEnabled
+    def biochemPcaDirAbs = analysisCfg.biochemPcaDirAbs
+
+    def indicspeciesConfig = config.indicspecies ?: [:]
+    boolean indicspeciesRequested = indicspeciesConfig.containsKey('enabled') ? (indicspeciesConfig.enabled as boolean) : false
+    if( indicspeciesRequested && !metadataPlotsEnabled ) {
+        exit 1, "indicspecies.enabled requires metadata_plots.enabled to be true"
+    }
+    def indicspeciesGroupColsRaw = indicspeciesConfig.group_cols
+    List<String> indicspeciesGroupCols = []
+    if( indicspeciesGroupColsRaw instanceof List ) {
+        indicspeciesGroupCols = indicspeciesGroupColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( indicspeciesGroupColsRaw ) {
+        indicspeciesGroupCols = indicspeciesGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    } else {
+        indicspeciesGroupCols = ['Depth', 'Month']
+    }
+    if( indicspeciesRequested && indicspeciesGroupCols.size() < 2 ) {
+        exit 1, "indicspecies.group_cols must contain at least two groups when indicspecies.enabled is true"
+    }
+    boolean indicspeciesEnabled = indicspeciesRequested
+    def indicspeciesSampleCol = indicspeciesConfig.sample_col ?: metadataPlotsSampleCol
+    def indicspeciesPerms = indicspeciesConfig.perms ? (indicspeciesConfig.perms as int) : 999
+    def indicspeciesMinN = indicspeciesConfig.min_n ? (indicspeciesConfig.min_n as int) : 2
+    def indicspeciesBlockCol = indicspeciesConfig.block_col ? indicspeciesConfig.block_col.toString().trim() : ''
+    def indicspeciesGroup1 = indicspeciesGroupCols ? indicspeciesGroupCols[0] : 'group1'
+    def indicspeciesGroup2 = indicspeciesGroupCols.size() > 1 ? indicspeciesGroupCols[1] : ''
+    def indicspeciesOutputDirAbs = new File(outputDir, "indicspecies").canonicalPath
+    boolean indicspeciesPlotEnabled = indicspeciesConfig.containsKey('plot_enabled') ? (indicspeciesConfig.plot_enabled as boolean) : true
+    def indicspeciesPlotPairsMode = indicspeciesConfig.plot_pairs_mode ?: 'all'
+    def indicspeciesPlotOutputDir = indicspeciesConfig.plot_output_dir ?: 'indicspecies/plots'
+    def indicspeciesPlotOutputDirAbs = new File(outputDir, indicspeciesPlotOutputDir).canonicalPath
+    def indicspeciesPlotVennPath = indicspeciesConfig.venn ? resolveOptionalPath(indicspeciesConfig.venn, configRoot) : null
+    def indicspeciesPlotTaxonomyPath = indicspeciesConfig.taxonomy ? resolveOptionalPath(indicspeciesConfig.taxonomy, configRoot) : new File(outputDir, 'taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv').canonicalPath
+    def indicspeciesColorCol = indicspeciesConfig.color_col ?: metadataPlotsColorCol
+    def indicspeciesGroupPaletteMap = extractNamedStringMap(indicspeciesConfig as Map, indicspeciesGroupCols, 'group_palettes', 'palette')
+    def indicspeciesGroupOrderMap = extractNamedListMap(indicspeciesConfig as Map, indicspeciesGroupCols, 'group_orders', 'order')
+    def indicspeciesFocusLabelMap = extractNamedStringMap(indicspeciesConfig as Map, indicspeciesGroupCols, 'focus_labels', 'focus_label')
+    if( indicspeciesGroup1 && !indicspeciesGroupOrderMap.containsKey(indicspeciesGroup1) && metadataPlotsGroupOrder ) {
+        indicspeciesGroupOrderMap[indicspeciesGroup1] = metadataPlotsGroupOrder
+    }
+    def indicspeciesGroup1Palette = indicspeciesGroupPaletteMap[indicspeciesGroup1] ?: ''
+    def indicspeciesGroup2Palette = indicspeciesGroup2 ? (indicspeciesGroupPaletteMap[indicspeciesGroup2] ?: '') : ''
+    List<String> indicspeciesGroup1Order = indicspeciesGroupOrderMap[indicspeciesGroup1] ?: []
+    List<String> indicspeciesGroup2Order = indicspeciesGroup2 ? (indicspeciesGroupOrderMap[indicspeciesGroup2] ?: []) : []
+    def indicspeciesFocusGroup1Label = indicspeciesFocusLabelMap[indicspeciesGroup1] ?: ''
+    def indicspeciesFocusGroup2Label = indicspeciesGroup2 ? (indicspeciesFocusLabelMap[indicspeciesGroup2] ?: '') : ''
+    def indicspeciesGroupColsCsv = indicspeciesGroupCols.join(',')
+    def indicspeciesGroupPaletteJson = JsonOutput.toJson(indicspeciesGroupPaletteMap)
+    def indicspeciesGroupOrderJson = JsonOutput.toJson(indicspeciesGroupOrderMap)
+    def indicspeciesFocusLabelJson = JsonOutput.toJson(indicspeciesFocusLabelMap)
+    boolean indicspeciesLabelFocusedAsvs = indicspeciesConfig.containsKey('label_focused_asvs') ? (indicspeciesConfig.label_focused_asvs as boolean) : false
+    boolean indicspeciesAlignedEnabled = indicspeciesConfig.containsKey('aligned_plot_enabled') ? (indicspeciesConfig.aligned_plot_enabled as boolean) : false
+    boolean indicspeciesUseDuleg = indicspeciesConfig.containsKey('use_duleg') ? (indicspeciesConfig.use_duleg as boolean) : false
+    def indicspeciesAlignedOutputDir = indicspeciesConfig.aligned_plot_output_dir ?: 'indicspecies/aligned'
+    def indicspeciesAlignedOutputDirAbs = new File(outputDir, indicspeciesAlignedOutputDir).canonicalPath
+    def indicspeciesAlignedAlpha = indicspeciesConfig.aligned_alpha != null ? (indicspeciesConfig.aligned_alpha as double) : 0.05d
+    def indicspeciesAlignedMinStat = indicspeciesConfig.aligned_min_stat != null ? (indicspeciesConfig.aligned_min_stat as double) : 0.0d
+    def indicspeciesAlignedTopN = indicspeciesConfig.aligned_top_n ? (indicspeciesConfig.aligned_top_n as int) : 25
+
+    def clustermapsConfig = config.clustermaps ?: [:]
+    boolean clustermapsRequested = clustermapsConfig.containsKey('enabled') ? (clustermapsConfig.enabled as boolean) : false
+    if( clustermapsRequested && !metadataPlotsEnabled ) {
+        exit 1, "clustermaps.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean clustermapsEnabled = clustermapsRequested
+    def clustermapsOutputDir = clustermapsConfig.output_dir ?: 'clustermaps'
+    def clustermapsOutputDirAbs = new File(outputDir, clustermapsOutputDir).canonicalPath
+    def clustermapsMitoOutputDir = clustermapsConfig.mito_output_dir ?: 'mito/clustermaps'
+    def clustermapsMitoOutputDirAbs = new File(outputDir, clustermapsMitoOutputDir).canonicalPath
+    def clustermapsMitoInputPath = clustermapsConfig.mito_input ? resolveOptionalPath(clustermapsConfig.mito_input, configRoot) : new File(outputDir, 'mito/ASVs/ASV_target.mito.tsv').canonicalPath
+    def clustermapsIsaFile = clustermapsConfig.isa_file ? resolveOptionalPath(clustermapsConfig.isa_file, configRoot) : null
+    def clustermapsIsaSearchDir = (clustermapsIsaFile && new File(clustermapsIsaFile).isDirectory()) ? clustermapsIsaFile : null
+    def clustermapsSampleCol = clustermapsConfig.sample_col ?: 'sample'
+    def clustermapsSampleCodeCol = clustermapsConfig.sample_code_col ?: 'sample_code'
+    def clustermapsAsvIdCol = clustermapsConfig.asv_id_col ?: 'ASV_ID'
+    def clustermapsGroup1Col = clustermapsConfig.group1_col ?: 'type_group'
+    def clustermapsGroup2Col = clustermapsConfig.group2_col ?: 'status'
+    def clustermapsGroup3Col = clustermapsConfig.containsKey('group3_col') ? (clustermapsConfig.group3_col ?: '') : 'kit'
+    def clustermapsGroup1OrderRaw = clustermapsConfig.group1_order ?: (clustermapsConfig.type_order ?: '')
+    List<String> clustermapsGroup1Order = []
+    if( clustermapsGroup1OrderRaw instanceof List ) {
+        clustermapsGroup1Order = clustermapsGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( clustermapsGroup1OrderRaw ) {
+        clustermapsGroup1Order = clustermapsGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def clustermapsExcludeGroup1 = clustermapsConfig.exclude_group1 ?: (clustermapsConfig.exclude_types ?: '')
+    def clustermapsGroup1Palette = clustermapsConfig.group1_palette ?: (clustermapsConfig.type_palette ?: '')
+    def clustermapsGroup2Palette = clustermapsConfig.group2_palette ?: (clustermapsConfig.status_palette ?: '')
+    def clustermapsGroup3Palette = clustermapsConfig.group3_palette ?: (clustermapsConfig.kit_palette ?: '')
+    def clustermapsRanks = clustermapsConfig.ranks ?: 'Phylum,Class,Order,Family,Genus,Species,ASV_ID'
+    def clustermapsTopN = clustermapsConfig.topN ?: 'Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000'
+    def clustermapsCountCol = clustermapsConfig.count_col ?: 'corr_count'
+    def clustermapsIsaMinStat = clustermapsConfig.isa_min_stat != null ? (clustermapsConfig.isa_min_stat as double) : 0.6d
+    def clustermapsIsaSignificanceCols = clustermapsConfig.isa_significance_cols ?: ''
+    def clustermapsIsaStatCols = clustermapsConfig.isa_stat_cols ?: ''
+    def clustermapsFormats = clustermapsConfig.formats ?: 'pdf,png'
+    def clustermapsFigWidth = clustermapsConfig.figwidth != null ? clustermapsConfig.figwidth : null
+    def clustermapsRowHeight = clustermapsConfig.row_height != null ? clustermapsConfig.row_height : null
+    def clustermapsMinHeight = clustermapsConfig.min_height != null ? clustermapsConfig.min_height : null
+    def clustermapsMaxHeight = clustermapsConfig.max_height != null ? clustermapsConfig.max_height : null
+    def clustermapsMitoSampleMode = clustermapsConfig.mito_sample_mode ?: 'auto'
+    boolean clustermapsRunMito = clustermapsConfig.containsKey('run_mito') ? (clustermapsConfig.run_mito as boolean) : true
+    def clustermapsIsaAutoCandidates = ([clustermapsGroup3Col, clustermapsGroup1Col, clustermapsGroup2Col] + indicspeciesGroupCols)
+        .findAll { it }
+        .collect { "${it}_indicator_species_summary.tsv" }
+        .unique()
+    def clustermapsIsaPathExists = clustermapsIsaFile ? new File(clustermapsIsaFile).exists() : false
+    def clustermapsIsaMayBeProducedInRun = clustermapsIsaFile && indicspeciesEnabled && clustermapsIsaFile == indicspeciesOutputDirAbs
+    if( clustermapsIsaFile && !clustermapsIsaPathExists ) {
+        if( clustermapsIsaMayBeProducedInRun ) {
+            log.info "clustermaps.isa_file points to the INDICSPECIES output directory and will be resolved at runtime: ${clustermapsIsaFile}"
+        } else {
+            log.warn "clustermaps.isa_file path not found; ISA-gated clustermaps will be skipped unless a matching table is produced at runtime: ${clustermapsIsaFile}"
         }
     }
-}
-def networkModesRaw = spieceasiConfig.network_modes
-List<String> networkModes = []
-if( networkModesRaw instanceof List ) {
-    networkModes = networkModesRaw.collect { it.toString().trim() }.findAll { it }
-} else if( networkModesRaw ) {
-    networkModes = networkModesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def allPosOnlyNetworkModes = [
-    'degree_all',
-    'abundance_all',
-    'group1_isa_all',
-    'group1_isa_all_labeled',
-    'group2_isa_all',
-    'group2_isa_all_labeled',
-    'module_all',
-    'module_all_labeled',
-    'phylum_abund_all',
-    'phylum_isa_all',
-    'phylum_isa_all_labeled'
-]
-if( networkModes.isEmpty() ) {
-    networkModes = spieceasiAllPosOnly ? allPosOnlyNetworkModes : ['all']
-}
-if( spieceasiAllPosOnly ) {
-    def modeRemap = [
-        'all': null,
-        'degree_sub': 'degree_all',
-        'abundance_sub': 'abundance_all',
-        'group1_isa': 'group1_isa_all',
-        'group1_isa_labeled': 'group1_isa_all_labeled',
-        'group1_isa_focus': 'group1_isa_focus_all',
-        'group1_isa_focus_labeled': 'group1_isa_focus_all_labeled',
-        'group2_isa': 'group2_isa_all',
-        'group2_isa_labeled': 'group2_isa_all_labeled',
-        'module_sub': 'module_all',
-        'module_sub_labeled': 'module_all_labeled',
-        'phylum_abund': 'phylum_abund_all',
-        'phylum_isa': 'phylum_isa_all',
-        'phylum_isa_labeled': 'phylum_isa_all_labeled'
-    ]
-    networkModes = networkModes.collect { modeRemap.containsKey(it) ? modeRemap[it] : it }
-        .findAll { it }
-        .unique()
-    if( networkModes.isEmpty() ) {
-        networkModes = allPosOnlyNetworkModes
+
+    def spieceasiConfig = config.spieceasi ?: [:]
+    boolean spieceasiRequested = spieceasiConfig.containsKey('enabled') ? (spieceasiConfig.enabled as boolean) : false
+    if( spieceasiRequested && !metadataPlotsEnabled ) {
+        exit 1, "spieceasi.enabled requires metadata_plots.enabled to be true"
     }
-}
-def networkLayoutSeed = spieceasiConfig.layout_seed ? (spieceasiConfig.layout_seed as int) : 42
-def networkLayoutScale = spieceasiConfig.layout_scale != null ? (spieceasiConfig.layout_scale as double) : 3.0d
-def networkDegreeScale = spieceasiConfig.degree_scale != null ? (spieceasiConfig.degree_scale as double) : 80.0d
-def networkEdgeWidthScale = spieceasiConfig.edge_width_scale != null ? (spieceasiConfig.edge_width_scale as double) : 5.0d
-def networkIsaScale = spieceasiConfig.isa_scale != null ? (spieceasiConfig.isa_scale as double) : 700.0d
-boolean networkModuleBestOnly = spieceasiConfig.containsKey('module_best_only') ? (spieceasiConfig.module_best_only as boolean) : true
-def networkModuleBestMinSize = spieceasiConfig.module_best_min_size ? (spieceasiConfig.module_best_min_size as int) : 5
-def networkModuleBestMinStability = spieceasiConfig.module_best_min_stability != null ? (spieceasiConfig.module_best_min_stability as double) : 0.7d
-boolean networkModuleIsaOnly = spieceasiConfig.containsKey('module_isa_only') ? (spieceasiConfig.module_isa_only as boolean) : false
-boolean networkModuleColorByIsa = spieceasiConfig.containsKey('module_color_by_isa') ? (spieceasiConfig.module_color_by_isa as boolean) : false
-def networkModuleIsaSource = spieceasiConfig.module_isa_source ? spieceasiConfig.module_isa_source.toString().trim().toLowerCase() : 'group1'
-if( !['group1','group2'].contains(networkModuleIsaSource) ) {
-    networkModuleIsaSource = 'group1'
-}
-def networkModuleIsaMinStat = spieceasiConfig.module_isa_min_stat != null ? (spieceasiConfig.module_isa_min_stat as double) : 0.25d
-def networkModuleIsaMaxQ = spieceasiConfig.module_isa_max_q != null ? (spieceasiConfig.module_isa_max_q as double) : 0.05d
-def networkMetadataPath = spieceasiConfig.metadata ? resolveOptionalPath(spieceasiConfig.metadata, configRoot) : metadataPlotsMetadataPath
-def networkColorCol = spieceasiConfig.color_col ?: indicspeciesColorCol
-def networkGroup1Palette = spieceasiConfig.group1_palette ?: indicspeciesGroup1Palette
-def networkGroup2Palette = spieceasiConfig.group2_palette ?: indicspeciesGroup2Palette
-def networkGroup1OrderRaw = spieceasiConfig.group1_order ?: indicspeciesGroup1Order
-List<String> networkGroup1Order = []
-if( networkGroup1OrderRaw instanceof List ) {
-    networkGroup1Order = networkGroup1OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( networkGroup1OrderRaw ) {
-    networkGroup1Order = networkGroup1OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def networkGroup2OrderRaw = spieceasiConfig.group2_order ?: indicspeciesGroup2Order
-List<String> networkGroup2Order = []
-if( networkGroup2OrderRaw instanceof List ) {
-    networkGroup2Order = networkGroup2OrderRaw.collect { it.toString().trim() }.findAll { it }
-} else if( networkGroup2OrderRaw ) {
-    networkGroup2Order = networkGroup2OrderRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def networkFocusGroup1Label = spieceasiConfig.focus_group1_label ? spieceasiConfig.focus_group1_label.toString().trim() : indicspeciesFocusGroup1Label
-def networkFocusGroup2Label = spieceasiConfig.focus_group2_label ? spieceasiConfig.focus_group2_label.toString().trim() : indicspeciesFocusGroup2Label
-boolean networkModulesEnabled = networkEnabled && (spieceasiConfig.containsKey('modules_enabled') ? (spieceasiConfig.modules_enabled as boolean) : false)
-def networkModuleMethodsRaw = spieceasiConfig.module_methods ?: 'leiden,louvain'
-List<String> networkModuleMethods = []
-if( networkModuleMethodsRaw instanceof List ) {
-    networkModuleMethods = networkModuleMethodsRaw.collect { it.toString().trim().toLowerCase() }.findAll { it }
-} else if( networkModuleMethodsRaw ) {
-    networkModuleMethods = networkModuleMethodsRaw.toString().split(/[,|]/).collect { it.trim().toLowerCase() }.findAll { it }
-}
-if( networkModuleMethods.isEmpty() ) {
-    networkModuleMethods = ['leiden','louvain']
-}
-def networkModulePrimaryMethod = spieceasiConfig.module_primary_method ? spieceasiConfig.module_primary_method.toString().trim().toLowerCase() : networkModuleMethods[0]
-if( !networkModuleMethods.contains(networkModulePrimaryMethod) ) {
-    networkModulePrimaryMethod = networkModuleMethods[0]
-}
-def networkModuleResolutionsRaw = spieceasiConfig.module_resolutions ?: '0.5,1.0,1.5'
-List<String> networkModuleResolutions = []
-if( networkModuleResolutionsRaw instanceof List ) {
-    networkModuleResolutions = networkModuleResolutionsRaw.collect { it.toString().trim() }.findAll { it }
-} else if( networkModuleResolutionsRaw ) {
-    networkModuleResolutions = networkModuleResolutionsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-if( networkModuleResolutions.isEmpty() ) {
-    networkModuleResolutions = ['1.0']
-}
-def networkModuleReps = spieceasiConfig.module_reps ? (spieceasiConfig.module_reps as int) : 25
-def networkModuleConsensusThreshold = spieceasiConfig.module_consensus_threshold != null ? (spieceasiConfig.module_consensus_threshold as double) : 0.8d
-def networkModuleSeed = spieceasiConfig.module_seed ? (spieceasiConfig.module_seed as int) : networkLayoutSeed
-def networkModulesSubPath = spieceasiConfig.modules_sub ? resolveOptionalPath(spieceasiConfig.modules_sub, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_sub.tsv").canonicalPath
-def networkModulesAllPath = spieceasiConfig.modules_all ? resolveOptionalPath(spieceasiConfig.modules_all, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_all.tsv").canonicalPath
+    boolean spieceasiEnabled = spieceasiRequested
+    def spieceasiOutputDir = spieceasiConfig.output_dir ?: 'spieceasi'
+    def spieceasiOutputDirAbs = new File(outputDir, spieceasiOutputDir).canonicalPath
+    def spieceasiPrefix = spieceasiConfig.prefix ?: 'spieceasi'
+    boolean spieceasiTranspose = spieceasiConfig.containsKey('transpose') ? (spieceasiConfig.transpose as boolean) : true
+    def spieceasiMinRelAbund = spieceasiConfig.min_rel_abund != null ? (spieceasiConfig.min_rel_abund as double) : 0d
+    def spieceasiMinPrevalence = spieceasiConfig.min_prevalence != null ? (spieceasiConfig.min_prevalence as double) : 0d
+    boolean spieceasiRemoveZeroVar = spieceasiConfig.containsKey('remove_zero_var') ? (spieceasiConfig.remove_zero_var as boolean) : true
+    def spieceasiMethod = spieceasiConfig.method ?: 'glasso'
+    def spieceasiLambdaMinRatio = spieceasiConfig.lambda_min_ratio != null ? (spieceasiConfig.lambda_min_ratio as double) : 1e-2d
+    def spieceasiNlambda = spieceasiConfig.nlambda ? (spieceasiConfig.nlambda as int) : 20
+    def spieceasiRepNum = spieceasiConfig.rep_num ? (spieceasiConfig.rep_num as int) : 50
+    def spieceasiThresh = spieceasiConfig.thresh != null ? (spieceasiConfig.thresh as double) : 0.1d
+    def spieceasiNcores = spieceasiConfig.ncores ? (spieceasiConfig.ncores as int) : pipelineThreads
+    def spieceasiSeed = spieceasiConfig.seed ? (spieceasiConfig.seed as int) : 10010
+    def spieceasiEdgeThreshold = spieceasiConfig.edge_threshold != null ? (spieceasiConfig.edge_threshold as double) : 0.1d
+    boolean spieceasiKeepNegative = spieceasiConfig.containsKey('keep_negative') ? (spieceasiConfig.keep_negative as boolean) : true
+    boolean spieceasiAllPosOnly = spieceasiConfig.containsKey('all_pos_only') ? (spieceasiConfig.all_pos_only as boolean) : false
+    def spieceasiLayoutIters = spieceasiConfig.layout_iters ? (spieceasiConfig.layout_iters as int) : 1000
+    boolean spieceasiForceFilter = spieceasiConfig.containsKey('force_filter') ? (spieceasiConfig.force_filter as boolean) : false
+    boolean spieceasiForceSpieceasi = spieceasiConfig.containsKey('force_spieceasi') ? (spieceasiConfig.force_spieceasi as boolean) : false
+    boolean spieceasiForceGraphs = spieceasiConfig.containsKey('force_graphs') ? (spieceasiConfig.force_graphs as boolean) : true
+    boolean networkRequested = spieceasiConfig.containsKey('network_enabled') ? (spieceasiConfig.network_enabled as boolean) : false
+    if( networkRequested && !indicspeciesEnabled ) {
+        exit 1, "spieceasi.network_enabled requires indicspecies.enabled to be true"
+    }
+    boolean networkEnabled = networkRequested && indicspeciesEnabled
+    def networkGraphAllPath = spieceasiConfig.graph_pos_all ? resolveOptionalPath(spieceasiConfig.graph_pos_all, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_network_pos_all.graphml").canonicalPath
+    def networkGraphThrPath = spieceasiConfig.graph_pos_sub ? resolveOptionalPath(spieceasiConfig.graph_pos_sub, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_network_pos_thr.graphml").canonicalPath
+    def networkNodeFeaturesPath = spieceasiConfig.node_features ? resolveOptionalPath(spieceasiConfig.node_features, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_node_features.csv").canonicalPath
+    if( networkEnabled && !spieceasiEnabled ) {
+        [networkGraphAllPath, networkGraphThrPath, networkNodeFeaturesPath].each { p ->
+            if( !new File(p).exists() ) {
+                exit 1, "spieceasi.network_enabled is true while spieceasi.enabled is false, but required cached file is missing: ${p}"
+            }
+        }
+    }
+    def networkModesRaw = spieceasiConfig.network_modes
+    List<String> networkModes = []
+    if( networkModesRaw instanceof List ) {
+        networkModes = networkModesRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( networkModesRaw ) {
+        networkModes = networkModesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def networkIsaOverlayGroupsRaw = spieceasiConfig.isa_overlay_groups
+    List<String> networkIsaOverlayGroups = []
+    if( networkIsaOverlayGroupsRaw instanceof List ) {
+        networkIsaOverlayGroups = networkIsaOverlayGroupsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( networkIsaOverlayGroupsRaw ) {
+        networkIsaOverlayGroups = networkIsaOverlayGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( networkIsaOverlayGroups.isEmpty() ) {
+        networkIsaOverlayGroups = indicspeciesGroupCols
+    }
+    networkIsaOverlayGroups = networkIsaOverlayGroups.findAll { indicspeciesGroupCols.contains(it) }
+    if( networkIsaOverlayGroups.isEmpty() ) {
+        networkIsaOverlayGroups = indicspeciesGroupCols
+    }
+    def allPosOnlyNetworkModes = [
+        'degree_all',
+        'abundance_all',
+        'group1_isa_all',
+        'group1_isa_all_labeled',
+        'group1_isa_mag_all',
+        'group1_isa_mag_all_labeled',
+        'group2_isa_all',
+        'group2_isa_all_labeled',
+        'group2_isa_mag_all',
+        'group2_isa_mag_all_labeled',
+        'module_all',
+        'module_all_labeled',
+        'mag_pair_all',
+        'mag_pair_all_labeled',
+        'mag_pair_tax_all',
+        'mag_pair_tax_all_labeled',
+        'phylum_abund_all',
+        'phylum_isa_all',
+        'phylum_isa_all_labeled'
+    ]
+    if( networkIsaOverlayGroups.size() > 2 ) {
+        networkIsaOverlayGroups.drop(2).eachWithIndex { groupName, offset ->
+            def idx = offset + 3
+            allPosOnlyNetworkModes.addAll([
+                "group${idx}_isa_all",
+                "group${idx}_isa_all_labeled",
+                "group${idx}_isa_mag_all"
+            ])
+        }
+    }
+    if( networkModes.isEmpty() ) {
+        networkModes = spieceasiAllPosOnly ? allPosOnlyNetworkModes : ['all']
+    }
+    if( spieceasiAllPosOnly ) {
+        def modeRemap = [
+            'all': null,
+            'degree_sub': 'degree_all',
+            'abundance_sub': 'abundance_all',
+            'group1_isa': 'group1_isa_all',
+            'group1_isa_labeled': 'group1_isa_all_labeled',
+            'group1_isa_mag': 'group1_isa_mag_all',
+            'group1_isa_mag_labeled': 'group1_isa_mag_all_labeled',
+            'group1_isa_focus': 'group1_isa_focus_all',
+            'group1_isa_focus_labeled': 'group1_isa_focus_all_labeled',
+            'group2_isa': 'group2_isa_all',
+            'group2_isa_labeled': 'group2_isa_all_labeled',
+            'group2_isa_mag': 'group2_isa_mag_all',
+            'group2_isa_mag_labeled': 'group2_isa_mag_all_labeled',
+            'module_sub': 'module_all',
+            'module_sub_labeled': 'module_all_labeled',
+            'mag_pair_sub': 'mag_pair_all',
+            'mag_pair_sub_labeled': 'mag_pair_all_labeled',
+            'mag_pair_tax_sub': 'mag_pair_tax_all',
+            'mag_pair_tax_sub_labeled': 'mag_pair_tax_all_labeled',
+            'phylum_abund': 'phylum_abund_all',
+            'phylum_isa': 'phylum_isa_all',
+            'phylum_isa_labeled': 'phylum_isa_all_labeled'
+        ]
+        networkModes = networkModes.collect { mode ->
+            def remapped = modeRemap.containsKey(mode) ? modeRemap[mode] : mode
+            if( remapped == null ) {
+                return null
+            }
+            def groupMode = (remapped =~ /^(group\d+_isa(?:_mag|_focus)?)(?:_labeled)?$/)
+            if( groupMode.matches() ) {
+                return remapped.contains('_labeled') ? "${groupMode[0][1]}_all_labeled" : "${groupMode[0][1]}_all"
+            }
+            return remapped
+        }
+            .findAll { it }
+            .unique()
+        if( networkModes.isEmpty() ) {
+            networkModes = allPosOnlyNetworkModes
+        }
+    }
+    def networkLayoutSeed = spieceasiConfig.layout_seed ? (spieceasiConfig.layout_seed as int) : 42
+    def networkLayoutScale = spieceasiConfig.layout_scale != null ? (spieceasiConfig.layout_scale as double) : 3.0d
+    def networkDegreeScale = spieceasiConfig.degree_scale != null ? (spieceasiConfig.degree_scale as double) : 80.0d
+    def networkEdgeWidthScale = spieceasiConfig.edge_width_scale != null ? (spieceasiConfig.edge_width_scale as double) : 5.0d
+    def networkIsaScale = spieceasiConfig.isa_scale != null ? (spieceasiConfig.isa_scale as double) : 700.0d
+    def networkAbundanceMinArea = spieceasiConfig.abundance_min_area != null ? (spieceasiConfig.abundance_min_area as double) : 8.0d
+    def networkAbundanceMaxArea = spieceasiConfig.abundance_max_area != null ? (spieceasiConfig.abundance_max_area as double) : 420.0d
+    def networkAbundanceScalePower = spieceasiConfig.abundance_scale_power != null ? (spieceasiConfig.abundance_scale_power as double) : 1.6d
+    boolean networkModuleBestOnly = spieceasiConfig.containsKey('module_best_only') ? (spieceasiConfig.module_best_only as boolean) : true
+    def networkModuleBestMinSize = spieceasiConfig.module_best_min_size ? (spieceasiConfig.module_best_min_size as int) : 5
+    def networkModuleBestMinStability = spieceasiConfig.module_best_min_stability != null ? (spieceasiConfig.module_best_min_stability as double) : 0.7d
+    boolean networkModuleIsaOnly = spieceasiConfig.containsKey('module_isa_only') ? (spieceasiConfig.module_isa_only as boolean) : false
+    boolean networkModuleColorByIsa = spieceasiConfig.containsKey('module_color_by_isa') ? (spieceasiConfig.module_color_by_isa as boolean) : false
+    def networkModuleIsaSource = spieceasiConfig.module_isa_source ? spieceasiConfig.module_isa_source.toString().trim() : (networkIsaOverlayGroups ? networkIsaOverlayGroups[0] : indicspeciesGroup1)
+    if( networkModuleIsaSource ==~ /^group\d+$/ ) {
+        def idx = networkModuleIsaSource.replaceFirst(/^group/, '') as int
+        if( idx >= 1 && idx <= indicspeciesGroupCols.size() ) {
+            networkModuleIsaSource = indicspeciesGroupCols[idx - 1]
+        }
+    }
+    if( !indicspeciesGroupCols.contains(networkModuleIsaSource) ) {
+        networkModuleIsaSource = indicspeciesGroupCols ? indicspeciesGroupCols[0] : 'group1'
+    }
+    def networkModuleIsaMinStat = spieceasiConfig.module_isa_min_stat != null ? (spieceasiConfig.module_isa_min_stat as double) : 0.25d
+    def networkModuleIsaMaxQ = spieceasiConfig.module_isa_max_q != null ? (spieceasiConfig.module_isa_max_q as double) : 0.05d
+    def networkMetadataPath = spieceasiConfig.metadata ? resolveOptionalPath(spieceasiConfig.metadata, configRoot) : metadataPlotsMetadataPath
+    def networkColorCol = spieceasiConfig.color_col ?: indicspeciesColorCol
+    def networkGroupPaletteMap = new LinkedHashMap<String,String>(indicspeciesGroupPaletteMap)
+    networkGroupPaletteMap.putAll(extractNamedStringMap(spieceasiConfig as Map, indicspeciesGroupCols, 'group_palettes', 'palette'))
+    def networkGroupOrderMap = new LinkedHashMap<String,List<String>>(indicspeciesGroupOrderMap)
+    networkGroupOrderMap.putAll(extractNamedListMap(spieceasiConfig as Map, indicspeciesGroupCols, 'group_orders', 'order'))
+    def networkFocusLabelMap = new LinkedHashMap<String,String>(indicspeciesFocusLabelMap)
+    networkFocusLabelMap.putAll(extractNamedStringMap(spieceasiConfig as Map, indicspeciesGroupCols, 'focus_labels', 'focus_label'))
+    def networkGroup1Palette = indicspeciesGroup1 ? (networkGroupPaletteMap[indicspeciesGroup1] ?: '') : ''
+    def networkGroup2Palette = indicspeciesGroup2 ? (networkGroupPaletteMap[indicspeciesGroup2] ?: '') : ''
+    List<String> networkGroup1Order = indicspeciesGroup1 ? (networkGroupOrderMap[indicspeciesGroup1] ?: []) : []
+    List<String> networkGroup2Order = indicspeciesGroup2 ? (networkGroupOrderMap[indicspeciesGroup2] ?: []) : []
+    def networkFocusGroup1Label = indicspeciesGroup1 ? (networkFocusLabelMap[indicspeciesGroup1] ?: '') : ''
+    def networkFocusGroup2Label = indicspeciesGroup2 ? (networkFocusLabelMap[indicspeciesGroup2] ?: '') : ''
+    def networkIsaOverlayGroupsCsv = networkIsaOverlayGroups.join(',')
+    def networkGroupPaletteJson = JsonOutput.toJson(networkGroupPaletteMap)
+    def networkGroupOrderJson = JsonOutput.toJson(networkGroupOrderMap)
+    def networkFocusLabelJson = JsonOutput.toJson(networkFocusLabelMap)
+    boolean networkModulesEnabled = networkEnabled && (spieceasiConfig.containsKey('modules_enabled') ? (spieceasiConfig.modules_enabled as boolean) : false)
+    def networkModuleMethodsRaw = spieceasiConfig.module_methods ?: 'leiden,louvain'
+    List<String> networkModuleMethods = []
+    if( networkModuleMethodsRaw instanceof List ) {
+        networkModuleMethods = networkModuleMethodsRaw.collect { it.toString().trim().toLowerCase() }.findAll { it }
+    } else if( networkModuleMethodsRaw ) {
+        networkModuleMethods = networkModuleMethodsRaw.toString().split(/[,|]/).collect { it.trim().toLowerCase() }.findAll { it }
+    }
+    if( networkModuleMethods.isEmpty() ) {
+        networkModuleMethods = ['leiden','louvain']
+    }
+    def networkModulePrimaryMethod = spieceasiConfig.module_primary_method ? spieceasiConfig.module_primary_method.toString().trim().toLowerCase() : networkModuleMethods[0]
+    if( !networkModuleMethods.contains(networkModulePrimaryMethod) ) {
+        networkModulePrimaryMethod = networkModuleMethods[0]
+    }
+    def networkModuleResolutionsRaw = spieceasiConfig.module_resolutions ?: '0.5,1.0,1.5'
+    List<String> networkModuleResolutions = []
+    if( networkModuleResolutionsRaw instanceof List ) {
+        networkModuleResolutions = networkModuleResolutionsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( networkModuleResolutionsRaw ) {
+        networkModuleResolutions = networkModuleResolutionsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( networkModuleResolutions.isEmpty() ) {
+        networkModuleResolutions = ['1.0']
+    }
+    def networkModuleReps = spieceasiConfig.module_reps ? (spieceasiConfig.module_reps as int) : 25
+    def networkModuleConsensusThreshold = spieceasiConfig.module_consensus_threshold != null ? (spieceasiConfig.module_consensus_threshold as double) : 0.8d
+    def networkModuleSeed = spieceasiConfig.module_seed ? (spieceasiConfig.module_seed as int) : networkLayoutSeed
+    def networkModulesSubPath = spieceasiConfig.modules_sub ? resolveOptionalPath(spieceasiConfig.modules_sub, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_sub.tsv").canonicalPath
+    def networkModulesAllPath = spieceasiConfig.modules_all ? resolveOptionalPath(spieceasiConfig.modules_all, configRoot) : new File(spieceasiOutputDirAbs, "${spieceasiPrefix}_modules_all.tsv").canonicalPath
 
-def masterSummaryConfig = config.master_summary ?: [:]
-boolean masterSummaryEnabled = masterSummaryConfig.containsKey('enabled') ? (masterSummaryConfig.enabled as boolean) : false
-if( masterSummaryEnabled && !metadataPlotsEnabled ) {
-    exit 1, "master_summary.enabled requires metadata_plots.enabled to be true"
-}
-def masterSummaryOutputDir = masterSummaryConfig.output_dir ?: 'summary/tables'
-def masterSummaryOutputDirAbs = resolveOutputRelative(masterSummaryOutputDir.toString(), outputDir)
-def masterSummaryClustermapsDir = masterSummaryConfig.clustermaps_dir ?: 'clustermaps'
-def masterSummaryClustermapsDirAbs = resolveOutputRelative(masterSummaryClustermapsDir.toString(), outputDir)
-def masterSummaryIndicspeciesDir = masterSummaryConfig.indicspecies_dir ?: 'indicspecies'
-def masterSummaryIndicspeciesDirAbs = resolveOutputRelative(masterSummaryIndicspeciesDir.toString(), outputDir)
-def masterSummarySpieceasiDir = masterSummaryConfig.spieceasi_dir ?: 'spieceasi'
-def masterSummarySpieceasiDirAbs = resolveOutputRelative(masterSummarySpieceasiDir.toString(), outputDir)
-def masterSummaryWhitelistRaw = masterSummaryConfig.whitelist
-List<String> masterSummaryWhitelist = []
-if( masterSummaryWhitelistRaw instanceof List ) {
-    masterSummaryWhitelist = masterSummaryWhitelistRaw.collect { it.toString().trim() }.findAll { it }
-} else if( masterSummaryWhitelistRaw ) {
-    masterSummaryWhitelist = masterSummaryWhitelistRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
-}
-def masterSummaryWhitelistCsv = masterSummaryWhitelist ? masterSummaryWhitelist.join(',') : ''
-def masterSummaryMaxDirectCols = masterSummaryConfig.max_direct_cols ? (masterSummaryConfig.max_direct_cols as int) : 300
+    def masterSummaryConfig = config.master_summary ?: [:]
+    boolean masterSummaryEnabled = masterSummaryConfig.containsKey('enabled') ? (masterSummaryConfig.enabled as boolean) : false
+    if( masterSummaryEnabled && !metadataPlotsEnabled ) {
+        exit 1, "master_summary.enabled requires metadata_plots.enabled to be true"
+    }
+    def masterSummaryOutputDir = masterSummaryConfig.output_dir ?: 'summary/tables'
+    def masterSummaryOutputDirAbs = resolveOutputRelative(masterSummaryOutputDir.toString(), outputDir)
+    def masterSummaryClustermapsDir = masterSummaryConfig.clustermaps_dir ?: 'clustermaps'
+    def masterSummaryClustermapsDirAbs = resolveOutputRelative(masterSummaryClustermapsDir.toString(), outputDir)
+    def masterSummaryIndicspeciesDir = masterSummaryConfig.indicspecies_dir ?: 'indicspecies'
+    def masterSummaryIndicspeciesDirAbs = resolveOutputRelative(masterSummaryIndicspeciesDir.toString(), outputDir)
+    def masterSummarySpieceasiDir = masterSummaryConfig.spieceasi_dir ?: 'spieceasi'
+    def masterSummarySpieceasiDirAbs = resolveOutputRelative(masterSummarySpieceasiDir.toString(), outputDir)
+    def masterSummaryAsvMagDir = masterSummaryConfig.asv_mag_dir ?: 'asv_mag_link'
+    def masterSummaryAsvMagDirAbs = resolveOutputRelative(masterSummaryAsvMagDir.toString(), outputDir)
+    def masterSummaryWhitelistRaw = masterSummaryConfig.whitelist
+    List<String> masterSummaryWhitelist = []
+    if( masterSummaryWhitelistRaw instanceof List ) {
+        masterSummaryWhitelist = masterSummaryWhitelistRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( masterSummaryWhitelistRaw ) {
+        masterSummaryWhitelist = masterSummaryWhitelistRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def masterSummaryWhitelistCsv = masterSummaryWhitelist ? masterSummaryWhitelist.join(',') : ''
+    def masterSummaryMaxDirectCols = masterSummaryConfig.max_direct_cols ? (masterSummaryConfig.max_direct_cols as int) : 300
 
-def powerAnalysisConfig = config.power_analysis ?: [:]
-boolean powerAnalysisRequested = powerAnalysisConfig.containsKey('enabled') ? (powerAnalysisConfig.enabled as boolean) : false
-if( powerAnalysisRequested && !metadataPlotsEnabled ) {
-    exit 1, "power_analysis.enabled requires metadata_plots.enabled to be true"
-}
-boolean powerAnalysisEnabled = powerAnalysisRequested
-def powerAnalysisOutputDir = powerAnalysisConfig.output_dir ?: 'power_analysis'
-def powerAnalysisOutputDirAbs = resolveOutputRelative(powerAnalysisOutputDir.toString(), outputDir)
-def powerAnalysisSampleCol = powerAnalysisConfig.sample_col ?: metadataPlotsSampleCol
-def powerAnalysisPatientCol = powerAnalysisConfig.patient_col ? powerAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
-def powerAnalysisCaseCol = powerAnalysisConfig.case_col ? powerAnalysisConfig.case_col.toString().trim() : 'Case'
-def powerAnalysisTypeCol = powerAnalysisConfig.type_col ?: metadataPlotsTypeCol
-def powerAnalysisSampleSizesCancerRaw = powerAnalysisConfig.sample_sizes_cancer ?: '6,8,10,15,20,25,30'
-def powerAnalysisSampleSizesCancer = powerAnalysisSampleSizesCancerRaw instanceof List ?
-    powerAnalysisSampleSizesCancerRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    powerAnalysisSampleSizesCancerRaw.toString().trim()
-def powerAnalysisSampleSizesStypeRaw = powerAnalysisConfig.sample_sizes_stype ?: '10,15,20,25,30,40,50'
-def powerAnalysisSampleSizesStype = powerAnalysisSampleSizesStypeRaw instanceof List ?
-    powerAnalysisSampleSizesStypeRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    powerAnalysisSampleSizesStypeRaw.toString().trim()
-def powerAnalysisNSimulations = powerAnalysisConfig.n_simulations ? (powerAnalysisConfig.n_simulations as int) : 1000
-def powerAnalysisNPerm = powerAnalysisConfig.n_perm ? (powerAnalysisConfig.n_perm as int) : 199
-def powerAnalysisAlpha = powerAnalysisConfig.alpha != null ? (powerAnalysisConfig.alpha as double) : 0.05d
-def powerAnalysisSeed = powerAnalysisConfig.seed ? (powerAnalysisConfig.seed as int) : 42
-boolean powerAnalysisSkipEstimate = powerAnalysisConfig.containsKey('skip_estimate') ? (powerAnalysisConfig.skip_estimate as boolean) : false
-boolean powerAnalysisSkipPlot = powerAnalysisConfig.containsKey('skip_plot') ? (powerAnalysisConfig.skip_plot as boolean) : false
-def powerAnalysisTransform = powerAnalysisConfig.transform ? powerAnalysisConfig.transform.toString().trim().toLowerCase() : 'none'
-if( !['none', 'rclr'].contains(powerAnalysisTransform) ) {
-    exit 1, "power_analysis.transform must be one of: none, rclr"
-}
-boolean powerAnalysisKeepContralateralInCancer = powerAnalysisConfig.containsKey('keep_contralateral_in_cancer') ? (powerAnalysisConfig.keep_contralateral_in_cancer as boolean) : false
-def powerAnalysisContralateralTypesRaw = powerAnalysisConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
-def powerAnalysisContralateralTypes = powerAnalysisContralateralTypesRaw instanceof List ?
-    powerAnalysisContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    powerAnalysisContralateralTypesRaw.toString().trim()
-def powerAnalysisIndicspeciesDir = powerAnalysisConfig.indicspecies_dir ? resolveOptionalPath(powerAnalysisConfig.indicspecies_dir, configRoot) : indicspeciesOutputDirAbs
+    def asvMagLinkConfig = config.asv_mag_link ?: [:]
+    boolean asvMagLinkEnabled = asvMagLinkConfig.containsKey('enabled') ? (asvMagLinkConfig.enabled as boolean) : false
+    def asvMagLinkBarrnapDir = asvMagLinkConfig.barrnap_dir ? resolveOptionalPath(asvMagLinkConfig.barrnap_dir, configRoot) : null
+    def asvMagLinkGenomeDir = asvMagLinkConfig.genome_fasta_dir ? resolveOptionalPath(asvMagLinkConfig.genome_fasta_dir, configRoot) : null
+    def asvMagLinkGenomeQcDir = asvMagLinkConfig.genome_qc_dir ? resolveOptionalPath(asvMagLinkConfig.genome_qc_dir, configRoot) : null
+    def asvMagLinkGenomeQcDirsRaw = asvMagLinkConfig.genome_qc_dirs
+    def asvMagLinkIdTokenIndexesRaw = asvMagLinkConfig.id_token_indexes
+    List asvMagLinkGenomeQcDirs = []
+    List asvMagLinkIdTokenIndexes = []
+    if( asvMagLinkGenomeQcDirsRaw instanceof List ) {
+        asvMagLinkGenomeQcDirs = asvMagLinkGenomeQcDirsRaw.collect { resolveOptionalPath(it, configRoot) }.findAll { it }
+    } else if( asvMagLinkGenomeQcDirsRaw ) {
+        asvMagLinkGenomeQcDirs = asvMagLinkGenomeQcDirsRaw.toString().split(/[,|]/).collect { resolveOptionalPath(it.trim(), configRoot) }.findAll { it }
+    }
+    if( asvMagLinkIdTokenIndexesRaw instanceof List ) {
+        asvMagLinkIdTokenIndexes = asvMagLinkIdTokenIndexesRaw.collect { it == null || it.toString().trim() == '' ? -1 : (it as int) }
+    } else if( asvMagLinkIdTokenIndexesRaw ) {
+        asvMagLinkIdTokenIndexes = asvMagLinkIdTokenIndexesRaw.toString().split(/[,|]/).collect { token ->
+            def trimmed = token.trim()
+            trimmed ? (trimmed as int) : -1
+        }
+    }
+    def asvMagLinkOutputDir = asvMagLinkConfig.output_dir ?: 'asv_mag_link'
+    def asvMagLinkOutputDirAbs = resolveOutputRelative(asvMagLinkOutputDir.toString(), outputDir)
+    def asvMagLinkThreads = asvMagLinkConfig.threads ? (asvMagLinkConfig.threads as int) : pipelineThreads
+    def asvMagLinkMinPident = asvMagLinkConfig.min_pident != null ? (asvMagLinkConfig.min_pident as double) : 97.0d
+    def asvMagLinkMinQcov = asvMagLinkConfig.min_qcov != null ? (asvMagLinkConfig.min_qcov as double) : 90.0d
+    def asvMagLinkTopN = asvMagLinkConfig.top_n ? (asvMagLinkConfig.top_n as int) : 5
+    def asvMagLinkPlotTopN = asvMagLinkConfig.plot_top_n ? (asvMagLinkConfig.plot_top_n as int) : 20
+    if( asvMagLinkEnabled && !asvMagLinkBarrnapDir && !asvMagLinkGenomeQcDir && !asvMagLinkGenomeQcDirs ) {
+        exit 1, "asv_mag_link.enabled requires asv_mag_link.genome_qc_dir, asv_mag_link.genome_qc_dirs, or asv_mag_link.barrnap_dir"
+    }
 
-def brayPatientAwareConfig = config.bray_patient_aware ?: [:]
-boolean brayPatientAwareRequested = brayPatientAwareConfig.containsKey('enabled') ? (brayPatientAwareConfig.enabled as boolean) : false
-if( brayPatientAwareRequested && !metadataPlotsEnabled ) {
-    exit 1, "bray_patient_aware.enabled requires metadata_plots.enabled to be true"
-}
-boolean brayPatientAwareEnabled = brayPatientAwareRequested
-def brayPatientAwareOutputDir = brayPatientAwareConfig.output_dir ?: 'bray_patient_aware'
-def brayPatientAwareOutputDirAbs = resolveOutputRelative(brayPatientAwareOutputDir.toString(), outputDir)
-def brayPatientAwareSampleCol = brayPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
-def brayPatientAwarePatientCol = brayPatientAwareConfig.patient_col ? brayPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
-def brayPatientAwareCaseCol = brayPatientAwareConfig.case_col ? brayPatientAwareConfig.case_col.toString().trim() : 'Case'
-def brayPatientAwareTypeCol = brayPatientAwareConfig.type_col ?: metadataPlotsTypeCol
-def brayPatientAwareSampleTypesRaw = brayPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
-def brayPatientAwareSampleTypes = brayPatientAwareSampleTypesRaw instanceof List ?
-    brayPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    brayPatientAwareSampleTypesRaw.toString().trim()
-boolean brayPatientAwareExcludeContralateral = brayPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (brayPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
-def brayPatientAwareContralateralCol = brayPatientAwareConfig.contralateral_col ? brayPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
-def brayPatientAwareCancerSiteCol = brayPatientAwareConfig.cancer_site_col ? brayPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
-def brayPatientAwareLungSideCol = brayPatientAwareConfig.lung_side_col ? brayPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
-def brayPatientAwareContralateralValue = brayPatientAwareConfig.contralateral_value ? brayPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
-def brayPatientAwareContralateralTypesRaw = brayPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
-def brayPatientAwareContralateralTypes = brayPatientAwareContralateralTypesRaw instanceof List ?
-    brayPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    brayPatientAwareContralateralTypesRaw.toString().trim()
-def brayPatientAwareTransform = brayPatientAwareConfig.transform ? brayPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
-if( !['none', 'rclr'].contains(brayPatientAwareTransform) ) {
-    exit 1, "bray_patient_aware.transform must be one of: none, rclr"
-}
-def brayPatientAwarePermutations = brayPatientAwareConfig.permutations ? (brayPatientAwareConfig.permutations as int) : 9999
-def brayPatientAwareSeed = brayPatientAwareConfig.seed ? (brayPatientAwareConfig.seed as int) : 42
-boolean brayPatientAwareRequireCompleteTypes = brayPatientAwareConfig.containsKey('require_complete_types') ? (brayPatientAwareConfig.require_complete_types as boolean) : false
+    def biochemNetworkOverlayConfig = config.biochem_network_overlay ?: [:]
+    boolean biochemNetworkOverlayRequested = biochemNetworkOverlayConfig.containsKey('enabled') ? (biochemNetworkOverlayConfig.enabled as boolean) : false
+    if( biochemNetworkOverlayRequested && !biochemPreAsvEnabled ) {
+        exit 1, "biochem_network_overlay.enabled requires biochem_pre_asv.enabled to be true"
+    }
+    if( biochemNetworkOverlayRequested && !metadataPlotsEnabled ) {
+        exit 1, "biochem_network_overlay.enabled requires metadata_plots.enabled to be true"
+    }
+    if( biochemNetworkOverlayRequested && !networkEnabled ) {
+        exit 1, "biochem_network_overlay.enabled requires spieceasi.network_enabled/network to be true"
+    }
+    if( biochemNetworkOverlayRequested && !asvMagLinkEnabled ) {
+        exit 1, "biochem_network_overlay.enabled requires asv_mag_link.enabled to be true"
+    }
+    boolean biochemNetworkOverlayEnabled = biochemNetworkOverlayRequested
+    def biochemNetworkOverlayOutputDir = biochemNetworkOverlayConfig.output_dir ?: 'biochem_network_overlay'
+    def biochemNetworkOverlayOutputDirAbs = resolveOutputRelative(biochemNetworkOverlayOutputDir.toString(), outputDir)
+    def biochemNetworkOverlaySampleCol = biochemNetworkOverlayConfig.sample_col ?: metadataPlotsSampleCol
+    def biochemNetworkOverlayOrdinationX = biochemNetworkOverlayConfig.ordination_x ? biochemNetworkOverlayConfig.ordination_x.toString().trim() : 'PC1'
+    def biochemNetworkOverlayOrdinationY = biochemNetworkOverlayConfig.ordination_y ? biochemNetworkOverlayConfig.ordination_y.toString().trim() : 'PC2'
+    def biochemNetworkOverlayTopModules = biochemNetworkOverlayConfig.top_modules ? (biochemNetworkOverlayConfig.top_modules as int) : 8
+    def biochemNetworkOverlayTopVectors = biochemNetworkOverlayConfig.top_vectors ? (biochemNetworkOverlayConfig.top_vectors as int) : 10
+    def biochemNetworkOverlayHullQuantile = biochemNetworkOverlayConfig.module_hull_quantile != null ? (biochemNetworkOverlayConfig.module_hull_quantile as double) : 0.75d
+    def biochemNetworkOverlayMinSamplesPerHull = biochemNetworkOverlayConfig.min_samples_per_hull ? (biochemNetworkOverlayConfig.min_samples_per_hull as int) : 4
+    def biochemNetworkOverlayMinAsvsPerModule = biochemNetworkOverlayConfig.min_asvs_per_module ? (biochemNetworkOverlayConfig.min_asvs_per_module as int) : 3
+    def biochemNetworkOverlayModesRaw = biochemNetworkOverlayConfig.modes
+    List<String> biochemNetworkOverlayModes = []
+    if( biochemNetworkOverlayModesRaw instanceof List ) {
+        biochemNetworkOverlayModes = biochemNetworkOverlayModesRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( biochemNetworkOverlayModesRaw ) {
+        biochemNetworkOverlayModes = biochemNetworkOverlayModesRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( biochemNetworkOverlayModes.isEmpty() ) {
+        biochemNetworkOverlayModes = ['module']
+    }
+    def biochemNetworkOverlayIsaGroupsRaw = biochemNetworkOverlayConfig.isa_overlay_groups
+    List<String> biochemNetworkOverlayIsaGroups = []
+    if( biochemNetworkOverlayIsaGroupsRaw instanceof List ) {
+        biochemNetworkOverlayIsaGroups = biochemNetworkOverlayIsaGroupsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( biochemNetworkOverlayIsaGroupsRaw ) {
+        biochemNetworkOverlayIsaGroups = biochemNetworkOverlayIsaGroupsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    if( biochemNetworkOverlayIsaGroups.isEmpty() ) {
+        biochemNetworkOverlayIsaGroups = networkIsaOverlayGroups
+    }
+    biochemNetworkOverlayIsaGroups = biochemNetworkOverlayIsaGroups.findAll { indicspeciesGroupCols.contains(it) }
+    if( biochemNetworkOverlayIsaGroups.isEmpty() ) {
+        biochemNetworkOverlayIsaGroups = indicspeciesGroupCols
+    }
+    def biochemNetworkOverlayGroupPaletteMap = new LinkedHashMap<String,String>(indicspeciesGroupPaletteMap)
+    biochemNetworkOverlayGroupPaletteMap.putAll(extractNamedStringMap(biochemNetworkOverlayConfig as Map, indicspeciesGroupCols, 'group_palettes', 'palette'))
+    def biochemNetworkOverlayGroupOrderMap = new LinkedHashMap<String,List<String>>(indicspeciesGroupOrderMap)
+    biochemNetworkOverlayGroupOrderMap.putAll(extractNamedListMap(biochemNetworkOverlayConfig as Map, indicspeciesGroupCols, 'group_orders', 'order'))
+    def biochemNetworkOverlayIsaGroupsCsv = biochemNetworkOverlayIsaGroups.join(',')
+    def biochemNetworkOverlayGroupPaletteJson = JsonOutput.toJson(biochemNetworkOverlayGroupPaletteMap)
+    def biochemNetworkOverlayGroupOrderJson = JsonOutput.toJson(biochemNetworkOverlayGroupOrderMap)
 
-def taxonomyPatientAwareConfig = config.taxonomy_patient_aware ?: [:]
-boolean taxonomyPatientAwareRequested = taxonomyPatientAwareConfig.containsKey('enabled') ? (taxonomyPatientAwareConfig.enabled as boolean) : false
-if( taxonomyPatientAwareRequested && !metadataPlotsEnabled ) {
-    exit 1, "taxonomy_patient_aware.enabled requires metadata_plots.enabled to be true"
-}
-boolean taxonomyPatientAwareEnabled = taxonomyPatientAwareRequested
-def taxonomyPatientAwareOutputDir = taxonomyPatientAwareConfig.output_dir ?: 'taxonomy_patient_aware'
-def taxonomyPatientAwareOutputDirAbs = resolveOutputRelative(taxonomyPatientAwareOutputDir.toString(), outputDir)
-def taxonomyPatientAwareSampleCol = taxonomyPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
-def taxonomyPatientAwarePatientCol = taxonomyPatientAwareConfig.patient_col ? taxonomyPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
-def taxonomyPatientAwareCaseCol = taxonomyPatientAwareConfig.case_col ? taxonomyPatientAwareConfig.case_col.toString().trim() : 'Case'
-def taxonomyPatientAwareTypeCol = taxonomyPatientAwareConfig.type_col ?: metadataPlotsTypeCol
-def taxonomyPatientAwareCountCol = taxonomyPatientAwareConfig.count_col ? taxonomyPatientAwareConfig.count_col.toString().trim() : 'count'
-def taxonomyPatientAwareTaxLevelsRaw = taxonomyPatientAwareConfig.tax_levels ?: 'Phylum,Family'
-def taxonomyPatientAwareTaxLevels = taxonomyPatientAwareTaxLevelsRaw instanceof List ?
-    taxonomyPatientAwareTaxLevelsRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    taxonomyPatientAwareTaxLevelsRaw.toString().trim()
-def taxonomyPatientAwareSampleTypesRaw = taxonomyPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
-def taxonomyPatientAwareSampleTypes = taxonomyPatientAwareSampleTypesRaw instanceof List ?
-    taxonomyPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    taxonomyPatientAwareSampleTypesRaw.toString().trim()
-def taxonomyPatientAwareMinPrevalence = taxonomyPatientAwareConfig.min_prevalence != null ? (taxonomyPatientAwareConfig.min_prevalence as double) : 0.10d
-boolean taxonomyPatientAwareExcludeContralateral = taxonomyPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (taxonomyPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
-def taxonomyPatientAwareContralateralCol = taxonomyPatientAwareConfig.contralateral_col ? taxonomyPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
-def taxonomyPatientAwareCancerSiteCol = taxonomyPatientAwareConfig.cancer_site_col ? taxonomyPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
-def taxonomyPatientAwareLungSideCol = taxonomyPatientAwareConfig.lung_side_col ? taxonomyPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
-def taxonomyPatientAwareContralateralValue = taxonomyPatientAwareConfig.contralateral_value ? taxonomyPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
-def taxonomyPatientAwareContralateralTypesRaw = taxonomyPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
-def taxonomyPatientAwareContralateralTypes = taxonomyPatientAwareContralateralTypesRaw instanceof List ?
-    taxonomyPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    taxonomyPatientAwareContralateralTypesRaw.toString().trim()
-boolean taxonomyPatientAwareSkipOmnibus = taxonomyPatientAwareConfig.containsKey('skip_omnibus') ? (taxonomyPatientAwareConfig.skip_omnibus as boolean) : false
-def taxonomyPatientAwareTransform = taxonomyPatientAwareConfig.transform ? taxonomyPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
-if( !['none', 'rclr'].contains(taxonomyPatientAwareTransform) ) {
-    exit 1, "taxonomy_patient_aware.transform must be one of: none, rclr"
-}
-def taxonomyPatientAwareAlpha = taxonomyPatientAwareConfig.alpha != null ? (taxonomyPatientAwareConfig.alpha as double) : 0.05d
-def taxonomyPatientAwareTopN = taxonomyPatientAwareConfig.top_n ? (taxonomyPatientAwareConfig.top_n as int) : 12
+    def powerAnalysisConfig = config.power_analysis ?: [:]
+    boolean powerAnalysisRequested = powerAnalysisConfig.containsKey('enabled') ? (powerAnalysisConfig.enabled as boolean) : false
+    if( powerAnalysisRequested && !metadataPlotsEnabled ) {
+        exit 1, "power_analysis.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean powerAnalysisEnabled = powerAnalysisRequested
+    def powerAnalysisOutputDir = powerAnalysisConfig.output_dir ?: 'power_analysis'
+    def powerAnalysisOutputDirAbs = resolveOutputRelative(powerAnalysisOutputDir.toString(), outputDir)
+    def powerAnalysisSampleCol = powerAnalysisConfig.sample_col ?: metadataPlotsSampleCol
+    def powerAnalysisPatientCol = powerAnalysisConfig.patient_col ? powerAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
+    def powerAnalysisCaseCol = powerAnalysisConfig.case_col ? powerAnalysisConfig.case_col.toString().trim() : 'Case'
+    def powerAnalysisTypeCol = powerAnalysisConfig.type_col ?: metadataPlotsTypeCol
+    def powerAnalysisSampleSizesCancerRaw = powerAnalysisConfig.sample_sizes_cancer ?: '6,8,10,15,20,25,30'
+    def powerAnalysisSampleSizesCancer = powerAnalysisSampleSizesCancerRaw instanceof List ?
+        powerAnalysisSampleSizesCancerRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        powerAnalysisSampleSizesCancerRaw.toString().trim()
+    def powerAnalysisSampleSizesStypeRaw = powerAnalysisConfig.sample_sizes_stype ?: '10,15,20,25,30,40,50'
+    def powerAnalysisSampleSizesStype = powerAnalysisSampleSizesStypeRaw instanceof List ?
+        powerAnalysisSampleSizesStypeRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        powerAnalysisSampleSizesStypeRaw.toString().trim()
+    def powerAnalysisNSimulations = powerAnalysisConfig.n_simulations ? (powerAnalysisConfig.n_simulations as int) : 1000
+    def powerAnalysisNPerm = powerAnalysisConfig.n_perm ? (powerAnalysisConfig.n_perm as int) : 199
+    def powerAnalysisAlpha = powerAnalysisConfig.alpha != null ? (powerAnalysisConfig.alpha as double) : 0.05d
+    def powerAnalysisSeed = powerAnalysisConfig.seed ? (powerAnalysisConfig.seed as int) : 42
+    boolean powerAnalysisSkipEstimate = powerAnalysisConfig.containsKey('skip_estimate') ? (powerAnalysisConfig.skip_estimate as boolean) : false
+    boolean powerAnalysisSkipPlot = powerAnalysisConfig.containsKey('skip_plot') ? (powerAnalysisConfig.skip_plot as boolean) : false
+    def powerAnalysisTransform = powerAnalysisConfig.transform ? powerAnalysisConfig.transform.toString().trim().toLowerCase() : 'none'
+    if( !['none', 'rclr'].contains(powerAnalysisTransform) ) {
+        exit 1, "power_analysis.transform must be one of: none, rclr"
+    }
+    boolean powerAnalysisKeepContralateralInCancer = powerAnalysisConfig.containsKey('keep_contralateral_in_cancer') ? (powerAnalysisConfig.keep_contralateral_in_cancer as boolean) : false
+    def powerAnalysisContralateralTypesRaw = powerAnalysisConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+    def powerAnalysisContralateralTypes = powerAnalysisContralateralTypesRaw instanceof List ?
+        powerAnalysisContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        powerAnalysisContralateralTypesRaw.toString().trim()
+    def powerAnalysisIndicspeciesDir = powerAnalysisConfig.indicspecies_dir ? resolveOptionalPath(powerAnalysisConfig.indicspecies_dir, configRoot) : indicspeciesOutputDirAbs
 
-def lungStatusAnalysisConfig = config.lung_status_analysis ?: [:]
-boolean lungStatusAnalysisRequested = lungStatusAnalysisConfig.containsKey('enabled') ? (lungStatusAnalysisConfig.enabled as boolean) : false
-if( lungStatusAnalysisRequested && !metadataPlotsEnabled ) {
-    exit 1, "lung_status_analysis.enabled requires metadata_plots.enabled to be true"
+    def brayPatientAwareConfig = config.bray_patient_aware ?: [:]
+    boolean brayPatientAwareRequested = brayPatientAwareConfig.containsKey('enabled') ? (brayPatientAwareConfig.enabled as boolean) : false
+    if( brayPatientAwareRequested && !metadataPlotsEnabled ) {
+        exit 1, "bray_patient_aware.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean brayPatientAwareEnabled = brayPatientAwareRequested
+    def brayPatientAwareOutputDir = brayPatientAwareConfig.output_dir ?: 'bray_patient_aware'
+    def brayPatientAwareOutputDirAbs = resolveOutputRelative(brayPatientAwareOutputDir.toString(), outputDir)
+    def brayPatientAwareSampleCol = brayPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
+    def brayPatientAwarePatientCol = brayPatientAwareConfig.patient_col ? brayPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
+    def brayPatientAwareCaseCol = brayPatientAwareConfig.case_col ? brayPatientAwareConfig.case_col.toString().trim() : 'Case'
+    def brayPatientAwareTypeCol = brayPatientAwareConfig.type_col ?: metadataPlotsTypeCol
+    def brayPatientAwareSampleTypesRaw = brayPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
+    def brayPatientAwareSampleTypes = brayPatientAwareSampleTypesRaw instanceof List ?
+        brayPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        brayPatientAwareSampleTypesRaw.toString().trim()
+    boolean brayPatientAwareExcludeContralateral = brayPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (brayPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
+    def brayPatientAwareContralateralCol = brayPatientAwareConfig.contralateral_col ? brayPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
+    def brayPatientAwareCancerSiteCol = brayPatientAwareConfig.cancer_site_col ? brayPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+    def brayPatientAwareLungSideCol = brayPatientAwareConfig.lung_side_col ? brayPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
+    def brayPatientAwareContralateralValue = brayPatientAwareConfig.contralateral_value ? brayPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
+    def brayPatientAwareContralateralTypesRaw = brayPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+    def brayPatientAwareContralateralTypes = brayPatientAwareContralateralTypesRaw instanceof List ?
+        brayPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        brayPatientAwareContralateralTypesRaw.toString().trim()
+    def brayPatientAwareTransform = brayPatientAwareConfig.transform ? brayPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
+    if( !['none', 'rclr'].contains(brayPatientAwareTransform) ) {
+        exit 1, "bray_patient_aware.transform must be one of: none, rclr"
+    }
+    def brayPatientAwarePermutations = brayPatientAwareConfig.permutations ? (brayPatientAwareConfig.permutations as int) : 9999
+    def brayPatientAwareSeed = brayPatientAwareConfig.seed ? (brayPatientAwareConfig.seed as int) : 42
+    boolean brayPatientAwareRequireCompleteTypes = brayPatientAwareConfig.containsKey('require_complete_types') ? (brayPatientAwareConfig.require_complete_types as boolean) : false
+
+    def taxonomyPatientAwareConfig = config.taxonomy_patient_aware ?: [:]
+    boolean taxonomyPatientAwareRequested = taxonomyPatientAwareConfig.containsKey('enabled') ? (taxonomyPatientAwareConfig.enabled as boolean) : false
+    if( taxonomyPatientAwareRequested && !metadataPlotsEnabled ) {
+        exit 1, "taxonomy_patient_aware.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean taxonomyPatientAwareEnabled = taxonomyPatientAwareRequested
+    def taxonomyPatientAwareOutputDir = taxonomyPatientAwareConfig.output_dir ?: 'taxonomy_patient_aware'
+    def taxonomyPatientAwareOutputDirAbs = resolveOutputRelative(taxonomyPatientAwareOutputDir.toString(), outputDir)
+    def taxonomyPatientAwareSampleCol = taxonomyPatientAwareConfig.sample_col ?: metadataPlotsSampleCol
+    def taxonomyPatientAwarePatientCol = taxonomyPatientAwareConfig.patient_col ? taxonomyPatientAwareConfig.patient_col.toString().trim() : 'Participant_ID'
+    def taxonomyPatientAwareCaseCol = taxonomyPatientAwareConfig.case_col ? taxonomyPatientAwareConfig.case_col.toString().trim() : 'Case'
+    def taxonomyPatientAwareTypeCol = taxonomyPatientAwareConfig.type_col ?: metadataPlotsTypeCol
+    def taxonomyPatientAwareCountCol = taxonomyPatientAwareConfig.count_col ? taxonomyPatientAwareConfig.count_col.toString().trim() : 'count'
+    def taxonomyPatientAwareTaxLevelsRaw = taxonomyPatientAwareConfig.tax_levels ?: 'Phylum,Family'
+    def taxonomyPatientAwareTaxLevels = taxonomyPatientAwareTaxLevelsRaw instanceof List ?
+        taxonomyPatientAwareTaxLevelsRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        taxonomyPatientAwareTaxLevelsRaw.toString().trim()
+    def taxonomyPatientAwareSampleTypesRaw = taxonomyPatientAwareConfig.sample_types ?: 'Oral Rinse,BAL,Lung Brush'
+    def taxonomyPatientAwareSampleTypes = taxonomyPatientAwareSampleTypesRaw instanceof List ?
+        taxonomyPatientAwareSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        taxonomyPatientAwareSampleTypesRaw.toString().trim()
+    def taxonomyPatientAwareMinPrevalence = taxonomyPatientAwareConfig.min_prevalence != null ? (taxonomyPatientAwareConfig.min_prevalence as double) : 0.10d
+    boolean taxonomyPatientAwareExcludeContralateral = taxonomyPatientAwareConfig.containsKey('exclude_contralateral_in_cancer') ? (taxonomyPatientAwareConfig.exclude_contralateral_in_cancer as boolean) : true
+    def taxonomyPatientAwareContralateralCol = taxonomyPatientAwareConfig.contralateral_col ? taxonomyPatientAwareConfig.contralateral_col.toString().trim() : 'lung_status'
+    def taxonomyPatientAwareCancerSiteCol = taxonomyPatientAwareConfig.cancer_site_col ? taxonomyPatientAwareConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+    def taxonomyPatientAwareLungSideCol = taxonomyPatientAwareConfig.lung_side_col ? taxonomyPatientAwareConfig.lung_side_col.toString().trim() : 'lung_code'
+    def taxonomyPatientAwareContralateralValue = taxonomyPatientAwareConfig.contralateral_value ? taxonomyPatientAwareConfig.contralateral_value.toString().trim() : 'Contralateral'
+    def taxonomyPatientAwareContralateralTypesRaw = taxonomyPatientAwareConfig.contralateral_sample_types ?: 'Lung Brush,BAL'
+    def taxonomyPatientAwareContralateralTypes = taxonomyPatientAwareContralateralTypesRaw instanceof List ?
+        taxonomyPatientAwareContralateralTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        taxonomyPatientAwareContralateralTypesRaw.toString().trim()
+    boolean taxonomyPatientAwareSkipOmnibus = taxonomyPatientAwareConfig.containsKey('skip_omnibus') ? (taxonomyPatientAwareConfig.skip_omnibus as boolean) : false
+    def taxonomyPatientAwareTransform = taxonomyPatientAwareConfig.transform ? taxonomyPatientAwareConfig.transform.toString().trim().toLowerCase() : 'none'
+    if( !['none', 'rclr'].contains(taxonomyPatientAwareTransform) ) {
+        exit 1, "taxonomy_patient_aware.transform must be one of: none, rclr"
+    }
+    def taxonomyPatientAwareAlpha = taxonomyPatientAwareConfig.alpha != null ? (taxonomyPatientAwareConfig.alpha as double) : 0.05d
+    def taxonomyPatientAwareTopN = taxonomyPatientAwareConfig.top_n ? (taxonomyPatientAwareConfig.top_n as int) : 12
+
+    def lungStatusAnalysisConfig = config.lung_status_analysis ?: [:]
+    boolean lungStatusAnalysisRequested = lungStatusAnalysisConfig.containsKey('enabled') ? (lungStatusAnalysisConfig.enabled as boolean) : false
+    if( lungStatusAnalysisRequested && !metadataPlotsEnabled ) {
+        exit 1, "lung_status_analysis.enabled requires metadata_plots.enabled to be true"
+    }
+    boolean lungStatusAnalysisEnabled = lungStatusAnalysisRequested
+    def lungStatusAnalysisOutputDir = lungStatusAnalysisConfig.output_dir ?: 'lung_status_analysis'
+    def lungStatusAnalysisOutputDirAbs = resolveOutputRelative(lungStatusAnalysisOutputDir.toString(), outputDir)
+    def lungStatusAnalysisSampleCol = lungStatusAnalysisConfig.sample_col ?: metadataPlotsSampleCol
+    def lungStatusAnalysisTypeCol = lungStatusAnalysisConfig.type_col ?: metadataPlotsTypeCol
+    def lungStatusAnalysisSampleTypesRaw = lungStatusAnalysisConfig.sample_types ?: 'Lung Brush,BAL'
+    def lungStatusAnalysisSampleTypes = lungStatusAnalysisSampleTypesRaw instanceof List ?
+        lungStatusAnalysisSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
+        lungStatusAnalysisSampleTypesRaw.toString().trim()
+    def lungStatusAnalysisCaseCol = lungStatusAnalysisConfig.case_col ? lungStatusAnalysisConfig.case_col.toString().trim() : 'Case'
+    def lungStatusAnalysisPatientCol = lungStatusAnalysisConfig.patient_col ? lungStatusAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
+    def lungStatusAnalysisCancerSiteCol = lungStatusAnalysisConfig.cancer_site_col ? lungStatusAnalysisConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
+    def lungStatusAnalysisLungCodeCol = lungStatusAnalysisConfig.lung_code_col ? lungStatusAnalysisConfig.lung_code_col.toString().trim() : 'lung_code'
+    def lungStatusAnalysisTumorSideCol = lungStatusAnalysisConfig.tumor_side_col ? lungStatusAnalysisConfig.tumor_side_col.toString().trim() : 'TumorSide'
+    def lungStatusAnalysisContralateralCol = lungStatusAnalysisConfig.contralateral_col ? lungStatusAnalysisConfig.contralateral_col.toString().trim() : 'Contralateral'
+    def lungStatusAnalysisHealthyCol = lungStatusAnalysisConfig.healthy_col ? lungStatusAnalysisConfig.healthy_col.toString().trim() : 'Healthy'
+    def lungStatusAnalysisStatusCol = lungStatusAnalysisConfig.lung_status_col ? lungStatusAnalysisConfig.lung_status_col.toString().trim() : 'lung_status'
+    return [
+        metadataPlotsEnabled: metadataPlotsEnabled,
+        metadataPlotsMetadataPath: metadataPlotsMetadataPath,
+        metadataPlotsSampleCol: metadataPlotsSampleCol,
+        metadataPlotsTypeCol: metadataPlotsTypeCol,
+        metadataPlotsColorCol: metadataPlotsColorCol,
+        metadataPlotsGroupOrder: metadataPlotsGroupOrder,
+        biochemPreAsvEnabled: biochemPreAsvEnabled,
+        biochemPcaDirAbs: biochemPcaDirAbs,
+        indicspeciesSampleCol: indicspeciesSampleCol,
+        indicspeciesPerms: indicspeciesPerms,
+        indicspeciesMinN: indicspeciesMinN,
+        indicspeciesBlockCol: indicspeciesBlockCol,
+        indicspeciesGroup1: indicspeciesGroup1,
+        indicspeciesGroup2: indicspeciesGroup2,
+        indicspeciesOutputDirAbs: indicspeciesOutputDirAbs,
+        indicspeciesPlotPairsMode: indicspeciesPlotPairsMode,
+        indicspeciesPlotOutputDirAbs: indicspeciesPlotOutputDirAbs,
+        indicspeciesPlotVennPath: indicspeciesPlotVennPath,
+        indicspeciesPlotTaxonomyPath: indicspeciesPlotTaxonomyPath,
+        indicspeciesColorCol: indicspeciesColorCol,
+        indicspeciesGroupPaletteJson: indicspeciesGroupPaletteJson,
+        indicspeciesGroupOrderJson: indicspeciesGroupOrderJson,
+        indicspeciesFocusLabelJson: indicspeciesFocusLabelJson,
+        indicspeciesAlignedOutputDirAbs: indicspeciesAlignedOutputDirAbs,
+        indicspeciesAlignedAlpha: indicspeciesAlignedAlpha,
+        indicspeciesAlignedMinStat: indicspeciesAlignedMinStat,
+        indicspeciesAlignedTopN: indicspeciesAlignedTopN,
+        clustermapsOutputDirAbs: clustermapsOutputDirAbs,
+        clustermapsMitoOutputDirAbs: clustermapsMitoOutputDirAbs,
+        clustermapsMitoInputPath: clustermapsMitoInputPath,
+        clustermapsIsaFile: clustermapsIsaFile,
+        clustermapsIsaSearchDir: clustermapsIsaSearchDir,
+        clustermapsSampleCol: clustermapsSampleCol,
+        clustermapsSampleCodeCol: clustermapsSampleCodeCol,
+        clustermapsAsvIdCol: clustermapsAsvIdCol,
+        clustermapsGroup1Col: clustermapsGroup1Col,
+        clustermapsGroup2Col: clustermapsGroup2Col,
+        clustermapsGroup3Col: clustermapsGroup3Col,
+        clustermapsExcludeGroup1: clustermapsExcludeGroup1,
+        clustermapsGroup1Palette: clustermapsGroup1Palette,
+        clustermapsGroup2Palette: clustermapsGroup2Palette,
+        clustermapsGroup3Palette: clustermapsGroup3Palette,
+        clustermapsRanks: clustermapsRanks,
+        clustermapsTopN: clustermapsTopN,
+        clustermapsCountCol: clustermapsCountCol,
+        clustermapsIsaMinStat: clustermapsIsaMinStat,
+        clustermapsIsaSignificanceCols: clustermapsIsaSignificanceCols,
+        clustermapsIsaStatCols: clustermapsIsaStatCols,
+        clustermapsFormats: clustermapsFormats,
+        clustermapsFigWidth: clustermapsFigWidth,
+        clustermapsRowHeight: clustermapsRowHeight,
+        clustermapsMinHeight: clustermapsMinHeight,
+        clustermapsMaxHeight: clustermapsMaxHeight,
+        clustermapsMitoSampleMode: clustermapsMitoSampleMode,
+        clustermapsIsaAutoCandidates: clustermapsIsaAutoCandidates,
+        spieceasiOutputDirAbs: spieceasiOutputDirAbs,
+        spieceasiPrefix: spieceasiPrefix,
+        spieceasiMinRelAbund: spieceasiMinRelAbund,
+        spieceasiMinPrevalence: spieceasiMinPrevalence,
+        spieceasiMethod: spieceasiMethod,
+        spieceasiLambdaMinRatio: spieceasiLambdaMinRatio,
+        spieceasiNlambda: spieceasiNlambda,
+        spieceasiRepNum: spieceasiRepNum,
+        spieceasiThresh: spieceasiThresh,
+        spieceasiNcores: spieceasiNcores,
+        spieceasiSeed: spieceasiSeed,
+        spieceasiEdgeThreshold: spieceasiEdgeThreshold,
+        spieceasiLayoutIters: spieceasiLayoutIters,
+        networkGraphAllPath: networkGraphAllPath,
+        networkGraphThrPath: networkGraphThrPath,
+        networkNodeFeaturesPath: networkNodeFeaturesPath,
+        networkLayoutSeed: networkLayoutSeed,
+        networkLayoutScale: networkLayoutScale,
+        networkDegreeScale: networkDegreeScale,
+        networkEdgeWidthScale: networkEdgeWidthScale,
+        networkIsaScale: networkIsaScale,
+        networkAbundanceMinArea: networkAbundanceMinArea,
+        networkAbundanceMaxArea: networkAbundanceMaxArea,
+        networkAbundanceScalePower: networkAbundanceScalePower,
+        networkModuleBestMinSize: networkModuleBestMinSize,
+        networkModuleBestMinStability: networkModuleBestMinStability,
+        networkModuleIsaSource: networkModuleIsaSource,
+        networkModuleIsaMinStat: networkModuleIsaMinStat,
+        networkModuleIsaMaxQ: networkModuleIsaMaxQ,
+        networkMetadataPath: networkMetadataPath,
+        networkColorCol: networkColorCol,
+        networkIsaOverlayGroupsCsv: networkIsaOverlayGroupsCsv,
+        networkGroupPaletteJson: networkGroupPaletteJson,
+        networkGroupOrderJson: networkGroupOrderJson,
+        networkFocusLabelJson: networkFocusLabelJson,
+        networkModulePrimaryMethod: networkModulePrimaryMethod,
+        networkModuleReps: networkModuleReps,
+        networkModuleConsensusThreshold: networkModuleConsensusThreshold,
+        networkModuleSeed: networkModuleSeed,
+        networkModulesSubPath: networkModulesSubPath,
+        networkModulesAllPath: networkModulesAllPath,
+        masterSummaryOutputDirAbs: masterSummaryOutputDirAbs,
+        masterSummaryClustermapsDirAbs: masterSummaryClustermapsDirAbs,
+        masterSummaryIndicspeciesDirAbs: masterSummaryIndicspeciesDirAbs,
+        masterSummarySpieceasiDirAbs: masterSummarySpieceasiDirAbs,
+        masterSummaryAsvMagDirAbs: masterSummaryAsvMagDirAbs,
+        masterSummaryWhitelistCsv: masterSummaryWhitelistCsv,
+        masterSummaryMaxDirectCols: masterSummaryMaxDirectCols,
+        asvMagLinkBarrnapDir: asvMagLinkBarrnapDir,
+        asvMagLinkGenomeDir: asvMagLinkGenomeDir,
+        asvMagLinkGenomeQcDir: asvMagLinkGenomeQcDir,
+        asvMagLinkOutputDirAbs: asvMagLinkOutputDirAbs,
+        asvMagLinkThreads: asvMagLinkThreads,
+        asvMagLinkMinPident: asvMagLinkMinPident,
+        asvMagLinkMinQcov: asvMagLinkMinQcov,
+        asvMagLinkTopN: asvMagLinkTopN,
+        asvMagLinkPlotTopN: asvMagLinkPlotTopN,
+        biochemNetworkOverlayOutputDirAbs: biochemNetworkOverlayOutputDirAbs,
+        biochemNetworkOverlaySampleCol: biochemNetworkOverlaySampleCol,
+        biochemNetworkOverlayOrdinationX: biochemNetworkOverlayOrdinationX,
+        biochemNetworkOverlayOrdinationY: biochemNetworkOverlayOrdinationY,
+        biochemNetworkOverlayTopModules: biochemNetworkOverlayTopModules,
+        biochemNetworkOverlayTopVectors: biochemNetworkOverlayTopVectors,
+        biochemNetworkOverlayHullQuantile: biochemNetworkOverlayHullQuantile,
+        biochemNetworkOverlayMinSamplesPerHull: biochemNetworkOverlayMinSamplesPerHull,
+        biochemNetworkOverlayMinAsvsPerModule: biochemNetworkOverlayMinAsvsPerModule,
+        biochemNetworkOverlayIsaGroupsCsv: biochemNetworkOverlayIsaGroupsCsv,
+        biochemNetworkOverlayGroupPaletteJson: biochemNetworkOverlayGroupPaletteJson,
+        biochemNetworkOverlayGroupOrderJson: biochemNetworkOverlayGroupOrderJson,
+        powerAnalysisOutputDirAbs: powerAnalysisOutputDirAbs,
+        powerAnalysisSampleCol: powerAnalysisSampleCol,
+        powerAnalysisPatientCol: powerAnalysisPatientCol,
+        powerAnalysisCaseCol: powerAnalysisCaseCol,
+        powerAnalysisTypeCol: powerAnalysisTypeCol,
+        powerAnalysisSampleSizesCancer: powerAnalysisSampleSizesCancer,
+        powerAnalysisSampleSizesStype: powerAnalysisSampleSizesStype,
+        powerAnalysisNSimulations: powerAnalysisNSimulations,
+        powerAnalysisNPerm: powerAnalysisNPerm,
+        powerAnalysisAlpha: powerAnalysisAlpha,
+        powerAnalysisSeed: powerAnalysisSeed,
+        powerAnalysisTransform: powerAnalysisTransform,
+        powerAnalysisContralateralTypes: powerAnalysisContralateralTypes,
+        powerAnalysisIndicspeciesDir: powerAnalysisIndicspeciesDir,
+        brayPatientAwareOutputDirAbs: brayPatientAwareOutputDirAbs,
+        brayPatientAwareSampleCol: brayPatientAwareSampleCol,
+        brayPatientAwarePatientCol: brayPatientAwarePatientCol,
+        brayPatientAwareCaseCol: brayPatientAwareCaseCol,
+        brayPatientAwareTypeCol: brayPatientAwareTypeCol,
+        brayPatientAwareSampleTypes: brayPatientAwareSampleTypes,
+        brayPatientAwareContralateralCol: brayPatientAwareContralateralCol,
+        brayPatientAwareCancerSiteCol: brayPatientAwareCancerSiteCol,
+        brayPatientAwareLungSideCol: brayPatientAwareLungSideCol,
+        brayPatientAwareContralateralValue: brayPatientAwareContralateralValue,
+        brayPatientAwareContralateralTypes: brayPatientAwareContralateralTypes,
+        brayPatientAwareTransform: brayPatientAwareTransform,
+        brayPatientAwarePermutations: brayPatientAwarePermutations,
+        brayPatientAwareSeed: brayPatientAwareSeed,
+        taxonomyPatientAwareOutputDirAbs: taxonomyPatientAwareOutputDirAbs,
+        taxonomyPatientAwareSampleCol: taxonomyPatientAwareSampleCol,
+        taxonomyPatientAwarePatientCol: taxonomyPatientAwarePatientCol,
+        taxonomyPatientAwareCaseCol: taxonomyPatientAwareCaseCol,
+        taxonomyPatientAwareTypeCol: taxonomyPatientAwareTypeCol,
+        taxonomyPatientAwareCountCol: taxonomyPatientAwareCountCol,
+        taxonomyPatientAwareTaxLevels: taxonomyPatientAwareTaxLevels,
+        taxonomyPatientAwareSampleTypes: taxonomyPatientAwareSampleTypes,
+        taxonomyPatientAwareMinPrevalence: taxonomyPatientAwareMinPrevalence,
+        taxonomyPatientAwareContralateralCol: taxonomyPatientAwareContralateralCol,
+        taxonomyPatientAwareCancerSiteCol: taxonomyPatientAwareCancerSiteCol,
+        taxonomyPatientAwareLungSideCol: taxonomyPatientAwareLungSideCol,
+        taxonomyPatientAwareContralateralValue: taxonomyPatientAwareContralateralValue,
+        taxonomyPatientAwareContralateralTypes: taxonomyPatientAwareContralateralTypes,
+        taxonomyPatientAwareTransform: taxonomyPatientAwareTransform,
+        taxonomyPatientAwareAlpha: taxonomyPatientAwareAlpha,
+        taxonomyPatientAwareTopN: taxonomyPatientAwareTopN,
+        lungStatusAnalysisOutputDirAbs: lungStatusAnalysisOutputDirAbs,
+        lungStatusAnalysisSampleCol: lungStatusAnalysisSampleCol,
+        lungStatusAnalysisTypeCol: lungStatusAnalysisTypeCol,
+        lungStatusAnalysisSampleTypes: lungStatusAnalysisSampleTypes,
+        lungStatusAnalysisCaseCol: lungStatusAnalysisCaseCol,
+        lungStatusAnalysisPatientCol: lungStatusAnalysisPatientCol,
+        lungStatusAnalysisCancerSiteCol: lungStatusAnalysisCancerSiteCol,
+        lungStatusAnalysisLungCodeCol: lungStatusAnalysisLungCodeCol,
+        lungStatusAnalysisTumorSideCol: lungStatusAnalysisTumorSideCol,
+        lungStatusAnalysisContralateralCol: lungStatusAnalysisContralateralCol,
+        lungStatusAnalysisHealthyCol: lungStatusAnalysisHealthyCol,
+        lungStatusAnalysisStatusCol: lungStatusAnalysisStatusCol,
+        indicspeciesGroupCols: indicspeciesGroupCols,
+        indicspeciesEnabled: indicspeciesEnabled,
+        indicspeciesPlotEnabled: indicspeciesPlotEnabled,
+        indicspeciesLabelFocusedAsvs: indicspeciesLabelFocusedAsvs,
+        indicspeciesAlignedEnabled: indicspeciesAlignedEnabled,
+        indicspeciesUseDuleg: indicspeciesUseDuleg,
+        clustermapsEnabled: clustermapsEnabled,
+        clustermapsGroup1Order: clustermapsGroup1Order,
+        clustermapsRunMito: clustermapsRunMito,
+        spieceasiEnabled: spieceasiEnabled,
+        spieceasiTranspose: spieceasiTranspose,
+        spieceasiRemoveZeroVar: spieceasiRemoveZeroVar,
+        spieceasiKeepNegative: spieceasiKeepNegative,
+        spieceasiAllPosOnly: spieceasiAllPosOnly,
+        spieceasiForceFilter: spieceasiForceFilter,
+        spieceasiForceSpieceasi: spieceasiForceSpieceasi,
+        spieceasiForceGraphs: spieceasiForceGraphs,
+        networkEnabled: networkEnabled,
+        networkModes: networkModes,
+        networkModuleBestOnly: networkModuleBestOnly,
+        networkModuleIsaOnly: networkModuleIsaOnly,
+        networkModuleColorByIsa: networkModuleColorByIsa,
+        networkModulesEnabled: networkModulesEnabled,
+        networkModuleMethods: networkModuleMethods,
+        networkModuleResolutions: networkModuleResolutions,
+        masterSummaryEnabled: masterSummaryEnabled,
+        asvMagLinkEnabled: asvMagLinkEnabled,
+        asvMagLinkGenomeQcDirs: asvMagLinkGenomeQcDirs,
+        asvMagLinkIdTokenIndexes: asvMagLinkIdTokenIndexes,
+        biochemNetworkOverlayEnabled: biochemNetworkOverlayEnabled,
+        biochemNetworkOverlayModes: biochemNetworkOverlayModes,
+        powerAnalysisEnabled: powerAnalysisEnabled,
+        powerAnalysisSkipEstimate: powerAnalysisSkipEstimate,
+        powerAnalysisSkipPlot: powerAnalysisSkipPlot,
+        powerAnalysisKeepContralateralInCancer: powerAnalysisKeepContralateralInCancer,
+        brayPatientAwareEnabled: brayPatientAwareEnabled,
+        brayPatientAwareExcludeContralateral: brayPatientAwareExcludeContralateral,
+        brayPatientAwareRequireCompleteTypes: brayPatientAwareRequireCompleteTypes,
+        taxonomyPatientAwareEnabled: taxonomyPatientAwareEnabled,
+        taxonomyPatientAwareExcludeContralateral: taxonomyPatientAwareExcludeContralateral,
+        taxonomyPatientAwareSkipOmnibus: taxonomyPatientAwareSkipOmnibus,
+        lungStatusAnalysisEnabled: lungStatusAnalysisEnabled,
+    ]
 }
-boolean lungStatusAnalysisEnabled = lungStatusAnalysisRequested
-def lungStatusAnalysisOutputDir = lungStatusAnalysisConfig.output_dir ?: 'lung_status_analysis'
-def lungStatusAnalysisOutputDirAbs = resolveOutputRelative(lungStatusAnalysisOutputDir.toString(), outputDir)
-def lungStatusAnalysisSampleCol = lungStatusAnalysisConfig.sample_col ?: metadataPlotsSampleCol
-def lungStatusAnalysisTypeCol = lungStatusAnalysisConfig.type_col ?: metadataPlotsTypeCol
-def lungStatusAnalysisSampleTypesRaw = lungStatusAnalysisConfig.sample_types ?: 'Lung Brush,BAL'
-def lungStatusAnalysisSampleTypes = lungStatusAnalysisSampleTypesRaw instanceof List ?
-    lungStatusAnalysisSampleTypesRaw.collect { it.toString().trim() }.findAll { it }.join(',') :
-    lungStatusAnalysisSampleTypesRaw.toString().trim()
-def lungStatusAnalysisCaseCol = lungStatusAnalysisConfig.case_col ? lungStatusAnalysisConfig.case_col.toString().trim() : 'Case'
-def lungStatusAnalysisPatientCol = lungStatusAnalysisConfig.patient_col ? lungStatusAnalysisConfig.patient_col.toString().trim() : 'Participant_ID'
-def lungStatusAnalysisCancerSiteCol = lungStatusAnalysisConfig.cancer_site_col ? lungStatusAnalysisConfig.cancer_site_col.toString().trim() : 'Cancer_Site'
-def lungStatusAnalysisLungCodeCol = lungStatusAnalysisConfig.lung_code_col ? lungStatusAnalysisConfig.lung_code_col.toString().trim() : 'lung_code'
-def lungStatusAnalysisTumorSideCol = lungStatusAnalysisConfig.tumor_side_col ? lungStatusAnalysisConfig.tumor_side_col.toString().trim() : 'TumorSide'
-def lungStatusAnalysisContralateralCol = lungStatusAnalysisConfig.contralateral_col ? lungStatusAnalysisConfig.contralateral_col.toString().trim() : 'Contralateral'
-def lungStatusAnalysisHealthyCol = lungStatusAnalysisConfig.healthy_col ? lungStatusAnalysisConfig.healthy_col.toString().trim() : 'Healthy'
-def lungStatusAnalysisStatusCol = lungStatusAnalysisConfig.lung_status_col ? lungStatusAnalysisConfig.lung_status_col.toString().trim() : 'lung_status'
 
 workflow {
     def biochemReady = Channel.value(true)
+    def biochemFinalDone = Channel.value(file(emptyModulesPath))
     if( biochemPreAsvEnabled ) {
         def b0 = BIOCHEM_MERGE()
         def b1 = BIOCHEM_DENSITY(b0.done)
@@ -1773,6 +2390,7 @@ workflow {
         def b17 = BIOCHEM_EOF_MODE_PLOTS(b16.done)
         def b18 = BIOCHEM_WITHIN_GMM_HDBSCAN(b17.done)
         biochemReady = b18.done.collect().map { true }
+        biochemFinalDone = b18.done
     }
     def rawReadsForAsv = raw_reads
         .combine(biochemReady)
@@ -1820,200 +2438,31 @@ workflow {
         general_stats_stage = GENERAL_STATS(concat_for_counts)
     }
 
-def metadata_stage = null
-def metaMicroForBatch = null
-def metaMicroForOutlier = null
-def metaMicroForPlotUpset = null
-def metaMicroForCollectors = null
-def metaMicroForDiversity = null
-def metaMicroForIndicspecies = null
-def metaMicroForIndicspeciesPlots = null
-def metaMicroForClustermaps = null
-def asvMetaForBatch = null
-def asvMetaSeedForCorrection = null
-def asvMetaForBubbleplotter = null
-def asvMetaForUmap = null
-def asvMetaForClustermaps = null
-def asvMetaForPowerAnalysis = null
-def asvMetaForBrayPatientAware = null
-def asvMetaForTaxonomyPatientAware = null
-def asvMetaForLungStatus = null
-def asvMetaForMasterSummary = null
-def asvFinalForBatch = null
-def asvFinalForCollectors = null
-def asvFinalForDiversity = null
-def asvFinalForIndicspecies = null
-def asvFinalForSpieceasi = null
-def asvFinalForNetwork = null
-def asvFinalForPowerAnalysis = null
-def asvFinalForBrayPatientAware = null
-def asvFinalForTaxonomyPatientAware = null
-def asvFinalForLungStatus = null
-def asvFinalForMasterSummary = null
+    def metadata_analysis_stage = null
+    def metaMicroForNetwork = null
+    def asvFinalForSpieceasi = null
+    def asvFinalForNetwork = null
+    def asvMetaForMasterSummary = null
+    def asvFinalForMasterSummary = null
+    def indicspeciesTablesForOverlay = Channel.value(file(emptyModulesPath))
     if( metadataPlotsEnabled ) {
-        metadata_stage = PLOT_METADATA(
+        metadata_analysis_stage = RUN_METADATA_ANALYSES(
             general_stats_stage.fastq_stats,
             filter_counts_stage.filtered_micro,
             filter_counts_stage.filtered_mito,
             taxonomy_stage.taxonomy_table
         )
-        metaMicroForBatch = metadata_stage.metadata_micro.map { it }
-        metaMicroForOutlier = metadata_stage.metadata_micro.map { it }
-        metaMicroForPlotUpset = metadata_stage.metadata_micro.map { it }
-        metaMicroForCollectors = metadata_stage.metadata_micro.map { it }
-        metaMicroForDiversity = metadata_stage.metadata_micro.map { it }
-        metaMicroForIndicspecies = metadata_stage.metadata_micro.map { it }
-        metaMicroForIndicspeciesPlots = metadata_stage.metadata_micro.map { it }
-        metaMicroForClustermaps = metadata_stage.metadata_micro.map { it }
-
-        asvMetaForBatch = metadata_stage.asv_meta_micro.map { it }
-        asvMetaSeedForCorrection = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForBubbleplotter = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForUmap = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForClustermaps = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForPowerAnalysis = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForBrayPatientAware = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForTaxonomyPatientAware = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForLungStatus = metadata_stage.asv_meta_micro.map { it }
-        asvMetaForMasterSummary = metadata_stage.asv_meta_micro.map { it }
-
-        asvFinalForBatch = metadata_stage.asv_final_micro.map { it }
-        asvFinalForCollectors = metadata_stage.asv_final_micro.map { it }
-        asvFinalForDiversity = metadata_stage.asv_final_micro.map { it }
-        asvFinalForIndicspecies = metadata_stage.asv_final_micro.map { it }
-        asvFinalForSpieceasi = metadata_stage.asv_final_micro.map { it }
-        asvFinalForNetwork = metadata_stage.asv_final_micro.map { it }
-        asvFinalForPowerAnalysis = metadata_stage.asv_final_micro.map { it }
-        asvFinalForBrayPatientAware = metadata_stage.asv_final_micro.map { it }
-        asvFinalForTaxonomyPatientAware = metadata_stage.asv_final_micro.map { it }
-        asvFinalForLungStatus = metadata_stage.asv_final_micro.map { it }
-        asvFinalForMasterSummary = metadata_stage.asv_final_micro.map { it }
+        metaMicroForNetwork = metadata_analysis_stage.meta_micro_network
+        asvFinalForSpieceasi = metadata_analysis_stage.asv_final_spieceasi
+        asvFinalForNetwork = metadata_analysis_stage.asv_final_network
+        asvMetaForMasterSummary = metadata_analysis_stage.asv_meta_master_summary
+        asvFinalForMasterSummary = metadata_analysis_stage.asv_final_master_summary
+        indicspeciesTablesForOverlay = metadata_analysis_stage.indicspecies_tables
     }
-
-    if( plotUpsetEnabled ) {
-        PLOT_UPSET(metaMicroForPlotUpset)
-    }
-
-    def batch_stage = null
-    def asvClrForOutlier = null
-    if( batchCorrectionEnabled ) {
-        batch_stage = ASV_BATCH_CORRECTION(
-            metaMicroForBatch,
-            asvMetaForBatch,
-            asvFinalForBatch
-        )
-        asvClrForOutlier = batch_stage.asv_clr_after
-        asvFinalForCollectors = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForDiversity = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForIndicspecies = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForNetwork = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForPowerAnalysis = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForBrayPatientAware = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForTaxonomyPatientAware = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForLungStatus = batch_stage.asv_corrected_counts_int.map { it }
-        asvFinalForMasterSummary = batch_stage.asv_corrected_counts_int.map { it }
-        umapResultsForTrajectory = batch_stage.umap_results
-        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled || masterSummaryEnabled || powerAnalysisEnabled || brayPatientAwareEnabled || taxonomyPatientAwareEnabled || lungStatusAnalysisEnabled ) {
-            def corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
-                asvMetaSeedForCorrection,
-                batch_stage.asv_corrected_counts_int
-            )
-            asvMetaForBubbleplotter = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForUmap = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForClustermaps = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForPowerAnalysis = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForBrayPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForTaxonomyPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForLungStatus = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-            asvMetaForMasterSummary = corrected_asv_meta_stage.asv_meta_corrected.map { it }
-        }
-    }
-    if( bubbleplotterEnabled ) {
-        BUBBLEPLOTTER(asvMetaForBubbleplotter)
-    }
-    if( umapClusteringEnabled ) {
-        UMAP_CLUSTERING(asvMetaForUmap)
-    }
-
-    if( outlierEnabled ) {
-        OUTLIER_CHECKER(
-            asvClrForOutlier,
-            metaMicroForOutlier
-        )
-    }
-    if( collectorsEnabled ) {
-        COLLECTORS_CURVE(
-            asvFinalForCollectors,
-            metaMicroForCollectors
-        )
-    }
-    def diversity_stage = null
-    if( diversityEnabled ) {
-        diversity_stage = DIVERSITY_ANALYSIS(
-            metaMicroForDiversity,
-            asvFinalForDiversity
-        )
-    }
-    def indicspecies_stage = null
-    def indicspecies_plots_stage = null
-    def indicspecies_aligned_stage = null
-    if( indicspeciesEnabled ) {
-        indicspecies_stage = INDICSPECIES(
-            metaMicroForIndicspecies,
-            asvFinalForIndicspecies
-        )
-        if( indicspeciesPlotEnabled ) {
-            indicspecies_plots_stage = INDICSPECIES_PLOTS(
-                metaMicroForIndicspeciesPlots,
-                indicspecies_stage.all_tables.collect()
-            )
-        }
-        if( indicspeciesAlignedEnabled ) {
-            indicspecies_aligned_stage = INDICSPECIES_ALIGNED_PLOTS(
-                indicspecies_stage.all_tables.collect()
-            )
-        }
-    }
-    def indicspeciesReadyForClustermaps = null
-    def indicspeciesReadyForPowerAnalysis = null
-    if( indicspeciesEnabled ) {
-        indicspeciesReadyForClustermaps = indicspecies_stage.done.map { true }
-        indicspeciesReadyForPowerAnalysis = indicspecies_stage.done.map { true }
-    } else {
-        indicspeciesReadyForClustermaps = Channel.value(false)
-        indicspeciesReadyForPowerAnalysis = Channel.value(false)
-    }
-    if( clustermapsEnabled ) {
-        CLUSTERMAPS(
-            asvMetaForClustermaps,
-            metaMicroForClustermaps,
-            indicspeciesReadyForClustermaps
-        )
-    }
-    if( powerAnalysisEnabled ) {
-        POWER_ANALYSIS_PIPELINE(
-            asvMetaForPowerAnalysis,
-            asvFinalForPowerAnalysis,
-            indicspeciesReadyForPowerAnalysis
-        )
-    }
-    if( brayPatientAwareEnabled ) {
-        BRAY_PATIENT_AWARE(
-            asvMetaForBrayPatientAware,
-            asvFinalForBrayPatientAware
-        )
-    }
-    if( taxonomyPatientAwareEnabled ) {
-        TAXONOMY_PATIENT_AWARE(
-            asvMetaForTaxonomyPatientAware,
-            asvFinalForTaxonomyPatientAware
-        )
-    }
-    if( lungStatusAnalysisEnabled ) {
-        LUNG_STATUS_ANALYSIS(
-            asvMetaForLungStatus,
-            asvFinalForLungStatus
+    def asv_mag_link_stage = null
+    if( asvMagLinkEnabled ) {
+        asv_mag_link_stage = ASV_MAG_LINK(
+            filtered_fasta_for_taxonomy
         )
     }
     def spieceasi_stage = null
@@ -2055,18 +2504,49 @@ def asvFinalForMasterSummary = null
             modulesAllForNetwork = modulesAllFile.exists() ? Channel.value(file(networkModulesAllPath)) : Channel.value(file(emptyModulesPath))
         }
     }
+    def biochem_network_overlay_stage = null
+    if( biochemNetworkOverlayEnabled ) {
+        def asvMagReadyForOverlay = asv_mag_link_stage != null ? asv_mag_link_stage.done : Channel.value(file(emptyModulesPath))
+        biochem_network_overlay_stage = RUN_BIOCHEM_NETWORK_OVERLAY(
+            biochemFinalDone,
+            metaMicroForNetwork,
+            asvFinalForNetwork,
+            modulesAllForNetwork,
+            nodeFeaturesForNetwork,
+            asvMagReadyForOverlay,
+            taxonomy_stage.taxonomy_table,
+            indicspeciesTablesForOverlay
+        )
+    }
     def graph_network_stage = null
     if( networkEnabled ) {
-        graph_network_stage = GRAPH_NETWORK(
+        def networkMetadataChannel = metaMicroForNetwork != null ? metaMicroForNetwork : Channel.value(file(networkMetadataPath))
+        def asvMagReadyForNetwork = asv_mag_link_stage != null ? asv_mag_link_stage.done : Channel.value(file(emptyModulesPath))
+        graph_network_stage = RUN_GRAPH_NETWORK(
             graphAllForNetwork,
             graphThrForNetwork,
             nodeFeaturesForNetwork,
             asvFinalForNetwork,
+            networkMetadataChannel,
+            asvMagReadyForNetwork,
             taxonomy_stage.taxonomy_table,
-            indicspecies_stage.group1_summary,
-            indicspecies_stage.group2_summary,
+            indicspeciesTablesForOverlay,
             modulesSubForNetwork,
             modulesAllForNetwork
+        )
+    }
+    def module_mag_anchors_stage = null
+    if( networkEnabled && asvMagLinkEnabled ) {
+        def moduleMagGraphDone = graph_network_stage != null ? graph_network_stage.done : Channel.value(file(emptyModulesPath))
+        def moduleMagAsvDone = asv_mag_link_stage != null ? asv_mag_link_stage.done : Channel.value(file(emptyModulesPath))
+        module_mag_anchors_stage = RUN_MODULE_MAG_ANCHORS(
+            modulesAllForNetwork,
+            nodeFeaturesForNetwork,
+            taxonomy_stage.taxonomy_table,
+            metadata_analysis_stage.asv_final_spieceasi,
+            metadata_analysis_stage.meta_micro_network,
+            moduleMagAsvDone,
+            moduleMagGraphDone
         )
     }
     def sankey_stage = null
@@ -2085,13 +2565,282 @@ def asvFinalForMasterSummary = null
         }
         def masterSummaryNetworkDone = graph_network_stage != null ? graph_network_stage.done : Channel.value(file(emptyModulesPath))
         def masterSummarySankeyDone = sankey_stage != null ? sankey_stage.done : Channel.value(file(emptyModulesPath))
+        def masterSummaryAsvMagDone = asv_mag_link_stage != null ? asv_mag_link_stage.done : Channel.value(file(emptyModulesPath))
+        def masterSummaryBiochemOverlayDone = biochem_network_overlay_stage != null ? biochem_network_overlay_stage.done : Channel.value(file(emptyModulesPath))
         MASTER_SUMMARY(
             asvMetaForMasterSummary,
             asvFinalForMasterSummary,
             masterSummaryNetworkDone,
-            masterSummarySankeyDone
+            masterSummarySankeyDone,
+            masterSummaryAsvMagDone,
+            masterSummaryBiochemOverlayDone
         )
     }
+}
+
+workflow RUN_METADATA_ANALYSES {
+    take:
+    fastq_stats
+    filtered_micro
+    filtered_mito
+    taxonomy_table
+
+    main:
+    metadata_stage = PLOT_METADATA(
+        fastq_stats,
+        filtered_micro,
+        filtered_mito,
+        taxonomy_table
+    )
+
+    metaMicroForBatch = metadata_stage.metadata_micro.map { it }
+    metaMicroForOutlier = metadata_stage.metadata_micro.map { it }
+    metaMicroForPlotUpset = metadata_stage.metadata_micro.map { it }
+    metaMicroForCollectors = metadata_stage.metadata_micro.map { it }
+    metaMicroForDiversity = metadata_stage.metadata_micro.map { it }
+    metaMicroForIndicspecies = metadata_stage.metadata_micro.map { it }
+    metaMicroForIndicspeciesPlots = metadata_stage.metadata_micro.map { it }
+    metaMicroForClustermaps = metadata_stage.metadata_micro.map { it }
+    metaMicroForNetwork = metadata_stage.metadata_micro.map { it }
+
+    asvMetaForBatch = metadata_stage.asv_meta_micro.map { it }
+    asvMetaSeedForCorrection = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForBubbleplotter = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForUmap = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForClustermaps = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForPowerAnalysis = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForBrayPatientAware = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForTaxonomyPatientAware = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForLungStatus = metadata_stage.asv_meta_micro.map { it }
+    asvMetaForMasterSummary = metadata_stage.asv_meta_micro.map { it }
+
+    asvFinalForBatch = metadata_stage.asv_final_micro.map { it }
+    asvFinalForCollectors = metadata_stage.asv_final_micro.map { it }
+    asvFinalForDiversity = metadata_stage.asv_final_micro.map { it }
+    asvFinalForIndicspecies = metadata_stage.asv_final_micro.map { it }
+    asvFinalForSpieceasi = metadata_stage.asv_final_micro.map { it }
+    asvFinalForNetwork = metadata_stage.asv_final_micro.map { it }
+    asvFinalForPowerAnalysis = metadata_stage.asv_final_micro.map { it }
+    asvFinalForBrayPatientAware = metadata_stage.asv_final_micro.map { it }
+    asvFinalForTaxonomyPatientAware = metadata_stage.asv_final_micro.map { it }
+    asvFinalForLungStatus = metadata_stage.asv_final_micro.map { it }
+    asvFinalForMasterSummary = metadata_stage.asv_final_micro.map { it }
+
+    if( plotUpsetEnabled ) {
+        PLOT_UPSET(metaMicroForPlotUpset)
+    }
+
+    batch_stage = null
+    asvClrForOutlier = null
+    if( batchCorrectionEnabled ) {
+        batch_stage = ASV_BATCH_CORRECTION(
+            metaMicroForBatch,
+            asvMetaForBatch,
+            asvFinalForBatch
+        )
+        asvClrForOutlier = batch_stage.asv_clr_after
+        asvFinalForCollectors = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForDiversity = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForIndicspecies = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForSpieceasi = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForNetwork = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForPowerAnalysis = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForBrayPatientAware = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForTaxonomyPatientAware = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForLungStatus = batch_stage.asv_corrected_counts_int.map { it }
+        asvFinalForMasterSummary = batch_stage.asv_corrected_counts_int.map { it }
+        umapResultsForTrajectory = batch_stage.umap_results
+        if( bubbleplotterEnabled || umapClusteringEnabled || clustermapsEnabled || masterSummaryEnabled || powerAnalysisEnabled || brayPatientAwareEnabled || taxonomyPatientAwareEnabled || lungStatusAnalysisEnabled ) {
+            corrected_asv_meta_stage = ASV_META_FROM_CORRECTED(
+                asvMetaSeedForCorrection,
+                batch_stage.asv_corrected_counts_int
+            )
+            asvMetaForBubbleplotter = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForUmap = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForClustermaps = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForPowerAnalysis = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForBrayPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForTaxonomyPatientAware = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForLungStatus = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+            asvMetaForMasterSummary = corrected_asv_meta_stage.asv_meta_corrected.map { it }
+        }
+    }
+    if( bubbleplotterEnabled ) {
+        BUBBLEPLOTTER(asvMetaForBubbleplotter)
+    }
+    if( umapClusteringEnabled ) {
+        UMAP_CLUSTERING(asvMetaForUmap)
+    }
+    if( outlierEnabled ) {
+        OUTLIER_CHECKER(
+            asvClrForOutlier,
+            metaMicroForOutlier
+        )
+    }
+    if( collectorsEnabled ) {
+        COLLECTORS_CURVE(
+            asvFinalForCollectors,
+            metaMicroForCollectors
+        )
+    }
+    if( diversityEnabled ) {
+        DIVERSITY_ANALYSIS(
+            metaMicroForDiversity,
+            asvFinalForDiversity
+        )
+    }
+
+    indicspecies_stage = null
+    if( indicspeciesEnabled ) {
+        indicspecies_stage = INDICSPECIES(
+            metaMicroForIndicspecies,
+            asvFinalForIndicspecies
+        )
+        if( indicspeciesPlotEnabled ) {
+            INDICSPECIES_PLOTS(
+                metaMicroForIndicspeciesPlots,
+                indicspecies_stage.all_tables.collect()
+            )
+        }
+        if( indicspeciesAlignedEnabled ) {
+            INDICSPECIES_ALIGNED_PLOTS(
+                indicspecies_stage.all_tables.collect()
+            )
+        }
+    }
+
+    indicspeciesReadyForClustermaps = indicspeciesEnabled ? indicspecies_stage.done.map { true } : Channel.value(false)
+    indicspeciesReadyForPowerAnalysis = indicspeciesEnabled ? indicspecies_stage.done.map { true } : Channel.value(false)
+    indicspeciesTablesForOverlay = indicspeciesEnabled ? indicspecies_stage.all_tables.collect() : Channel.value(file(emptyModulesPath))
+
+    if( clustermapsEnabled ) {
+        CLUSTERMAPS(
+            asvMetaForClustermaps,
+            metaMicroForClustermaps,
+            indicspeciesReadyForClustermaps
+        )
+    }
+    if( powerAnalysisEnabled ) {
+        POWER_ANALYSIS_PIPELINE(
+            asvMetaForPowerAnalysis,
+            asvFinalForPowerAnalysis,
+            indicspeciesReadyForPowerAnalysis
+        )
+    }
+    if( brayPatientAwareEnabled ) {
+        BRAY_PATIENT_AWARE(
+            asvMetaForBrayPatientAware,
+            asvFinalForBrayPatientAware
+        )
+    }
+    if( taxonomyPatientAwareEnabled ) {
+        TAXONOMY_PATIENT_AWARE(
+            asvMetaForTaxonomyPatientAware,
+            asvFinalForTaxonomyPatientAware
+        )
+    }
+    if( lungStatusAnalysisEnabled ) {
+        LUNG_STATUS_ANALYSIS(
+            asvMetaForLungStatus,
+            asvFinalForLungStatus
+        )
+    }
+
+    emit:
+    meta_micro_network = metaMicroForNetwork
+    asv_final_spieceasi = asvFinalForSpieceasi
+    asv_final_network = asvFinalForNetwork
+    asv_meta_master_summary = asvMetaForMasterSummary
+    asv_final_master_summary = asvFinalForMasterSummary
+    indicspecies_tables = indicspeciesTablesForOverlay
+}
+
+workflow RUN_BIOCHEM_NETWORK_OVERLAY {
+    take:
+    biochem_final_done
+    meta_micro
+    asv_final
+    modules_all
+    node_features
+    asv_mag_done
+    taxonomy_table
+    isa_tables
+
+    main:
+    stage = BIOCHEM_NETWORK_OVERLAY(
+        biochem_final_done,
+        meta_micro,
+        asv_final,
+        modules_all,
+        node_features,
+        asv_mag_done,
+        taxonomy_table,
+        isa_tables
+    )
+
+    emit:
+    done = stage.done
+}
+
+workflow RUN_GRAPH_NETWORK {
+    take:
+    graph_all
+    graph_thr
+    node_features
+    asv_final
+    network_metadata
+    asv_mag_done
+    taxonomy_table
+    isa_tables
+    modules_sub
+    modules_all
+
+    main:
+    stage = GRAPH_NETWORK(
+        graph_all,
+        graph_thr,
+        node_features,
+        asv_final,
+        network_metadata,
+        asv_mag_done,
+        taxonomy_table,
+        isa_tables,
+        modules_sub,
+        modules_all
+    )
+
+    emit:
+    done = stage.done
+}
+
+workflow RUN_MODULE_MAG_ANCHORS {
+    take:
+    modules_all
+    node_features
+    taxonomy_table
+    asv_counts
+    metadata_table
+    dep_asv_mag
+    dep_graph_network
+
+    main:
+    stage = MODULE_MAG_ANCHORS(
+        modules_all,
+        node_features,
+        taxonomy_table,
+        asv_counts,
+        metadata_table,
+        dep_asv_mag,
+        dep_graph_network
+    )
+
+    emit:
+    asv_anchor_table = stage.asv_anchor_table
+    module_summary = stage.module_summary
+    sample_module_scores = stage.sample_module_scores
+    sample_top_modules = stage.sample_top_modules
+    sample_module_matrix = stage.sample_module_matrix
+    done = stage.done
 }
 
 process BIOCHEM_MERGE {
@@ -4105,6 +4854,7 @@ mkdir -p "${indicspeciesPlotOutputDirAbs}"
 python - <<'PY'
 from pathlib import Path
 import itertools
+import json
 import re
 import subprocess
 import sys
@@ -4114,16 +4864,13 @@ out_root = Path("${indicspeciesPlotOutputDirAbs}")
 pairs_mode = "${plotPairsMode}"
 plot_tax = Path("${plotTaxPath}") if "${plotTaxPath}" else None
 plot_venn = Path("${plotVennPath}") if "${plotVennPath}" else None
-metadata_path = Path("${metadataPlotsMetadataPath}") if "${metadataPlotsMetadataPath}" else None
+metadata_path = Path("${metadata_table}") if "${metadata_table}" else None
 preferred_group1 = "${indicspeciesGroup1}".strip()
 preferred_group2 = "${indicspeciesGroup2}".strip()
 metadata_color_col = "${indicspeciesColorCol}".strip()
-group1_palette_cfg = "${indicspeciesGroup1Palette}"
-group2_palette_cfg = "${indicspeciesGroup2Palette}"
-group1_order_cfg = "${indicspeciesGroup1Order.join(',')}"
-group2_order_cfg = "${indicspeciesGroup2Order.join(',')}"
-focus_group1_cfg = "${indicspeciesFocusGroup1Label}"
-focus_group2_cfg = "${indicspeciesFocusGroup2Label}"
+palette_cfg = json.loads(r'''${indicspeciesGroupPaletteJson}''')
+order_cfg = json.loads(r'''${indicspeciesGroupOrderJson}''')
+focus_cfg = json.loads(r'''${indicspeciesFocusLabelJson}''')
 label_focused_asvs = ${indicspeciesLabelFocusedAsvs ? 'True' : 'False'}
 
 summary_files = sorted(Path(".").glob("*_indicator_species*_summary.tsv"))
@@ -4173,6 +4920,19 @@ def has_col(path: Path, col: str) -> bool:
         return False
     return col in header
 
+def has_meta_col(path: Path | None, col: str) -> bool:
+    if path is None or not path.is_file() or not col:
+        return False
+    return has_col(path, col)
+
+def order_string(group_name: str) -> str:
+    raw = order_cfg.get(group_name, [])
+    if isinstance(raw, list):
+        return ",".join(str(x).strip() for x in raw if str(x).strip())
+    if raw:
+        return str(raw).strip()
+    return ""
+
 for g1_file, g2_file in pair_iter:
     g1_name = clean_group_name(g1_file.name)
     g2_name = clean_group_name(g2_file.name)
@@ -4202,9 +4962,11 @@ for g1_file, g2_file in pair_iter:
     ]
     if metadata_path and metadata_path.is_file():
         cmd.extend(["--metadata", str(metadata_path)])
-        cmd.extend(["--group1-meta-label-col", g1_name])
-        cmd.extend(["--group2-meta-label-col", g2_name])
-        if g1_name == preferred_group1 and metadata_color_col:
+        if has_meta_col(metadata_path, g1_name):
+            cmd.extend(["--group1-meta-label-col", g1_name])
+        if has_meta_col(metadata_path, g2_name):
+            cmd.extend(["--group2-meta-label-col", g2_name])
+        if g1_name == preferred_group1 and metadata_color_col and has_meta_col(metadata_path, metadata_color_col):
             cmd.extend(["--group1-meta-color-col", metadata_color_col])
 
     if has_col(g1_file, g1_name):
@@ -4223,18 +4985,20 @@ for g1_file, g2_file in pair_iter:
 
     if has_col(g2_file, f"{g2_name}_Marker"):
         cmd.extend(["--group2-marker-col", f"{g2_name}_Marker"])
-    if g1_name == preferred_group1 and group1_palette_cfg:
-        cmd.extend(["--group1-palette", group1_palette_cfg])
-    if g2_name == preferred_group2 and group2_palette_cfg:
-        cmd.extend(["--group2-palette", group2_palette_cfg])
-    if g1_name == preferred_group1 and group1_order_cfg:
+    if palette_cfg.get(g1_name):
+        cmd.extend(["--group1-palette", str(palette_cfg[g1_name])])
+    if palette_cfg.get(g2_name):
+        cmd.extend(["--group2-palette", str(palette_cfg[g2_name])])
+    group1_order_cfg = order_string(g1_name)
+    group2_order_cfg = order_string(g2_name)
+    if group1_order_cfg:
         cmd.extend(["--group1-order", group1_order_cfg])
-    if g2_name == preferred_group2 and group2_order_cfg:
+    if group2_order_cfg:
         cmd.extend(["--group2-order", group2_order_cfg])
-    if g1_name == preferred_group1 and focus_group1_cfg:
-        cmd.extend(["--focus-group1-label", focus_group1_cfg])
-    if g2_name == preferred_group2 and focus_group2_cfg:
-        cmd.extend(["--focus-group2-label", focus_group2_cfg])
+    if focus_cfg.get(g1_name):
+        cmd.extend(["--focus-group1-label", str(focus_cfg[g1_name])])
+    if focus_cfg.get(g2_name):
+        cmd.extend(["--focus-group2-label", str(focus_cfg[g2_name])])
     if label_focused_asvs:
         cmd.append("--label-focused-asvs")
     if plot_tax and plot_tax.is_file():
@@ -4673,6 +5437,11 @@ process CLUSTERMAPS {
     def isaAutoCandidatesCsv = clustermapsIsaAutoCandidates.join(',')
     def isaSigColsArg = clustermapsIsaSignificanceCols ? """  --isa-significance-cols "${clustermapsIsaSignificanceCols}" \\\n""" : ''
     def isaStatColsArg = clustermapsIsaStatCols ? """  --isa-stat-cols "${clustermapsIsaStatCols}" \\\n""" : ''
+    def clustermapsFormatsArg = clustermapsFormats ? """  --formats "${clustermapsFormats}" \\\n""" : ''
+    def clustermapsFigWidthArg = clustermapsFigWidth != null ? """  --figwidth ${clustermapsFigWidth} \\\n""" : ''
+    def clustermapsRowHeightArg = clustermapsRowHeight != null ? """  --row-height ${clustermapsRowHeight} \\\n""" : ''
+    def clustermapsMinHeightArg = clustermapsMinHeight != null ? """  --min-height ${clustermapsMinHeight} \\\n""" : ''
+    def clustermapsMaxHeightArg = clustermapsMaxHeight != null ? """  --max-height ${clustermapsMaxHeight} \\\n""" : ''
     """
 set -euo pipefail
 mkdir -p "${clustermapsOutputDirAbs}"
@@ -4738,6 +5507,7 @@ ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
     --topN "${clustermapsTopN}" \\
     --count-col "${clustermapsCountCol}" \\
     --isa-min-stat ${clustermapsIsaMinStat} \\
+${clustermapsFormatsArg}${clustermapsFigWidthArg}${clustermapsRowHeightArg}${clustermapsMinHeightArg}${clustermapsMaxHeightArg}\
 ${isaSigColsArg}${isaStatColsArg}    --mito-sample-mode "${clustermapsMitoSampleMode}" \\
     --mito-asv "${clustermapsMitoInputPath}" \\
     --mito-outdir "${clustermapsMitoOutputDirAbs}" \\
@@ -4757,6 +5527,7 @@ ${group3PaletteArg}    --ranks "${clustermapsRanks}" \\
     --topN "${clustermapsTopN}" \\
     --count-col "${clustermapsCountCol}" \\
     --isa-min-stat ${clustermapsIsaMinStat} \\
+${clustermapsFormatsArg}${clustermapsFigWidthArg}${clustermapsRowHeightArg}${clustermapsMinHeightArg}${clustermapsMaxHeightArg}\
 ${isaSigColsArg}${isaStatColsArg}    --mito-sample-mode "${clustermapsMitoSampleMode}" \\
     \${ISA_ARGS[@]}
 fi
@@ -4901,9 +5672,10 @@ process GRAPH_NETWORK {
     path(graph_thr, stageAs: 'network_graph_sub.graphml')
     path(node_features)
     path(asv_counts)
+    path(metadata_table)
+    path(dep_asv_mag)
     path(taxonomy_table)
-    path(group1_summary)
-    path(group2_summary)
+    path(indicspecies_tables)
     path(modules_sub)
     path(modules_all)
 
@@ -4912,15 +5684,11 @@ process GRAPH_NETWORK {
 
     script:
     def networkModesArg = networkModes && !networkModes.isEmpty() ? """  --modes ${networkModes.collect { "\"${it}\"" }.join(' ')} \\\n""" : ''
-    def networkGroup1PaletteArg = networkGroup1Palette ? """  --group1-palette "${networkGroup1Palette}" \\\n""" : ''
-    def networkGroup2PaletteArg = networkGroup2Palette ? """  --group2-palette "${networkGroup2Palette}" \\\n""" : ''
-    def networkGroup1OrderArg = networkGroup1Order && !networkGroup1Order.isEmpty() ? """  --group1-order "${networkGroup1Order.join(',')}" \\\n""" : ''
-    def networkGroup2OrderArg = networkGroup2Order && !networkGroup2Order.isEmpty() ? """  --group2-order "${networkGroup2Order.join(',')}" \\\n""" : ''
-    def networkFocusGroup1Arg = networkFocusGroup1Label ? """  --focus-group1-label "${networkFocusGroup1Label}" \\\n""" : ''
-    def networkFocusGroup2Arg = networkFocusGroup2Label ? """  --focus-group2-label "${networkFocusGroup2Label}" \\\n""" : ''
     def networkModuleBestOnlyArg = networkModuleBestOnly ? """  --module-best-only \\\n""" : ''
     def networkModuleIsaOnlyArg = networkModuleIsaOnly ? """  --module-isa-only \\\n""" : ''
     def networkModuleColorByIsaArg = networkModuleColorByIsa ? """  --module-color-by-isa \\\n""" : ''
+    def asvMagPairingArg = asvMagLinkEnabled ? """  --asv-mag-pairing "${asvMagLinkOutputDirAbs}/tables/asv2mag_pairing.tsv" \\\n""" : ''
+    def isaSummaryModeArg = indicspeciesUseDuleg ? 'duleg' : 'default'
     """
 set -euo pipefail
 mkdir -p "${spieceasiOutputDirAbs}"
@@ -4933,16 +5701,16 @@ python "${graphNetworkScriptPath}" \\
   --node-features "${node_features}" \\
   --asv-counts "${asv_counts}" \\
   --taxonomy "${taxonomy_table}" \\
-  --group1-summary "${group1_summary}" \\
-  --group2-summary "${group2_summary}" \\
-  --group1-name "${indicspeciesGroup1}" \\
-  --group2-name "${indicspeciesGroup2}" \\
-  --metadata "${networkMetadataPath}" \\
+  --metadata "${metadata_table}" \\
   --sample-col "${indicspeciesSampleCol}" \\
-  --group1-col "${indicspeciesGroup1}" \\
-  --group2-col "${indicspeciesGroup2}" \\
+  --isa-group-cols "${networkIsaOverlayGroupsCsv}" \\
+  --isa-summary-mode "${isaSummaryModeArg}" \\
+  --isa-palette-map-json '${networkGroupPaletteJson}' \\
+  --isa-order-map-json '${networkGroupOrderJson}' \\
+  --isa-focus-map-json '${networkFocusLabelJson}' \\
+${asvMagPairingArg}\
   --color-col "${networkColorCol}" \\
-${networkGroup1PaletteArg}${networkGroup2PaletteArg}${networkGroup1OrderArg}${networkGroup2OrderArg}${networkFocusGroup1Arg}${networkFocusGroup2Arg}${networkModuleBestOnlyArg}${networkModuleIsaOnlyArg}${networkModuleColorByIsaArg}  --module-best-min-size ${networkModuleBestMinSize} \\
+${networkModuleBestOnlyArg}${networkModuleIsaOnlyArg}${networkModuleColorByIsaArg}  --module-best-min-size ${networkModuleBestMinSize} \\
   --module-best-min-stability ${networkModuleBestMinStability} \\
   --module-isa-source "${networkModuleIsaSource}" \\
   --module-isa-min-stat ${networkModuleIsaMinStat} \\
@@ -4953,9 +5721,70 @@ ${networkModesArg}  --layout-seed ${networkLayoutSeed} \\
   --layout-scale ${networkLayoutScale} \\
   --degree-scale ${networkDegreeScale} \\
   --edge-width-scale ${networkEdgeWidthScale} \\
-  --isa-scale ${networkIsaScale}
+  --isa-scale ${networkIsaScale} \\
+  --abundance-min-area ${networkAbundanceMinArea} \\
+  --abundance-max-area ${networkAbundanceMaxArea} \\
+  --abundance-scale-power ${networkAbundanceScalePower}
 
 touch network.done
+"""
+}
+
+process MODULE_MAG_ANCHORS {
+    cpus 1
+    conda "${networkCondaEnvPath}"
+
+    when:
+    networkEnabled && asvMagLinkEnabled
+
+    input:
+    path(modules_all)
+    path(node_features)
+    path(taxonomy_table)
+    path(asv_counts)
+    path(metadata_table)
+    path(dep_asv_mag)
+    path(dep_graph_network)
+
+    output:
+    path("module_asv_anchor_table.tsv"), emit: asv_anchor_table
+    path("module_mag_anchor_summary.tsv"), emit: module_summary
+    path("sample_module_scores.tsv"), emit: sample_module_scores
+    path("sample_top_modules.tsv"), emit: sample_top_modules
+    path("sample_module_score_matrix.tsv"), emit: sample_module_matrix
+    path("sample_module_score_heatmap.png"), optional: true, emit: sample_module_heatmap_png
+    path("sample_module_score_heatmap.pdf"), optional: true, emit: sample_module_heatmap_pdf
+    path("sample_module_score_heatmap.svg"), optional: true, emit: sample_module_heatmap_svg
+    path("module_mag_anchors.done"), emit: done
+
+    script:
+    """
+set -euo pipefail
+mkdir -p "${spieceasiOutputDirAbs}"
+
+python "${moduleMagAnchorsScriptPath}" \\
+  --modules "${modules_all}" \\
+  --node-features "${node_features}" \\
+  --taxonomy "${taxonomy_table}" \\
+  --asv-mag-pairing "${asvMagLinkOutputDirAbs}/tables/asv2mag_pairing.tsv" \\
+  --asv-counts "${asv_counts}" \\
+  --metadata "${metadata_table}" \\
+  --sample-col "${metadataPlotsSampleCol}" \\
+  --sample-code-col "${clustermapsSampleCodeCol}" \\
+  --best-stats "${spieceasiOutputDirAbs}/network_modules_best_stats_all.tsv" \\
+  --outdir "${spieceasiOutputDirAbs}"
+
+ln -sf "${spieceasiOutputDirAbs}/module_asv_anchor_table.tsv" module_asv_anchor_table.tsv
+ln -sf "${spieceasiOutputDirAbs}/module_mag_anchor_summary.tsv" module_mag_anchor_summary.tsv
+ln -sf "${spieceasiOutputDirAbs}/sample_module_scores.tsv" sample_module_scores.tsv
+ln -sf "${spieceasiOutputDirAbs}/sample_top_modules.tsv" sample_top_modules.tsv
+ln -sf "${spieceasiOutputDirAbs}/sample_module_score_matrix.tsv" sample_module_score_matrix.tsv
+for ext in png pdf svg; do
+  if [[ -f "${spieceasiOutputDirAbs}/sample_module_score_heatmap.\${ext}" ]]; then
+    ln -sf "${spieceasiOutputDirAbs}/sample_module_score_heatmap.\${ext}" "sample_module_score_heatmap.\${ext}"
+  fi
+done
+touch module_mag_anchors.done
 """
 }
 
@@ -4971,6 +5800,8 @@ process MASTER_SUMMARY {
     path(asv_counts)
     path(dep_network)
     path(dep_sankey)
+    path(dep_asv_mag)
+    path(dep_biochem_overlay)
 
     output:
     path("ASV_master_long.tsv"), optional: true, emit: master_long
@@ -4993,6 +5824,7 @@ python "${masterSummaryScriptPath}" \\
   --clustermaps-dir "${masterSummaryClustermapsDirAbs}" \\
   --indicspecies-dir "${masterSummaryIndicspeciesDirAbs}" \\
   --spieceasi-dir "${masterSummarySpieceasiDirAbs}" \\
+  --asv-mag-dir "${masterSummaryAsvMagDirAbs}" \\
 ${whitelistArg}  --outdir "${masterSummaryOutputDirAbs}" \\
   --max-direct-cols ${masterSummaryMaxDirectCols}
 
@@ -5011,6 +5843,100 @@ link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_column_mapping.tsv" "ASV
 link_if_exists "${masterSummaryOutputDirAbs}/ASV_master_column_collisions_original.tsv" "ASV_master_column_collisions_original.tsv"
 
 touch master_summary.done
+"""
+}
+
+process BIOCHEM_NETWORK_OVERLAY {
+    cpus 1
+    conda "${biochemNetworkOverlayCondaEnvPath}"
+
+    when:
+    biochemNetworkOverlayEnabled
+
+    input:
+    path(dep_biochem)
+    path(metadata_table)
+    path(asv_counts)
+    path(modules_all)
+    path(node_features)
+    path(dep_asv_mag)
+    path(taxonomy_table)
+    path(indicspecies_tables)
+
+    output:
+    path("biochem_network_overlay.done"), emit: done
+
+    script:
+    def biochemNetworkOverlayModesArg = biochemNetworkOverlayModes && !biochemNetworkOverlayModes.isEmpty() ? """  --modes ${biochemNetworkOverlayModes.collect { "\"${it}\"" }.join(' ')} \\\n""" : ''
+    def isaSummaryModeArg = indicspeciesUseDuleg ? 'duleg' : 'default'
+    """
+set -euo pipefail
+mkdir -p "${biochemNetworkOverlayOutputDirAbs}"
+
+python "${biochemNetworkOverlayScriptPath}" \\
+  --metadata "${metadata_table}" \\
+  --asv-counts "${asv_counts}" \\
+  --modules "${modules_all}" \\
+  --node-features "${node_features}" \\
+  --asv-mag-pairing "${asvMagLinkOutputDirAbs}/tables/asv2mag_pairing.tsv" \\
+  --loadings "${biochemPcaDirAbs}/tables/pca_loadings.csv" \\
+  --sparse-corr "${biochemPcaDirAbs}/tables/sparse_feature_pc_spearman.csv" \\
+  --taxonomy "${taxonomy_table}" \\
+  --isa-group-cols "${biochemNetworkOverlayIsaGroupsCsv}" \\
+  --isa-summary-mode "${isaSummaryModeArg}" \\
+  --isa-palette-map-json '${biochemNetworkOverlayGroupPaletteJson}' \\
+  --isa-order-map-json '${biochemNetworkOverlayGroupOrderJson}' \\
+${biochemNetworkOverlayModesArg}  --outdir "${biochemNetworkOverlayOutputDirAbs}" \\
+  --sample-col "${biochemNetworkOverlaySampleCol}" \\
+  --ordination-x "${biochemNetworkOverlayOrdinationX}" \\
+  --ordination-y "${biochemNetworkOverlayOrdinationY}" \\
+  --top-modules ${biochemNetworkOverlayTopModules} \\
+  --top-vectors ${biochemNetworkOverlayTopVectors} \\
+  --module-hull-quantile ${biochemNetworkOverlayHullQuantile} \\
+  --min-samples-per-hull ${biochemNetworkOverlayMinSamplesPerHull} \\
+  --min-asvs-per-module ${biochemNetworkOverlayMinAsvsPerModule} \\
+  --degree-scale ${networkDegreeScale}
+
+touch biochem_network_overlay.done
+"""
+}
+
+process ASV_MAG_LINK {
+    cpus asvMagLinkThreads
+    conda "${asvMagLinkCondaEnvPath}"
+
+    when:
+    asvMagLinkEnabled
+
+    input:
+    path(filtered_fasta)
+
+    output:
+    path("asv_mag_link.done"), emit: done
+
+    script:
+    def genomeDirArg = asvMagLinkGenomeDir ? """  --genome-fasta-dir "${asvMagLinkGenomeDir}" \\\n""" : ''
+    def genomeQcDirArg = asvMagLinkGenomeQcDir ? """  --genome-qc-dir "${asvMagLinkGenomeQcDir}" \\\n""" : ''
+    def genomeQcDirsArg = asvMagLinkGenomeQcDirs ? asvMagLinkGenomeQcDirs.collect { """  --genome-qc-dir "${it}" \\\n""" }.join('') : ''
+    def idTokenIndexesArg = asvMagLinkIdTokenIndexes ? asvMagLinkIdTokenIndexes.collect { """  --id-token-index ${it} \\\n""" }.join('') : ''
+    def barrnapDirArg = asvMagLinkBarrnapDir ? """  --barrnap-dir "${asvMagLinkBarrnapDir}" \\\n""" : ''
+    """
+set -euo pipefail
+mkdir -p "${asvMagLinkOutputDirAbs}"
+
+python "${asvMagLinkScriptPath}" \\
+  --asv-fasta "${filtered_fasta}" \\
+${barrnapDirArg}${genomeDirArg}${genomeQcDirArg}${genomeQcDirsArg}${idTokenIndexesArg}  --outdir "${asvMagLinkOutputDirAbs}" \\
+  --threads ${asvMagLinkThreads} \\
+  --min-pident ${asvMagLinkMinPident} \\
+  --min-qcov ${asvMagLinkMinQcov} \\
+  --top-n ${asvMagLinkTopN}
+
+python "${plotAsvMagLinkScriptPath}" \\
+  --input-dir "${asvMagLinkOutputDirAbs}" \\
+  --top-n ${asvMagLinkPlotTopN}
+
+touch asv_mag_link.done
 """
 }
 
@@ -5216,4 +6142,61 @@ def resolveOutputRelative(String pathValue, String baseOutputDir){
         return candidate.canonicalPath
     }
     return new File(baseOutputDir ?: '.', pathValue).canonicalPath
+}
+
+def extractNamedStringMap(Map cfg, List<String> orderedKeys, String nestedKey, String legacySuffix){
+    LinkedHashMap<String,String> out = [:]
+    if( cfg?.get(nestedKey) instanceof Map ) {
+        cfg[nestedKey].each { k, v ->
+            def key = k?.toString()?.trim()
+            def val = v?.toString()?.trim()
+            if( key && val ) {
+                out[key] = val
+            }
+        }
+    }
+    orderedKeys.eachWithIndex { key, idx ->
+        def legacyKey = "group${idx + 1}_${legacySuffix}"
+        if( cfg?.containsKey(legacyKey) ) {
+            def val = cfg[legacyKey]?.toString()?.trim()
+            if( val ) {
+                out[key] = val
+            }
+        }
+    }
+    return out
+}
+
+def extractNamedListMap(Map cfg, List<String> orderedKeys, String nestedKey, String legacySuffix){
+    LinkedHashMap<String,List<String>> out = [:]
+    if( cfg?.get(nestedKey) instanceof Map ) {
+        cfg[nestedKey].each { k, v ->
+            def key = k?.toString()?.trim()
+            def vals = []
+            if( v instanceof List ) {
+                vals = v.collect { it?.toString()?.trim() }.findAll { it }
+            } else if( v ) {
+                vals = v.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+            }
+            if( key && vals ) {
+                out[key] = vals
+            }
+        }
+    }
+    orderedKeys.eachWithIndex { key, idx ->
+        def legacyKey = "group${idx + 1}_${legacySuffix}"
+        if( cfg?.containsKey(legacyKey) ) {
+            def raw = cfg[legacyKey]
+            def vals = []
+            if( raw instanceof List ) {
+                vals = raw.collect { it?.toString()?.trim() }.findAll { it }
+            } else if( raw ) {
+                vals = raw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+            }
+            if( vals ) {
+                out[key] = vals
+            }
+        }
+    }
+    return out
 }

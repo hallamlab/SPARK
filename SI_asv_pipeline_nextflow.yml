@@ -10,6 +10,21 @@ resources:
   threads: 12          # per-sample processes (FASTP/MERGE/FILTER) use this many threads
   single_end: false
 
+palette_presets:
+  depth: &depth_palette "10=#b4e1fa,20=#7cc3f2,40=#4ca3e3,60=#2171b5,75=#90ee90,80=#aaffc3,85=#aaffc3,90=#cfff70,97=#e6f542,100=#ffcc99,110=#ff9966,120=#ff6e54,135=#cc3300,150=#9900cc,165=#663399,185=#2c003e,200=#000000"
+  season: &season_palette "Winter=#5b7bb2,Spring=#55a868,Summer=#e3b505,Fall=#c44e52,DJF=#5b7bb2,MAM=#55a868,JJA=#e3b505,SON=#c44e52"
+  anomaly_type: &anomaly_type_palette "normal=#7f7f7f,mixing_event=#1b9e77,high_stratification=#d95f02"
+  o2_compartment: &o2_compartment_palette "oxic=#1f78b4,suboxic=#4daf4a,dysoxic=#f28e2b,anoxic=#7b3294"
+  o2_subcompartment_final: &o2_subcompartment_palette "oxic__gmm0=#1f78b4,oxic__gmm2=#4ea5d9,oxic__gmm4=#89c2e5,oxic__other=#cfe8f3,suboxic__gmm1=#4daf4a,suboxic__gmm3=#7bc87c,suboxic__other=#ccebc5,dysoxic__gmm0=#f28e2b,dysoxic__gmm3=#d95f0e,dysoxic__other=#f8c58c,anoxic__gmm1=#7b3294,anoxic__other=#c2a5cf"
+  gmm_component: &gmm_component_palette "0=#1f78b4,0.0=#1f78b4,1=#33a02c,1.0=#33a02c,2=#e6ab02,2.0=#e6ab02,3=#f28e2b,3.0=#f28e2b,4=#6a3d9a,4.0=#6a3d9a"
+
+order_presets:
+  depth: &depth_order [10, 20, 40, 60, 75, 80, 85, 90, 97, 100, 110, 120, 135, 150, 165, 185, 200]
+  season: &season_order [Winter, Spring, Summer, Fall]
+  anomaly_type: &anomaly_type_order [normal, mixing_event, high_stratification]
+  o2_compartment: &o2_compartment_order [oxic, suboxic, dysoxic, anoxic]
+  o2_subcompartment_final: &o2_subcompartment_order [oxic__gmm0, oxic__gmm2, oxic__gmm4, oxic__other, suboxic__gmm1, suboxic__gmm3, suboxic__other, dysoxic__gmm0, dysoxic__gmm3, dysoxic__other, anoxic__gmm1, anoxic__other]
+  gmm_component: &gmm_component_order [0.0, 1.0, 2.0, 3.0, 4.0]
 
 biochem_pre_asv:
   enabled: true
@@ -213,8 +228,8 @@ batch_correction:
   output_dir: batch_correction
   batch_col: plateID
   asv_orientation: features_rows
-  biological_covariates: Depth,Season 
-  biological_color_col: Depth,Season 
+  biological_covariates: Depth,o2_subcompartment_final 
+  biological_color_col: Depth,o2_subcompartment_final
   color_palette_col: Color
   conqur_mode: libsize
   conqur_num_core: 12
@@ -293,7 +308,7 @@ bubbleplotter:
   formats: pdf,png
   figsize: "32,60"
   bubble_scale: 10
-  no_auto_size: true
+  no_auto_size: false
 
 umap_clustering:
   enabled: true
@@ -325,9 +340,23 @@ diversity:
 indicspecies:
   enabled: true
   sample_col: sampleID
+  block_col: Cruise
   group_cols:
     - anomaly_type 
     - o2_subcompartment_final
+    - o2_compartment
+    - gmm_component
+  group_palettes:
+    anomaly_type: *anomaly_type_palette
+    o2_subcompartment_final: *o2_subcompartment_palette
+    o2_compartment: *o2_compartment_palette
+    gmm_component: *gmm_component_palette
+  group_orders:
+    anomaly_type: *anomaly_type_order
+    o2_subcompartment_final: *o2_subcompartment_order
+    o2_compartment: *o2_compartment_order
+    gmm_component: *gmm_component_order
+  focus_labels: {}
   perms: 999
   min_n: 2
   plot_enabled: true
@@ -372,18 +401,23 @@ clustermaps:
   group2_col: Season
   group3_col: o2_subcompartment_final
   group4_col: anomaly_type
-  group1_order:
+  group1_order: *depth_order
   exclude_group1:
-  group1_palette: 
-  group2_palette:
-  group3_palette:
-  group4_palette:
+  group1_palette: *depth_palette
+  group2_palette: *season_palette
+  group3_palette: *o2_subcompartment_palette
+  group4_palette: *anomaly_type_palette
   ranks: Phylum,Class,Order,Family,Genus,Species,ASV_ID
-  topN: Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=6000
+  topN: Phylum=30,Class=30,Order=30,Family=30,Genus=30,Species=30,ASV_ID=100
   count_col: corr_count
   isa_min_stat: 0.6
   isa_significance_cols:
   isa_stat_cols:
+  formats: pdf,png
+  figwidth: 24
+  row_height: 0.12
+  min_height: 8
+  max_height: 1200
   mito_sample_mode: auto
 
 spieceasi:
@@ -403,21 +437,47 @@ spieceasi:
   graph_pos_all:
   graph_pos_sub:
   node_features:
+  isa_overlay_groups:
+    - anomaly_type
+    - o2_subcompartment_final
+    - o2_compartment
+    - gmm_component
+  group_palettes:
+    anomaly_type: *anomaly_type_palette
+    o2_subcompartment_final: *o2_subcompartment_palette
+    o2_compartment: *o2_compartment_palette
+    gmm_component: *gmm_component_palette
+  group_orders:
+    anomaly_type: *anomaly_type_order
+    o2_subcompartment_final: *o2_subcompartment_order
+    o2_compartment: *o2_compartment_order
+    gmm_component: *gmm_component_order
+  focus_labels: {}
   all_pos_only: true
   network_modes:
     - degree_all
     - abundance_all
     - group1_isa_all
     - group1_isa_all_labeled
+    - group1_isa_mag_all
     - group2_isa_all
     - group2_isa_all_labeled
+    - group2_isa_mag_all
+    - group3_isa_all
+    - group3_isa_all_labeled
+    - group3_isa_mag_all
+    - group4_isa_all
+    - group4_isa_all_labeled
+    - group4_isa_mag_all
     - module_all
     - module_all_labeled
+    - mag_pair_all
+    - mag_pair_tax_all
     - phylum_abund_all
     - phylum_isa_all
     - phylum_isa_all_labeled
   transpose: true
-  min_rel_abund: 0.005
+  min_rel_abund: 0.01
   min_prevalence: 0.01
   remove_zero_var: true
   method: glasso
@@ -427,7 +487,7 @@ spieceasi:
   thresh: 0.1
   ncores: 8
   seed: 10010
-  edge_threshold: 0.1
+  edge_threshold: 0.01
   keep_negative: false
   layout_iters: 1000
   force_filter: true
@@ -435,9 +495,109 @@ spieceasi:
   force_graphs: true
   layout_seed: 42
   layout_scale: 3.0
-  degree_scale: 80.0
+  degree_scale: 10.0
   edge_width_scale: 5.0
   isa_scale: 500.0
+  abundance_min_area: 6.0
+  abundance_max_area: 220.0
+  abundance_scale_power: 1.9
+
+asv_mag_link:
+  enabled: true
+  genome_qc_dirs:
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/MAGs/100m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/MAGs/150m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/MAGs/200m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/SAGs/100m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/SAGs/150m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/SAGs/200m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_MAGs/100m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_MAGs/150m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_MAGs/200m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_SAGs/100m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_SAGs/150m
+    - /media/nfs/Ryan/SABer/SI_data/SI_METAGs/SABer_260109/genome_qc_results/xPG_SAGs/200m
+  id_token_indexes:
+    - -1
+    - -1
+    - -1
+    - -1
+    - -1
+    - -1
+    - 0
+    - 0
+    - 0
+    - 4
+    - 4
+    - 4
+  output_dir: asv_mag_link
+  threads: 8
+  min_pident: 99.0
+  min_qcov: 90.0
+  top_n: 5
+  plot_top_n: 20
+
+biochem_network_overlay:
+  enabled: true
+  output_dir: biochem_network_overlay
+  sample_col: sampleID
+  ordination_x: PC1
+  ordination_y: PC2
+  isa_overlay_groups:
+    - anomaly_type
+    - o2_subcompartment_final
+    - o2_compartment
+    - gmm_component
+  modes:
+    - module
+    - mag_pair
+    - mag_pair_phylum
+    - mag_pair_family
+    - group1_isa
+    - group2_isa
+    - group3_isa
+    - group4_isa
+  top_modules: 100
+  top_vectors: 100
+  module_hull_quantile: 0.75
+  min_samples_per_hull: 4
+  min_asvs_per_module: 3
+  group_palettes:
+    anomaly_type: *anomaly_type_palette
+    o2_subcompartment_final: *o2_subcompartment_palette
+    o2_compartment: *o2_compartment_palette
+    gmm_component: *gmm_component_palette
+  group_orders:
+    anomaly_type: *anomaly_type_order
+    o2_subcompartment_final: *o2_subcompartment_order
+    o2_compartment: *o2_compartment_order
+    gmm_component: *gmm_component_order
+  group1_palette: *anomaly_type_palette
+  group2_palette: *o2_subcompartment_palette
+  group1_order: *anomaly_type_order
+  group2_order: *o2_subcompartment_order
+
+master_summary:
+  enabled: true
+  output_dir: summary/tables
+  clustermaps_dir: clustermaps
+  indicspecies_dir: indicspecies
+  spieceasi_dir: spieceasi
+  asv_mag_dir: asv_mag_link
+  max_direct_cols: 300
+  whitelist:
+    - anomaly_type_indicator_species_summary.tsv
+    - anomaly_type_indicator_species_results.tsv
+    - o2_subcompartment_final_indicator_species_summary.tsv
+    - o2_subcompartment_final_indicator_species_results.tsv
+    - spieceasi_node_features.csv
+    - spieceasi_modules_sub.tsv
+    - spieceasi_modules_all.tsv
+    - module_asv_anchor_table.tsv
+    - clustermap_ASV_ID_plot.tsv
+    - asv2mag_pairing.tsv
+    - asv2mag_summary.tsv
+    - asv2mag_genome_summary.tsv
 
 trajectory_analysis:
   enabled: false
@@ -527,3 +687,6 @@ environments:
   spieceasi: envs/advanced.yml
   network_modules: envs/advanced.yml
   network: envs/advanced.yml
+  master_summary: envs/advanced.yml
+  asv_mag_link: envs/asv_mag_link.yml
+  biochem_network_overlay: envs/advanced.yml

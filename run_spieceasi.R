@@ -321,15 +321,14 @@ am_coord <- if (isFALSE(opt$force_graphs)) load_if_exists(cache_layout) else FAL
 if (identical(ig_main, FALSE) || identical(am_coord, FALSE)) {
   msg("Building graphs ...")
 
-  # Thresholded positive-only graph
+  # Canonical positive graph: always respect edge_threshold.
+  # With edge_threshold=0, this is equivalent to the old all-positive graph.
   A_pos_thr <- adj_from_partial(pcor, threshold = opt$edge_threshold, positive_only = TRUE)
   ig_main   <- graph_from_adjacency_matrix(A_pos_thr, mode = "undirected", weighted = TRUE, diag = FALSE)
 
-  # All positive weights (no threshold) for reference
-  A_pos_all <- pcor
-  A_pos_all[A_pos_all < 0] <- 0
-  A_pos_all <- (A_pos_all + t(A_pos_all)) / 2
-  diag(A_pos_all) <- 0
+  # Keep the historical POS_ALL filenames, but make them reflect the same
+  # thresholded positive edge set so every downstream table/plot stays aligned.
+  A_pos_all <- A_pos_thr
   ig_pos_all <- graph_from_adjacency_matrix(A_pos_all, mode = "undirected", weighted = TRUE, diag = FALSE)
 
   # Signed thresholded (optional)
@@ -432,16 +431,21 @@ edges_df$Weight <- E(ig_main)$weight
 save_csv(edges_df, paste0(prefix, "_edge_list.csv"))
 
 # -------------------------- Node centralities --------------------------------
-node_degree      <- igraph::degree(ig_main)
-node_betweenness <- igraph::betweenness(ig_main)
-node_closeness   <- igraph::closeness(ig_main)
-node_eigen       <- igraph::eigen_centrality(ig_main)$vector
-node_ids         <- paste0("n", seq_along(V(ig_main)) - 1)
+# Use the all-positive graph as the canonical node summary source so Degree
+# matches every downstream POS_ALL plot/table. Keep the thresholded degree as
+# an explicit audit column.
+node_degree            <- igraph::degree(ig_pos_all)
+node_degree_threshold  <- igraph::degree(ig_main)
+node_betweenness       <- igraph::betweenness(ig_pos_all)
+node_closeness         <- igraph::closeness(ig_pos_all)
+node_eigen             <- igraph::eigen_centrality(ig_pos_all)$vector
+node_ids               <- paste0("n", seq_along(V(ig_pos_all)) - 1)
 
 node_features <- data.frame(
   GraphML_ID   = node_ids,
-  Taxon        = V(ig_main)$name,
+  Taxon        = V(ig_pos_all)$name,
   Degree       = node_degree,
+  Degree_thresholded = node_degree_threshold,
   Betweenness  = node_betweenness,
   Closeness    = node_closeness,
   EigenCentral = node_eigen

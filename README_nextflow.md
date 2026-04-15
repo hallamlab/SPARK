@@ -158,6 +158,7 @@ Copy-ready files are available in `SPARK/examples/`:
 - `examples/my_run.min.yml`: core ASV + taxonomy only.
 - `examples/my_run.full.yml`: metadata + mito workflow.
 - `examples/my_run.patient_aware_test.yml`: minimal test config for the new patient-aware branches.
+- `examples/my_run.asv_mag_test.yml`: minimal test config for the ASV-to-genome barrnap linkage branch.
 - `examples/manifest.example.tsv`: manifest format template.
 - `examples/metadata.example.tsv`: minimal metadata schema template.
 
@@ -244,7 +245,7 @@ Map logical stage environments to YAML files in `SPARK/envs/`.
 Common keys:
 - `main`, `sina`, `taxonomy`, `mitomaster`, `mito_checker`, `filter_counts`, `general_stats`, `plot_metadata`, `sankey`
 - `biochem_pre_asv` or `biochem`
-- Optional advanced keys: `diversity`, `indicspecies`, `power_analysis`, `clustermaps`, `spieceasi`, `network`, `network_modules`, `plot_upset`, `bubbleplotter`, `umap_clustering`, plus step-specific `biochem_*`
+- Optional advanced keys: `diversity`, `indicspecies`, `power_analysis`, `clustermaps`, `spieceasi`, `asv_mag_link`, `network`, `network_modules`, `plot_upset`, `bubbleplotter`, `umap_clustering`, plus step-specific `biochem_*`
 
 ### Feature toggles to review
 - `mito.enabled`
@@ -259,10 +260,49 @@ Common keys:
 - `power_analysis.enabled`
 - `clustermaps.enabled`
 - `spieceasi.enabled`
+- `asv_mag_link.enabled`
 - `biochem_pre_asv.enabled`
 
 ### `power_analysis`
 Optional patient-aware power-analysis branch. This stage is off by default and requires `metadata_plots.enabled: true`, because it builds a long-format master table from `ASV_meta_micro*.tsv` plus the final micro count table. If `indicspecies.enabled: true`, the power-analysis plotting wrapper will also reuse the run's indicspecies outputs for aligned ISA power figures.
+
+### Flexible ISA Groups
+`indicspecies.group_cols` can contain more than two grouping columns. The ISA analysis itself already runs all listed groups, and the downstream network / biochem overlay layers now support `groupN_*` ISA modes based on that configured order.
+
+Useful keys:
+- `indicspecies.group_cols`
+- `indicspecies.group_palettes`
+- `indicspecies.group_orders`
+- `indicspecies.focus_labels`
+- `spieceasi.isa_overlay_groups`
+- `spieceasi.group_palettes`
+- `spieceasi.group_orders`
+- `spieceasi.focus_labels`
+- `biochem_network_overlay.isa_overlay_groups`
+- `biochem_network_overlay.group_palettes`
+- `biochem_network_overlay.group_orders`
+
+Example:
+
+```yaml
+indicspecies:
+  group_cols:
+    - anomaly_type
+    - o2_subcompartment_final
+    - o2_compartment
+  group_orders:
+    anomaly_type: [oxic, dysoxic, anoxic]
+
+spieceasi:
+  isa_overlay_groups:
+    - anomaly_type
+    - o2_subcompartment_final
+    - o2_compartment
+  network_modes:
+    - group1_isa_all
+    - group2_isa_all
+    - group3_isa_all
+```
 
 Common keys:
 - `enabled`
@@ -349,6 +389,22 @@ Common keys:
 - `healthy_col`
 - `lung_status_col`
 
+### `asv_mag_link`
+Optional ASV-to-genome linkage branch. This stage is off by default and runs after the ASV feature table is finalized but before `MASTER_SUMMARY`, so its outputs can be pulled into the summary tables. It aligns the filtered ASV FASTA against barrnap-derived 16S/SSU references recovered from one or more genome/MAG sources, then writes per-hit tables, best-hit pairings, pairing-status summaries, genome-level count tables, MAG-enriched summary tables, and downstream plots. The preferred input is `genome_qc_dir` or `genome_qc_dirs`, because the linker can autodetect `barrnap/`, prefer final QC genomes from `dedupe/fasta` (falling back to `genomes_subset`), and restrict the eligible MAGs to those that pass the genome-QC barrnap check. If you are not using a genome_qc result directory, you can still provide `barrnap_dir` directly, and optionally `genome_fasta_dir` for GFF-based interval extraction.
+
+Common keys:
+- `enabled`
+- `genome_qc_dir`
+- `genome_qc_dirs`
+- `barrnap_dir`
+- `genome_fasta_dir`
+- `output_dir`
+- `threads`
+- `min_pident`
+- `min_qcov`
+- `top_n`
+- `plot_top_n`
+
 ### `indicspecies.aligned_*`
 Optional aligned ISA summary/plot stage built on top of the existing `INDICSPECIES` outputs. This stage is off by default and does not replace the standard `INDICSPECIES_PLOTS` step; it adds a second summary/visualization pass using `plot_indicspecies_aligned.py`.
 
@@ -385,6 +441,7 @@ Under `paths.output_dir`, typical directories include:
 - optional: `bray_patient_aware/`
 - optional: `taxonomy_patient_aware/`
 - optional: `lung_status_analysis/`
+- optional: `asv_mag_link/`
 - optional biochem branch outputs when `biochem_pre_asv.enabled: true`
 
 Nextflow runtime artifacts:

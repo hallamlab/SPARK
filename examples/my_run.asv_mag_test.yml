@@ -1,5 +1,6 @@
-# Minimal template: core ASV + taxonomy only.
-# Copy to SPARK/my_run.yml and edit all /abs/path placeholders.
+# Minimal template to test ASV-to-genome barrnap linkage.
+# Assumes you want the normal metadata stage plus master summary, but most
+# optional downstream analyses disabled.
 
 paths:
   input_dir: /abs/path/to/fastq_dir
@@ -25,7 +26,13 @@ sankey:
   enabled: false
 
 metadata_plots:
-  enabled: false
+  enabled: true
+  metadata: /abs/path/to/ref_db/asv_cruise_metadata.tsv
+  sample_col: sampleID
+  type_col: Depth
+  color_col: Color
+  run_micro: true
+  run_mito: false
 
 batch_correction:
   enabled: false
@@ -42,50 +49,28 @@ diversity:
 indicspecies:
   enabled: false
   aligned_plot_enabled: false
-  group_palettes: {}
-  group_orders: {}
-  focus_labels: {}
-
-power_analysis:
-  enabled: false
-
-bray_patient_aware:
-  enabled: false
-
-taxonomy_patient_aware:
-  enabled: false
-
-lung_status_analysis:
-  enabled: false
 
 clustermaps:
   enabled: false
 
 spieceasi:
   enabled: false
-  isa_overlay_groups:
-  group_palettes: {}
-  group_orders: {}
-  focus_labels: {}
 
 asv_mag_link:
-  enabled: false
-  genome_qc_dir:
+  enabled: true
+  genome_qc_dir: /abs/path/to/genome_qc_run
   genome_qc_dirs:
-  barrnap_dir: /abs/path/to/barrnap_outputs
+  barrnap_dir:
   genome_fasta_dir:
+  output_dir: asv_mag_link
+  threads: 8
+  min_pident: 97.0
+  min_qcov: 90.0
+  top_n: 5
   plot_top_n: 20
 
 master_summary:
-  enabled: false
+  enabled: true
 
 biochem_pre_asv:
   enabled: false
-
-biochem_network_overlay:
-  enabled: false
-  isa_overlay_groups:
-  modes:
-    - module
-  group_palettes: {}
-  group_orders: {}

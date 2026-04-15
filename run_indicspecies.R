@@ -424,7 +424,7 @@ for (gcol in group_cols) {
       }
 
       message("Running multipatt for 'status' within type_group='", site,
-              "' (single groups, duleg=FALSE) …")
+              "' (general multipatt, duleg=FALSE) …")
       fit1 <- run_indics(X_pat, grouping_pat, perms = opt$perms, duleg = FALSE, patient_blocks = NULL)
       res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
       res1_full <- summarize_multipatt(fit1)
@@ -435,7 +435,7 @@ for (gcol in group_cols) {
       pooled_status_full[[length(pooled_status_full) + 1]] <- res1_full %>% mutate(type_group = site)
 
       message("Running multipatt for 'status' within type_group='", site,
-              "' (combos allowed, duleg=TRUE) …")
+              "' (DULEG-restricted mode, duleg=TRUE) …")
       fit2 <- run_indics(X_pat, grouping_pat, perms = opt$perms, duleg = TRUE, patient_blocks = NULL)
       res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
       res2_full <- summarize_multipatt(fit2)
@@ -499,7 +499,7 @@ for (gcol in group_cols) {
                 warning("Skipping Lung Brush no-contralateral status ISA after patient aggregation.")
               } else {
                 message("Running multipatt for 'status' within type_group='", site,
-                        "' excluding contralateral cancer samples (duleg=FALSE) …")
+                        "' excluding contralateral cancer samples (general multipatt, duleg=FALSE) …")
                 fit1_nc <- run_indics(X_pat_nc, grouping_pat_nc, perms = opt$perms,
                                       duleg = FALSE, patient_blocks = NULL)
                 res1_nc_sign <- as.data.frame(fit1_nc$sign) %>% rownames_to_column("ASV")
@@ -510,7 +510,7 @@ for (gcol in group_cols) {
                 )
 
                 message("Running multipatt for 'status' within type_group='", site,
-                        "' excluding contralateral cancer samples (duleg=TRUE) …")
+                        "' excluding contralateral cancer samples (DULEG-restricted mode, duleg=TRUE) …")
                 fit2_nc <- run_indics(X_pat_nc, grouping_pat_nc, perms = opt$perms,
                                       duleg = TRUE, patient_blocks = NULL)
                 res2_nc_sign <- as.data.frame(fit2_nc$sign) %>% rownames_to_column("ASV")
@@ -540,17 +540,20 @@ for (gcol in group_cols) {
   # For other grouping columns (non-type_group, non-status), use restricted permutations.
   use_blocking <- gcol %in% blocked_cols
   patient_blocks <- NULL
+  blocking_ids <- NULL
   if (!is.null(opt$`block-col`) && nzchar(opt$`block-col`)) {
     if (!(opt$`block-col` %in% colnames(meta_keep))) {
       stop("Block column '", opt$`block-col`, "' not found in metadata. Available: ",
            paste(colnames(meta_keep), collapse = ", "))
     }
-    patient_blocks <- droplevels(factor(meta_keep[[opt$`block-col`]]))
+    blocking_ids <- as.character(meta_keep[[opt$`block-col`]])
+    patient_blocks <- droplevels(factor(blocking_ids))
     message("Grouping '", gcol, "' uses explicit blocking column '", opt$`block-col`, "'.")
     use_blocking <- TRUE
   } else if (use_blocking) {
     if (opt$`patient-col` %in% colnames(meta_keep)) {
-      patient_blocks <- droplevels(factor(meta_keep[[opt$`patient-col`]]))
+      blocking_ids <- as.character(meta_keep[[opt$`patient-col`]])
+      patient_blocks <- droplevels(factor(blocking_ids))
       message("Grouping '", gcol, "' uses BLOCKED permutations (within-patient design)")
     } else {
       warning("Patient column '", opt$`patient-col`, "' not found; using standard permutations")
@@ -560,11 +563,15 @@ for (gcol in group_cols) {
   X_for_isa <- X
   grouping_for_isa <- grouping
   if (use_blocking && !is.null(patient_blocks)) {
+    if (is.null(blocking_ids)) {
+      stop("Blocking requested for grouping column '", gcol, "' but no blocking IDs were resolved.")
+    }
+
     if (gcol == "type_group" && isTRUE(opt$`type-group-require-complete`)) {
       needed_types <- unique(as.character(grouping))
       keep_patients <- meta_keep %>%
         transmute(
-          patient_id___ = as.character(.data[[opt$`patient-col`]]),
+          patient_id___ = blocking_ids,
           group_id___ = as.character(.data[[gcol]])
         ) %>%
         distinct() %>%
@@ -578,14 +585,15 @@ for (gcol in group_cols) {
         next
       }
 
-      keep_rows <- as.character(meta_keep[[opt$`patient-col`]]) %in% keep_patients
+      keep_rows <- blocking_ids %in% keep_patients
       X <- X[keep_rows, , drop = FALSE]
       meta_keep <- meta_keep[keep_rows, , drop = FALSE]
       grouping <- droplevels(grouping[keep_rows])
-      patient_blocks <- droplevels(factor(meta_keep[[opt$`patient-col`]]))
+      blocking_ids <- blocking_ids[keep_rows]
+      patient_blocks <- droplevels(factor(blocking_ids))
     }
 
-    collapsed <- aggregate_to_patient_group(X, meta_keep[[opt$`patient-col`]], grouping)
+    collapsed <- aggregate_to_patient_group(X, blocking_ids, grouping)
     X_for_isa <- collapsed$X
     grouping_for_isa <- droplevels(factor(collapsed$group))
     patient_blocks <- droplevels(factor(collapsed$patient))
@@ -600,19 +608,19 @@ for (gcol in group_cols) {
     }
 
     if (length(unique(grouping_for_isa)) < 2) {
-      warning("Grouping column '", gcol, "' has <2 patient-level groups after aggregation; skipping.")
+      warning("Grouping column '", gcol, "' has <2 block-level groups after aggregation; skipping.")
       next
     }
   }
   X_for_isa <- apply_matrix_transform(X_for_isa, opt$transform)
 
-  message("Running multipatt for '", gcol, "' (single groups, duleg=FALSE) …")
+  message("Running multipatt for '", gcol, "' (general multipatt, duleg=FALSE) …")
   fit1 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
   res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
   res1_full <- summarize_multipatt(fit1)
   write_tables(res1_sign, res1_full, paste0(gcol, "_indicator_species"))
 
-  message("Running multipatt for '", gcol, "' (combos allowed, duleg=TRUE) …")
+  message("Running multipatt for '", gcol, "' (DULEG-restricted mode, duleg=TRUE) …")
   fit2 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
   res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
   res2_full <- summarize_multipatt(fit2)
