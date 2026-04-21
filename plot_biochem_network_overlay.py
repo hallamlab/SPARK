@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import textwrap
 from pathlib import Path
 
 import matplotlib as mpl
@@ -35,6 +36,13 @@ UNKNOWN_MAG_FAMILY = "Unclassified MAG family"
 UNKNOWN_MAG_MIMAG = "Unclassified MIMAG tier"
 MIMAG_TIER_ORDER = ["low", "medium", "high"]
 ALLOWED_MAG_MIMAG_TIERS = {"medium", "high"}
+BETWEENNESS_THRESHOLD = 0.05
+BETWEENNESS_HIGH_LABEL = f"Betweenness >= {BETWEENNESS_THRESHOLD:.2f}"
+BETWEENNESS_LOW_LABEL = f"Betweenness < {BETWEENNESS_THRESHOLD:.2f}"
+BETWEENNESS_PALETTE = {
+    BETWEENNESS_HIGH_LABEL: "#4a4a4a",
+    BETWEENNESS_LOW_LABEL: "#d0d0d0",
+}
 MIMAG_TIER_PALETTE = {
     "low": "#bdbdbd",
     "medium": "#7a7a7a",
@@ -133,6 +141,14 @@ def normalize_mimag_tier(series: pd.Series) -> pd.Series:
         .str.lower()
         .replace({"med": "medium"})
     )
+
+
+def get_betweenness_series(df: pd.DataFrame) -> pd.Series:
+    if "Betweenness_norm" in df.columns:
+        return pd.to_numeric(df["Betweenness_norm"], errors="coerce").fillna(0.0)
+    if "Betweenness" in df.columns:
+        return pd.to_numeric(df["Betweenness"], errors="coerce").fillna(0.0)
+    return pd.Series(0.0, index=df.index, dtype=float)
 
 
 def infer_group_name_from_path(path: str) -> str:
@@ -366,10 +382,27 @@ def place_label_at_tip(ax, feat: str, tipx: float, tipy: float, color: str, clou
     return text
 
 
-def overlay_degree_to_area(degree: float) -> float:
-    deg = max(0.0, float(degree))
-    # Smaller than the network plot, but with clearer separation across low degrees.
-    return 18.0 + (deg ** 2.0) * 12.0
+def degree_marker_area(degree: float, degree_scale: float) -> float:
+    deg = max(float(degree), 0.0)
+    scale = max(float(degree_scale), 1.0) * 0.14
+    return float(max(8.0, ((deg + 1.0) ** 1.6) * scale))
+
+
+def build_degree_legend_values(observed_degrees: pd.Series) -> list[int]:
+    vals = pd.to_numeric(observed_degrees, errors="coerce").dropna()
+    if vals.empty:
+        return [0, 5]
+    max_deg = int(max(0, round(float(vals.max()))))
+    step = 5 if max_deg <= 25 else 10
+    legend_max = max(step, int(math.ceil(max_deg / float(step)) * step))
+    return list(range(0, legend_max + step, step))
+
+
+def overlay_degree_to_area(degree: float, degree_scale: float, degree_cap: float) -> float:
+    # Keep the overlay smaller than the standalone network graphs, but use the
+    # same nonlinear degree mapping and the same capped legend range.
+    capped = min(max(0.0, float(degree)), float(degree_cap))
+    return degree_marker_area(capped, max(float(degree_scale) * 0.38, 1.0))
 
 
 def feature_slug(feature: str) -> str:
@@ -441,15 +474,13 @@ def build_sample_biochem_variants(meta: pd.DataFrame, sample_col: str, sample_co
     return variants
 
 
-def degree_size_handles(degrees: pd.Series) -> list[Line2D]:
-    vals = pd.to_numeric(degrees, errors="coerce").dropna()
-    if vals.empty:
+def degree_size_handles(legend_levels: list[int], degree_scale: float) -> list[Line2D]:
+    if not legend_levels:
         return []
-    max_deg = int(max(1, round(float(vals.max()))))
-    pts = [deg for deg in range(1, min(5, max_deg) + 1)]
     handles: list[Line2D] = []
-    for deg in pts:
-        area = overlay_degree_to_area(deg)
+    degree_cap = max(legend_levels)
+    for deg in legend_levels:
+        area = overlay_degree_to_area(deg, degree_scale, degree_cap)
         size = math.sqrt(area)
         handles.append(
             Line2D(
@@ -500,6 +531,16 @@ def biochem_vector_legend_handles(core_vectors: pd.DataFrame, sparse_corr: pd.Da
             Line2D([0], [0], color=color, linewidth=2.2, linestyle="--", label=f"{feature} (sparse)")
         )
 
+    return handles
+
+
+def wrap_legend_handles(handles: list, width: int = 28) -> list:
+    """Wrap long legend labels so adjacent right-side legends cannot collide."""
+    for handle in handles:
+        label = str(handle.get_label())
+        if not label or label.startswith("_"):
+            continue
+        handle.set_label(textwrap.fill(label, width=width, break_long_words=False, break_on_hyphens=False))
     return handles
 
 
@@ -650,6 +691,7 @@ def main() -> None:
     if "Degree" not in node_features.columns:
         node_features["Degree"] = 1.0
     node_features["Degree"] = pd.to_numeric(node_features["Degree"], errors="coerce").fillna(1.0)
+    node_features["Betweenness"] = get_betweenness_series(node_features)
     node_features = node_features.drop_duplicates(subset=["Taxon"])
 
     pairing = read_table(args.asv_mag_pairing, sep="\t")
@@ -723,8 +765,9 @@ def main() -> None:
         })
         isa_overlays[group_name] = overlay
 
-    module_taxon = modules.merge(node_features[["Taxon", "Degree"]], on="Taxon", how="left")
+    module_taxon = modules.merge(node_features[["Taxon", "Degree", "Betweenness"]], on="Taxon", how="left")
     module_taxon["Degree"] = pd.to_numeric(module_taxon["Degree"], errors="coerce").fillna(1.0)
+    module_taxon["Betweenness"] = pd.to_numeric(module_taxon["Betweenness"], errors="coerce").fillna(0.0)
     module_taxon = module_taxon[module_taxon["Taxon"].isin(rel.index)].copy()
 
     module_sizes = module_taxon.groupby("module_label")["Taxon"].nunique().rename("n_module_asvs")
@@ -772,13 +815,15 @@ def main() -> None:
                 "ASV_ID": asv_id,
                 "module_label": row["module_label"],
                 "Degree": float(row["Degree"]),
+                "Betweenness": float(row["Betweenness"]),
+                "betweenness_label": BETWEENNESS_HIGH_LABEL if float(row["Betweenness"]) >= BETWEENNESS_THRESHOLD else BETWEENNESS_LOW_LABEL,
                 args.ordination_x: proj[0],
                 args.ordination_y: proj[1],
             })
     if all_network_rows:
         all_network_df = pd.DataFrame(all_network_rows).drop_duplicates(subset=["ASV_ID"]).sort_values("Degree", ascending=False)
     else:
-        all_network_df = pd.DataFrame(columns=["ASV_ID", "module_label", "Degree", args.ordination_x, args.ordination_y])
+        all_network_df = pd.DataFrame(columns=["ASV_ID", "module_label", "Degree", "Betweenness", "betweenness_label", args.ordination_x, args.ordination_y])
 
     mag_df = all_network_df[all_network_df["ASV_ID"].isin(paired_asvs)].copy()
     non_mag_df = all_network_df[~all_network_df["ASV_ID"].isin(paired_asvs)].copy()
@@ -791,7 +836,7 @@ def main() -> None:
                 mag_df = mag_df.merge(overlay, on="ASV_ID", how="left")
     else:
         mag_df = pd.DataFrame(columns=[
-            "ASV_ID", "module_label", "Degree", args.ordination_x, args.ordination_y,
+            "ASV_ID", "module_label", "Degree", "Betweenness", "betweenness_label", args.ordination_x, args.ordination_y,
             "mag_taxonomy_label", "mag_family_label", "phylum",
         ])
 
@@ -861,6 +906,14 @@ def main() -> None:
             "order": [],
             "signif_column": None,
         },
+        "betweenness": {
+            "column": "betweenness_label",
+            "title": "Betweenness",
+            "slug": "betweenness",
+            "palette": dict(BETWEENNESS_PALETTE),
+            "order": [BETWEENNESS_HIGH_LABEL, BETWEENNESS_LOW_LABEL],
+            "signif_column": None,
+        },
     }
     for idx, group_name in enumerate(isa_group_cols, start=1):
         overlay_specs[f"group{idx}_isa"] = {
@@ -915,7 +968,13 @@ def main() -> None:
             point_df["__overlay_label"] = color_series
             point_df["__overlay_color"] = [palette.get(label, NOT_FOCUS_COLOR) if label else NOT_FOCUS_COLOR for label in color_series]
             point_df["__overlay_degree"] = pd.to_numeric(point_df["Degree"], errors="coerce").fillna(0.0).clip(lower=0.0)
-            point_df["__overlay_size"] = point_df["__overlay_degree"].map(overlay_degree_to_area)
+            degree_legend_levels = build_degree_legend_values(point_df["__overlay_degree"])
+            degree_cap = max(degree_legend_levels) if degree_legend_levels else 5
+            point_df["__overlay_size"] = point_df["__overlay_degree"].map(
+                lambda d: overlay_degree_to_area(d, args.degree_scale, degree_cap)
+            )
+        else:
+            degree_legend_levels = []
 
         plot_variants = [{"kind": "base", "sample_spec": None}] + [
             {"kind": "sample_biochem", "sample_spec": sample_spec}
@@ -958,7 +1017,7 @@ def main() -> None:
                         sample_plot_df[args.ordination_y],
                         s=SAMPLE_BUBBLE_SIZE,
                         c=sample_colors,
-                        alpha=0.32,
+                        alpha=1.0,
                         linewidths=0.30,
                         edgecolors="#5a5a5a",
                         zorder=1,
@@ -980,16 +1039,55 @@ def main() -> None:
                     )
 
                 if not point_df.empty:
-                    ax.scatter(
-                        point_df[args.ordination_x],
-                        point_df[args.ordination_y],
-                        s=point_df["__overlay_size"],
-                        c=point_df["__overlay_color"],
-                        edgecolors="black",
-                        linewidths=0.4,
-                        alpha=0.95,
-                        zorder=5,
-                    )
+                    if mode == "betweenness":
+                        low_mask = point_df["betweenness_label"].astype(str).eq(BETWEENNESS_LOW_LABEL)
+                        high_mask = point_df["betweenness_label"].astype(str).eq(BETWEENNESS_HIGH_LABEL)
+                        low_df = point_df.loc[low_mask].sort_values("Betweenness", ascending=True)
+                        high_df = point_df.loc[high_mask].sort_values("Betweenness", ascending=True)
+                        if not low_df.empty:
+                            ax.scatter(
+                                low_df[args.ordination_x],
+                                low_df[args.ordination_y],
+                                s=low_df["__overlay_size"],
+                                c=low_df["__overlay_color"],
+                                edgecolors="black",
+                                linewidths=0.4,
+                                alpha=0.95,
+                                zorder=5,
+                            )
+                        if not high_df.empty:
+                            # Halo underlay so the focal high-betweenness points
+                            # stay visually on top wherever points overlap.
+                            ax.scatter(
+                                high_df[args.ordination_x],
+                                high_df[args.ordination_y],
+                                s=high_df["__overlay_size"] * 1.18,
+                                c="white",
+                                edgecolors="none",
+                                alpha=0.98,
+                                zorder=6,
+                            )
+                            ax.scatter(
+                                high_df[args.ordination_x],
+                                high_df[args.ordination_y],
+                                s=high_df["__overlay_size"],
+                                c=high_df["__overlay_color"],
+                                edgecolors="black",
+                                linewidths=0.55,
+                                alpha=0.98,
+                                zorder=7,
+                            )
+                    else:
+                        ax.scatter(
+                            point_df[args.ordination_x],
+                            point_df[args.ordination_y],
+                            s=point_df["__overlay_size"],
+                            c=point_df["__overlay_color"],
+                            edgecolors="black",
+                            linewidths=0.4,
+                            alpha=0.95,
+                            zorder=5,
+                        )
 
                 label_texts = []
                 label_anchors = []
@@ -1070,11 +1168,15 @@ def main() -> None:
                             mpatches.Patch(facecolor=palette[label], edgecolor=palette[label], label=label)
                             for label in order if label
                         ])
-                    overlay_handles.extend(degree_size_handles(point_df["Degree"]))
+                    overlay_handles.extend(degree_size_handles(degree_legend_levels, args.degree_scale))
 
                 legend_artists = []
+                overlay_handles = wrap_legend_handles(overlay_handles, width=28)
                 overlay_anchor = (1.18, 1.0) if sample_spec is not None else (1.02, 1.0)
-                biochem_anchor = (1.47, 1.0) if sample_spec is not None else (1.33, 1.0)
+                # Keep the vector legend in a separate right-side column. Long
+                # overlay labels are wrapped above, and this larger offset
+                # prevents the two legend columns from colliding in *_legend plots.
+                biochem_anchor = (1.82, 1.0) if sample_spec is not None else (1.62, 1.0)
                 overlay_legend = ax.legend(
                     handles=overlay_handles,
                     loc="upper left",
@@ -1087,6 +1189,7 @@ def main() -> None:
                 if not label_mode:
                     biochem_handles = biochem_vector_legend_handles(core_vectors, sparse_corr)
                     if biochem_handles:
+                        biochem_handles = wrap_legend_handles(biochem_handles, width=26)
                         ax.add_artist(overlay_legend)
                         biochem_legend = ax.legend(
                             handles=biochem_handles,

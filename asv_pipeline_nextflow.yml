@@ -550,8 +550,13 @@ spieceasi:
   layout_seed: 42
   layout_scale: 3.0
   degree_scale: 80.0
+  degree_size_mode: legacy
+  degree_min_area: 0.0
   edge_width_scale: 10.0
   isa_scale: 700.0
+  abundance_size_mode: legacy
+  abundance_reference: 5000.0
+  abundance_reference_area: 80.0
   abundance_min_area: 8.0
   abundance_max_area: 420.0
   abundance_scale_power: 1.6
@@ -579,6 +584,7 @@ biochem_network_overlay:
   isa_overlay_groups:
   modes:
     - module
+    - betweenness
     - mag_pair_phylum
     - mag_pair_family
   top_modules: 8
@@ -592,6 +598,26 @@ biochem_network_overlay:
   group2_palette:
   group1_order:
   group2_order:
+
+sample_agreement_dendrograms:
+  enabled: false
+  output_dir: sample_agreement_dendrograms
+  sample_col: sample
+  module_col: top_module
+  group_cols:
+  biochem_assignments:
+  biochem_sample_col: cruise_year_month_depth
+  meta_join_cols:
+  biochem_join_cols:
+  biochem_feature_cols:
+  biochem_metric: euclidean
+  biochem_linkage: average
+  asv_metric: euclidean
+  asv_linkage: average
+  untangle: true
+  untangle_passes: 4
+  group_palettes: {}
+  group_orders: {}
 
 master_summary:
   enabled: true
@@ -672,3 +698,4 @@ environments:
   master_summary: envs/advanced.yml
   asv_mag_link: envs/asv_mag_link.yml
   biochem_network_overlay: envs/advanced.yml
+  sample_agreement_dendrograms: envs/advanced.yml

@@ -628,6 +628,11 @@ if( !biochemNetworkOverlayScriptFile.exists() ) {
     exit 1, "plot_biochem_network_overlay.py not found in project directory"
 }
 def biochemNetworkOverlayScriptPath = biochemNetworkOverlayScriptFile.canonicalPath
+def sampleAgreementScriptFile = new File("${projectDir}/plot_sample_agreement_dendrograms.py")
+if( !sampleAgreementScriptFile.exists() ) {
+    exit 1, "plot_sample_agreement_dendrograms.py not found in project directory"
+}
+def sampleAgreementScriptPath = sampleAgreementScriptFile.canonicalPath
 def powerAnalysisScriptFile = new File("${projectDir}/run_power_analysis_pipeline.sh")
 if( !powerAnalysisScriptFile.exists() ) {
     exit 1, "run_power_analysis_pipeline.sh not found in project directory"
@@ -1822,8 +1827,13 @@ def parseIndicatorAndNetworkConfig(config, File configRoot, String outputDir, in
     def networkLayoutSeed = spieceasiConfig.layout_seed ? (spieceasiConfig.layout_seed as int) : 42
     def networkLayoutScale = spieceasiConfig.layout_scale != null ? (spieceasiConfig.layout_scale as double) : 3.0d
     def networkDegreeScale = spieceasiConfig.degree_scale != null ? (spieceasiConfig.degree_scale as double) : 80.0d
+    def networkDegreeSizeMode = spieceasiConfig.degree_size_mode ? spieceasiConfig.degree_size_mode.toString().trim() : 'legacy'
+    def networkDegreeMinArea = spieceasiConfig.degree_min_area != null ? (spieceasiConfig.degree_min_area as double) : 0.0d
     def networkEdgeWidthScale = spieceasiConfig.edge_width_scale != null ? (spieceasiConfig.edge_width_scale as double) : 5.0d
     def networkIsaScale = spieceasiConfig.isa_scale != null ? (spieceasiConfig.isa_scale as double) : 700.0d
+    def networkAbundanceSizeMode = spieceasiConfig.abundance_size_mode ? spieceasiConfig.abundance_size_mode.toString().trim() : 'legacy'
+    def networkAbundanceReference = spieceasiConfig.abundance_reference != null ? (spieceasiConfig.abundance_reference as double) : 5000.0d
+    def networkAbundanceReferenceArea = spieceasiConfig.abundance_reference_area != null ? (spieceasiConfig.abundance_reference_area as double) : 80.0d
     def networkAbundanceMinArea = spieceasiConfig.abundance_min_area != null ? (spieceasiConfig.abundance_min_area as double) : 8.0d
     def networkAbundanceMaxArea = spieceasiConfig.abundance_max_area != null ? (spieceasiConfig.abundance_max_area as double) : 420.0d
     def networkAbundanceScalePower = spieceasiConfig.abundance_scale_power != null ? (spieceasiConfig.abundance_scale_power as double) : 1.6d
@@ -2007,6 +2017,72 @@ def parseIndicatorAndNetworkConfig(config, File configRoot, String outputDir, in
     def biochemNetworkOverlayIsaGroupsCsv = biochemNetworkOverlayIsaGroups.join(',')
     def biochemNetworkOverlayGroupPaletteJson = JsonOutput.toJson(biochemNetworkOverlayGroupPaletteMap)
     def biochemNetworkOverlayGroupOrderJson = JsonOutput.toJson(biochemNetworkOverlayGroupOrderMap)
+
+    def sampleAgreementConfig = config.sample_agreement_dendrograms ?: [:]
+    boolean sampleAgreementRequested = sampleAgreementConfig.containsKey('enabled') ? (sampleAgreementConfig.enabled as boolean) : false
+    if( sampleAgreementRequested && !networkEnabled ) {
+        exit 1, "sample_agreement_dendrograms.enabled requires spieceasi.network_enabled/network to be true"
+    }
+    if( sampleAgreementRequested && !metadataPlotsEnabled ) {
+        exit 1, "sample_agreement_dendrograms.enabled requires metadata_plots.enabled to be true"
+    }
+    if( sampleAgreementRequested && !biochemPreAsvEnabled ) {
+        exit 1, "sample_agreement_dendrograms.enabled requires biochem_pre_asv.enabled to be true"
+    }
+    boolean sampleAgreementEnabled = sampleAgreementRequested
+    def sampleAgreementOutputDir = sampleAgreementConfig.output_dir ?: 'sample_agreement_dendrograms'
+    def sampleAgreementOutputDirAbs = resolveOutputRelative(sampleAgreementOutputDir.toString(), outputDir)
+    def sampleAgreementSampleCol = sampleAgreementConfig.sample_col ?: metadataPlotsSampleCol
+    def sampleAgreementModuleCol = sampleAgreementConfig.module_col ? sampleAgreementConfig.module_col.toString().trim() : 'top_module'
+    def sampleAgreementGroupColsRaw = sampleAgreementConfig.group_cols ?: 'o2_compartment,gmm_component,o2_subcompartment_final'
+    List<String> sampleAgreementGroupCols = []
+    if( sampleAgreementGroupColsRaw instanceof List ) {
+        sampleAgreementGroupCols = sampleAgreementGroupColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( sampleAgreementGroupColsRaw ) {
+        sampleAgreementGroupCols = sampleAgreementGroupColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def sampleAgreementBiochemAssignmentsPath = sampleAgreementConfig.biochem_assignments ? resolveOptionalPath(sampleAgreementConfig.biochem_assignments, configRoot) : metadataPlotsBiochemAssignmentsPath
+    def sampleAgreementBiochemSampleCol = sampleAgreementConfig.biochem_sample_col ? sampleAgreementConfig.biochem_sample_col.toString().trim() : metadataPlotsBiochemSampleCol
+    def sampleAgreementMetaJoinColsRaw = sampleAgreementConfig.meta_join_cols ?: metadataPlotsBiochemMetaJoinCols
+    List<String> sampleAgreementMetaJoinCols = []
+    if( sampleAgreementMetaJoinColsRaw instanceof List ) {
+        sampleAgreementMetaJoinCols = sampleAgreementMetaJoinColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( sampleAgreementMetaJoinColsRaw ) {
+        sampleAgreementMetaJoinCols = sampleAgreementMetaJoinColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def sampleAgreementBiochemJoinColsRaw = sampleAgreementConfig.biochem_join_cols ?: metadataPlotsBiochemJoinCols
+    List<String> sampleAgreementBiochemJoinCols = []
+    if( sampleAgreementBiochemJoinColsRaw instanceof List ) {
+        sampleAgreementBiochemJoinCols = sampleAgreementBiochemJoinColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( sampleAgreementBiochemJoinColsRaw ) {
+        sampleAgreementBiochemJoinCols = sampleAgreementBiochemJoinColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def sampleAgreementBiochemFeatureColsRaw = sampleAgreementConfig.biochem_feature_cols ?: ''
+    List<String> sampleAgreementBiochemFeatureCols = []
+    if( sampleAgreementBiochemFeatureColsRaw instanceof List ) {
+        sampleAgreementBiochemFeatureCols = sampleAgreementBiochemFeatureColsRaw.collect { it.toString().trim() }.findAll { it }
+    } else if( sampleAgreementBiochemFeatureColsRaw ) {
+        sampleAgreementBiochemFeatureCols = sampleAgreementBiochemFeatureColsRaw.toString().split(/[,|]/).collect { it.trim() }.findAll { it }
+    }
+    def sampleAgreementBiochemMetric = sampleAgreementConfig.biochem_metric ? sampleAgreementConfig.biochem_metric.toString().trim() : 'euclidean'
+    def sampleAgreementBiochemLinkage = sampleAgreementConfig.biochem_linkage ? sampleAgreementConfig.biochem_linkage.toString().trim() : 'average'
+    def sampleAgreementAsvMetric = sampleAgreementConfig.asv_metric ? sampleAgreementConfig.asv_metric.toString().trim() : 'euclidean'
+    def sampleAgreementAsvLinkage = sampleAgreementConfig.asv_linkage ? sampleAgreementConfig.asv_linkage.toString().trim() : 'average'
+    def sampleAgreementUntangle = sampleAgreementConfig.containsKey('untangle') ? (sampleAgreementConfig.untangle as boolean) : true
+    def sampleAgreementUntanglePasses = sampleAgreementConfig.untangle_passes != null ? (sampleAgreementConfig.untangle_passes as int) : 4
+    def sampleAgreementGroupPaletteMap = new LinkedHashMap<String,String>(indicspeciesGroupPaletteMap)
+    sampleAgreementGroupPaletteMap.putAll(extractNamedStringMap(sampleAgreementConfig as Map, sampleAgreementGroupCols, 'group_palettes', 'palette'))
+    def sampleAgreementGroupOrderMap = new LinkedHashMap<String,List<String>>(indicspeciesGroupOrderMap)
+    sampleAgreementGroupOrderMap.putAll(extractNamedListMap(sampleAgreementConfig as Map, sampleAgreementGroupCols, 'group_orders', 'order'))
+    def sampleAgreementGroupColsCsv = sampleAgreementGroupCols.join(',')
+    def sampleAgreementMetaJoinColsCsv = sampleAgreementMetaJoinCols.join(',')
+    def sampleAgreementBiochemJoinColsCsv = sampleAgreementBiochemJoinCols.join(',')
+    def sampleAgreementBiochemFeatureColsCsv = sampleAgreementBiochemFeatureCols.join(',')
+    def sampleAgreementGroupPaletteJson = JsonOutput.toJson(sampleAgreementGroupPaletteMap)
+    def sampleAgreementGroupOrderJson = JsonOutput.toJson(sampleAgreementGroupOrderMap)
+    if( sampleAgreementEnabled && !sampleAgreementBiochemAssignmentsPath ) {
+        exit 1, "sample_agreement_dendrograms.enabled requires a biochem assignments table path"
+    }
 
     def powerAnalysisConfig = config.power_analysis ?: [:]
     boolean powerAnalysisRequested = powerAnalysisConfig.containsKey('enabled') ? (powerAnalysisConfig.enabled as boolean) : false
@@ -2214,8 +2290,13 @@ def parseIndicatorAndNetworkConfig(config, File configRoot, String outputDir, in
         networkLayoutSeed: networkLayoutSeed,
         networkLayoutScale: networkLayoutScale,
         networkDegreeScale: networkDegreeScale,
+        networkDegreeSizeMode: networkDegreeSizeMode,
+        networkDegreeMinArea: networkDegreeMinArea,
         networkEdgeWidthScale: networkEdgeWidthScale,
         networkIsaScale: networkIsaScale,
+        networkAbundanceSizeMode: networkAbundanceSizeMode,
+        networkAbundanceReference: networkAbundanceReference,
+        networkAbundanceReferenceArea: networkAbundanceReferenceArea,
         networkAbundanceMinArea: networkAbundanceMinArea,
         networkAbundanceMaxArea: networkAbundanceMaxArea,
         networkAbundanceScalePower: networkAbundanceScalePower,
@@ -2264,6 +2345,24 @@ def parseIndicatorAndNetworkConfig(config, File configRoot, String outputDir, in
         biochemNetworkOverlayIsaGroupsCsv: biochemNetworkOverlayIsaGroupsCsv,
         biochemNetworkOverlayGroupPaletteJson: biochemNetworkOverlayGroupPaletteJson,
         biochemNetworkOverlayGroupOrderJson: biochemNetworkOverlayGroupOrderJson,
+        sampleAgreementEnabled: sampleAgreementEnabled,
+        sampleAgreementOutputDirAbs: sampleAgreementOutputDirAbs,
+        sampleAgreementSampleCol: sampleAgreementSampleCol,
+        sampleAgreementModuleCol: sampleAgreementModuleCol,
+        sampleAgreementGroupColsCsv: sampleAgreementGroupColsCsv,
+        sampleAgreementBiochemAssignmentsPath: sampleAgreementBiochemAssignmentsPath,
+        sampleAgreementBiochemSampleCol: sampleAgreementBiochemSampleCol,
+        sampleAgreementMetaJoinColsCsv: sampleAgreementMetaJoinColsCsv,
+        sampleAgreementBiochemJoinColsCsv: sampleAgreementBiochemJoinColsCsv,
+        sampleAgreementBiochemFeatureColsCsv: sampleAgreementBiochemFeatureColsCsv,
+        sampleAgreementBiochemMetric: sampleAgreementBiochemMetric,
+        sampleAgreementBiochemLinkage: sampleAgreementBiochemLinkage,
+        sampleAgreementAsvMetric: sampleAgreementAsvMetric,
+        sampleAgreementAsvLinkage: sampleAgreementAsvLinkage,
+        sampleAgreementUntangle: sampleAgreementUntangle,
+        sampleAgreementUntanglePasses: sampleAgreementUntanglePasses,
+        sampleAgreementGroupPaletteJson: sampleAgreementGroupPaletteJson,
+        sampleAgreementGroupOrderJson: sampleAgreementGroupOrderJson,
         powerAnalysisOutputDirAbs: powerAnalysisOutputDirAbs,
         powerAnalysisSampleCol: powerAnalysisSampleCol,
         powerAnalysisPatientCol: powerAnalysisPatientCol,
@@ -2547,6 +2646,17 @@ workflow {
             metadata_analysis_stage.meta_micro_network,
             moduleMagAsvDone,
             moduleMagGraphDone
+        )
+    }
+    def sample_agreement_stage = null
+    if( sampleAgreementEnabled ) {
+        if( module_mag_anchors_stage == null ) {
+            exit 1, "sample_agreement_dendrograms.enabled requires MODULE_MAG_ANCHORS outputs; enable asv_mag_link and network modules."
+        }
+        sample_agreement_stage = SAMPLE_AGREEMENT_DENDROGRAMS(
+            metadata_analysis_stage.meta_micro_network,
+            module_mag_anchors_stage.sample_top_modules,
+            metadata_analysis_stage.asv_final_spieceasi
         )
     }
     def sankey_stage = null
@@ -2841,6 +2951,52 @@ workflow RUN_MODULE_MAG_ANCHORS {
     sample_top_modules = stage.sample_top_modules
     sample_module_matrix = stage.sample_module_matrix
     done = stage.done
+}
+
+process SAMPLE_AGREEMENT_DENDROGRAMS {
+    cpus 1
+    conda "${networkCondaEnvPath}"
+
+    when:
+    sampleAgreementEnabled
+
+    input:
+    path(metadata_table)
+    path(sample_top_modules)
+    path(asv_counts)
+
+    output:
+    path("sample_agreement_dendrograms.done"), emit: done
+
+    script:
+    """
+set -euo pipefail
+mkdir -p "${sampleAgreementOutputDirAbs}"
+
+python "${sampleAgreementScriptPath}" \\
+  --metadata "${metadata_table}" \\
+  --sample-top-modules "${sample_top_modules}" \\
+  --asv-counts "${asv_counts}" \\
+  --biochem-assignments "${sampleAgreementBiochemAssignmentsPath}" \\
+  --sample-col "${sampleAgreementSampleCol}" \\
+  --module-col "${sampleAgreementModuleCol}" \\
+  --group-cols "${sampleAgreementGroupColsCsv}" \\
+  --biochem-sample-col "${sampleAgreementBiochemSampleCol}" \\
+  --biochem-feature-cols "${sampleAgreementBiochemFeatureColsCsv}" \\
+  --meta-join-cols "${sampleAgreementMetaJoinColsCsv}" \\
+  --biochem-join-cols "${sampleAgreementBiochemJoinColsCsv}" \\
+  --group-palette-map-json '${sampleAgreementGroupPaletteJson}' \\
+  --group-order-map-json '${sampleAgreementGroupOrderJson}' \\
+  --biochem-metric "${sampleAgreementBiochemMetric}" \\
+  --biochem-linkage "${sampleAgreementBiochemLinkage}" \\
+  --asv-metric "${sampleAgreementAsvMetric}" \\
+  --asv-linkage "${sampleAgreementAsvLinkage}" \\
+  --untangle "${sampleAgreementUntangle}" \\
+  --untangle-passes "${sampleAgreementUntanglePasses}" \\
+  --outdir "${sampleAgreementOutputDirAbs}"
+
+touch sample_agreement_dendrograms.done
+"""
 }
 
 process BIOCHEM_MERGE {
@@ -5720,8 +5876,13 @@ ${networkModuleBestOnlyArg}${networkModuleIsaOnlyArg}${networkModuleColorByIsaAr
 ${networkModesArg}  --layout-seed ${networkLayoutSeed} \\
   --layout-scale ${networkLayoutScale} \\
   --degree-scale ${networkDegreeScale} \\
+  --degree-size-mode "${networkDegreeSizeMode}" \\
+  --degree-min-area ${networkDegreeMinArea} \\
   --edge-width-scale ${networkEdgeWidthScale} \\
   --isa-scale ${networkIsaScale} \\
+  --abundance-size-mode "${networkAbundanceSizeMode}" \\
+  --abundance-reference ${networkAbundanceReference} \\
+  --abundance-reference-area ${networkAbundanceReferenceArea} \\
   --abundance-min-area ${networkAbundanceMinArea} \\
   --abundance-max-area ${networkAbundanceMaxArea} \\
   --abundance-scale-power ${networkAbundanceScalePower}

@@ -51,6 +51,15 @@ MAG_UNPAIRED_COLOR = "#D9D9D9"
 MAG_MIXED_TAXONOMY = "Mixed MAG phyla"
 MAG_UNKNOWN_TAXONOMY = "Unclassified MAG phylum"
 ALLOWED_MAG_MIMAG_TIERS = {"medium", "high"}
+BETWEENNESS_HIGH_COLOR = "#4a4a4a"
+BETWEENNESS_LOW_COLOR = "#d0d0d0"
+SIZE_CONFIG = {
+    "degree_size_mode": "legacy",
+    "degree_min_area": 0.0,
+    "abundance_size_mode": "legacy",
+    "abundance_reference": 5000.0,
+    "abundance_reference_area": 80.0,
+}
 
 
 # ---------------------------- Helpers ----------------------------------------
@@ -376,6 +385,24 @@ def build_log_size_scaler(
     if vals.size == 0:
         return (lambda _x: min_area), [1.0]
 
+    abundance_mode = str(SIZE_CONFIG.get("abundance_size_mode", "legacy")).strip().lower()
+    if abundance_mode == "decade_doubling":
+        reference = max(_safe_float(SIZE_CONFIG.get("abundance_reference", 5000.0), 5000.0), 1e-12)
+        reference_area = max(_safe_float(SIZE_CONFIG.get("abundance_reference_area", 80.0), 80.0), 1e-9)
+
+        def mapper(x: float) -> float:
+            xv = max(_safe_float(x, 0.0), 0.0)
+            if xv <= 0.0:
+                return float(min_area)
+            area = reference_area * (2.0 ** math.log10(xv / reference))
+            area = max(float(min_area), area)
+            if max_area is not None:
+                area = min(float(max_area), area)
+            return float(area)
+
+        legend_vals = _build_nice_integer_legend_values(vals, n_legend=n_legend)
+        return mapper, legend_vals
+
     log_vals = np.log10(vals + 1.0)
     lo = float(np.min(log_vals))
     hi = float(np.max(log_vals))
@@ -406,6 +433,10 @@ def build_log_size_scaler(
 
 def degree_marker_area(degree: float, degree_scale: float) -> float:
     deg = max(_safe_float(degree, 0.0), 0.0)
+    degree_mode = str(SIZE_CONFIG.get("degree_size_mode", "legacy")).strip().lower()
+    if degree_mode == "linear":
+        min_area = max(_safe_float(SIZE_CONFIG.get("degree_min_area", 0.0), 0.0), 0.0)
+        return float(min_area + (deg * max(_safe_float(degree_scale, 1.0), 0.0)))
     scale = max(_safe_float(degree_scale, 80.0), 1.0) * 0.14
     return float(max(8.0, ((deg + 1.0) ** 1.6) * scale))
 
@@ -424,6 +455,17 @@ def build_degree_legend_values(observed_degrees: Iterable[object]) -> List[int]:
     step = 5 if max_obs <= 25 else 10
     legend_max = max(step, int(math.ceil(max_obs / float(step)) * step))
     return list(range(0, legend_max + step, step))
+
+
+def betweenness_label(value: object, threshold: float) -> str:
+    v = _safe_float(value, 0.0)
+    return f">= {threshold:.2f}" if v >= threshold else f"< {threshold:.2f}"
+
+
+def get_betweenness_value(attrs: Dict, default: float = 0.0) -> float:
+    if "Betweenness_norm" in attrs:
+        return _safe_float(attrs.get("Betweenness_norm", default), default)
+    return _safe_float(attrs.get("Betweenness", default), default)
 
 
 def isa_marker_area(raw_score: float, isa_scale: float) -> float:
@@ -482,6 +524,22 @@ def draw_nodes_one_by_one(G: nx.Graph, pos: Dict, color_fn, size_fn, alpha_fn=No
             node_color=[color], node_size=[size],
             edgecolors='black', linewidths=lw, alpha=alpha
         )
+
+
+def draw_selected_nodes_one_by_one(G: nx.Graph, pos: Dict, nodes: List[str], color_fn, size_fn, alpha_fn=None,
+                                   lw_fn=None, zorder: Optional[float] = None):
+    for n in nodes:
+        color = color_fn(n)
+        size = size_fn(n)
+        alpha = alpha_fn(n) if alpha_fn else 1.0
+        lw = lw_fn(n) if lw_fn else 0.25
+        coll = nx.draw_networkx_nodes(
+            G, pos, nodelist=[n],
+            node_color=[color], node_size=[size],
+            edgecolors='black', linewidths=lw, alpha=alpha
+        )
+        if zorder is not None:
+            coll.set_zorder(zorder)
 
 
 def label_selected(G: nx.Graph, pos: Dict, select_nodes: List[str], text_attr: str = 'Taxon'):
@@ -980,6 +1038,141 @@ def plot_mag_pairing_taxonomy(
     finalize_network_axes(
         fig, ax, out_svg,
         title=title or "SPIEC-EASI Network\nNode color: paired MAG phylum | Node size: Degree",
+        legends=legends,
+        right=0.76,
+    )
+
+
+def plot_betweenness(
+    G: nx.Graph,
+    pos: Dict,
+    out_svg: str,
+    degree_scale: float,
+    edge_width_scale: float,
+    *,
+    betweenness_threshold: float = 0.05,
+    require_mag_pair: bool = False,
+    label: bool = False,
+    title: Optional[str] = None,
+):
+    fig, ax = figure_ax()
+    e_w = edge_widths_from_weights(G, scale=edge_width_scale, min_width=0.25)
+    draw_edges_light(G, pos, alpha=0.5, edge_widths=e_w)
+
+    degree_levels = build_degree_legend_values(
+        G.nodes[n].get("Degree", 0.0)
+        for n in G.nodes()
+        if (not require_mag_pair) or bool(G.nodes[n].get("has_mag_pair", False))
+    )
+    degree_cap = degree_levels[-1]
+
+    def in_focus(n: str) -> bool:
+        return (not require_mag_pair) or bool(G.nodes[n].get("has_mag_pair", False))
+
+    def size_fn(n):
+        return degree_marker_area(min(_safe_float(G.nodes[n].get("Degree", 0.0), 0.0), degree_cap), degree_scale)
+
+    def node_class(n: str) -> str:
+        if not in_focus(n):
+            return "background"
+        return "high" if get_betweenness_value(G.nodes[n], 0.0) >= betweenness_threshold else "low"
+
+    # Draw low-priority nodes first and high-betweenness nodes last so the
+    # connector nodes remain visible when points overlap.
+    draw_order = ["background", "low"]
+    class_style = {
+        "background": dict(color=MAG_UNPAIRED_COLOR, alpha=0.10, zorder=2),
+        "low": dict(color=BETWEENNESS_LOW_COLOR, alpha=0.95, zorder=3),
+        "high": dict(color=BETWEENNESS_HIGH_COLOR, alpha=0.98, zorder=6),
+    }
+    for klass in draw_order:
+        nodes = [n for n in G.nodes() if node_class(n) == klass]
+        if not nodes:
+            continue
+        nodes = sorted(nodes, key=lambda n: get_betweenness_value(G.nodes[n], 0.0))
+        draw_selected_nodes_one_by_one(
+            G,
+            pos,
+            nodes,
+            color_fn=lambda _n, c=class_style[klass]["color"]: c,
+            size_fn=size_fn,
+            alpha_fn=lambda _n, a=class_style[klass]["alpha"]: a,
+            zorder=class_style[klass]["zorder"],
+        )
+
+    # Final dedicated pass for the highlighted nodes only.
+    high_nodes = sorted(
+        [n for n in G.nodes() if node_class(n) == "high"],
+        key=lambda n: get_betweenness_value(G.nodes[n], 0.0),
+    )
+    if high_nodes:
+        # White halo first so highlighted bridge nodes stay readable over edges
+        # and lower-priority points.
+        draw_selected_nodes_one_by_one(
+            G,
+            pos,
+            high_nodes,
+            color_fn=lambda _n: "white",
+            size_fn=lambda n: size_fn(n) * 1.18,
+            alpha_fn=lambda _n: 0.98,
+            lw_fn=lambda _n: 0.0,
+            zorder=5,
+        )
+        draw_selected_nodes_one_by_one(
+            G,
+            pos,
+            high_nodes,
+            color_fn=lambda _n: class_style["high"]["color"],
+            size_fn=size_fn,
+            alpha_fn=lambda _n: class_style["high"]["alpha"],
+            lw_fn=lambda _n: 0.45,
+            zorder=class_style["high"]["zorder"],
+        )
+
+    class_handles = [
+        mpatches.Patch(color=BETWEENNESS_HIGH_COLOR, label=f"Betweenness >= {betweenness_threshold:.2f}"),
+        mpatches.Patch(color=BETWEENNESS_LOW_COLOR, label=f"Betweenness < {betweenness_threshold:.2f}"),
+    ]
+    if require_mag_pair:
+        class_handles.append(mpatches.Patch(color=MAG_UNPAIRED_COLOR, label="No paired MAG"))
+    class_legend = ax.legend(
+        handles=class_handles,
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        title="Normalized Betweenness",
+        frameon=False,
+        borderaxespad=0.0,
+    )
+    legends = [class_legend]
+
+    size_handles = [
+        ax.scatter([], [], s=degree_marker_area(v, degree_scale), edgecolors="black", facecolors=NOT_FOCUS_COLOR,
+                   alpha=1, label=f"Degree {v}")
+        for v in degree_levels
+    ]
+    if size_handles:
+        ax.add_artist(class_legend)
+        size_legend = ax.legend(
+            handles=size_handles,
+            loc="upper left",
+            bbox_to_anchor=(1.01, 0.72),
+            title="Node size",
+            frameon=False,
+            borderaxespad=0.0,
+            labelspacing=1.0,
+        )
+        legends.append(size_legend)
+
+    if label:
+        to_label = [
+            n for n in G.nodes()
+            if node_class(n) == "high"
+        ]
+        label_selected(G, pos, to_label, text_attr="Taxon")
+
+    finalize_network_axes(
+        fig, ax, out_svg,
+        title=title or "SPIEC-EASI Network\nNode color: Normalized betweenness class | Node size: Degree",
         legends=legends,
         right=0.76,
     )
@@ -1831,8 +2024,20 @@ def main():
 
     # Visual scales
     p.add_argument("--degree-scale", type=float, default=80.0, help="Base size multiplier for degree plots.")
+    p.add_argument("--degree-size-mode", default="legacy", choices=["legacy", "linear"],
+                   help="Degree size mapping mode.")
+    p.add_argument("--degree-min-area", type=float, default=0.0,
+                   help="Minimum marker area added in linear degree mode.")
     p.add_argument("--edge-width-scale", type=float, default=5.0, help="Edge width multiplier for |weight|.")
     p.add_argument("--isa-scale", type=float, default=700.0, help="Node size multiplier for ISA (AxB).")
+    p.add_argument("--betweenness-threshold", type=float, default=0.05,
+                   help="Threshold used to split dark/light betweenness classes [default: 0.05].")
+    p.add_argument("--abundance-size-mode", default="legacy", choices=["legacy", "decade_doubling"],
+                   help="Abundance size mapping mode.")
+    p.add_argument("--abundance-reference", type=float, default=5000.0,
+                   help="Reference abundance for decade_doubling mode.")
+    p.add_argument("--abundance-reference-area", type=float, default=80.0,
+                   help="Marker area assigned to abundance-reference in decade_doubling mode.")
     p.add_argument("--abundance-min-area", type=float, default=8.0,
                    help="Minimum marker area for abundance-scaled plots.")
     p.add_argument("--abundance-max-area", type=float, default=420.0,
@@ -1845,6 +2050,11 @@ def main():
                    help="Which figure(s) to render. Supports legacy fixed modes plus groupN ISA modes such as group3_isa_all.")
 
     args = p.parse_args()
+    SIZE_CONFIG["degree_size_mode"] = str(args.degree_size_mode).strip().lower()
+    SIZE_CONFIG["degree_min_area"] = _safe_float(args.degree_min_area, 0.0)
+    SIZE_CONFIG["abundance_size_mode"] = str(args.abundance_size_mode).strip().lower()
+    SIZE_CONFIG["abundance_reference"] = _safe_float(args.abundance_reference, 5000.0)
+    SIZE_CONFIG["abundance_reference_area"] = _safe_float(args.abundance_reference_area, 80.0)
 
     data_dir = args.data_dir
     os.makedirs(args.outdir, exist_ok=True)
@@ -2194,7 +2404,7 @@ def main():
     phylum_palette = {p: mcolors.to_hex(c) for p, c in zip(phyla, p_colors)}
 
     keep_cols = [
-        'Taxon', 'Degree', 'Betweenness', 'Closeness', 'EigenCentral',
+        'Taxon', 'Degree', 'Betweenness', 'Betweenness_raw', 'Betweenness_norm', 'Closeness', 'EigenCentral',
         'A_group1', 'B_group1', 'AxB_group1', 'group1_label', 'group1_color',
         'A_group2', 'B_group2', 'AxB_group2', 'group2_label', 'group2_color',
         'module_id', 'module_label', 'module_color', 'module_is_best', 'module_color_plot', 'module_label_plot',
@@ -2251,6 +2461,8 @@ def main():
         modes = {
             "degree_all", "degree_sub",
             "abundance_sub",
+            "betweenness_all", "betweenness_all_labeled",
+            "betweenness_mag_all", "betweenness_mag_all_labeled",
             "group1_isa", "group1_isa_labeled",
             "group1_isa_mag_all",
             "group1_isa_focus", "group1_isa_focus_labeled",
@@ -2285,6 +2497,10 @@ def main():
     valid_static_modes = {
         "degree_all", "degree_sub",
         "abundance_sub", "abundance_all",
+        "betweenness_sub", "betweenness_sub_labeled",
+        "betweenness_all", "betweenness_all_labeled",
+        "betweenness_mag_sub", "betweenness_mag_sub_labeled",
+        "betweenness_mag_all", "betweenness_mag_all_labeled",
         "type_isa", "type_isa_labeled",
         "status_isa", "status_isa_labeled",
         "type_venn", "type_venn_labeled",
@@ -2338,6 +2554,95 @@ def main():
             abundance_min_area=args.abundance_min_area,
             abundance_max_area=args.abundance_max_area,
             abundance_scale_power=args.abundance_scale_power,
+        )
+
+    if "betweenness_sub" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_POS_SUB.svg")
+        plot_betweenness(
+            G_sub, pos_sub, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=False,
+            label=False,
+            title="SPIEC-EASI Network (POS_SUB)\nNode color: Betweenness class | Node size: Degree",
+        )
+    if "betweenness_sub_labeled" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_POS_SUB_LABELED.svg")
+        plot_betweenness(
+            G_sub, pos_sub, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=False,
+            label=True,
+            title="SPIEC-EASI Network (POS_SUB)\nNode color: Betweenness class | Node size: Degree (Labeled)",
+        )
+    if "betweenness_all" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_POS_ALL.svg")
+        plot_betweenness(
+            G_all, pos_all, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=False,
+            label=False,
+            title="SPIEC-EASI Network (POS_ALL)\nNode color: Betweenness class | Node size: Degree",
+        )
+    if "betweenness_all_labeled" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_POS_ALL_LABELED.svg")
+        plot_betweenness(
+            G_all, pos_all, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=False,
+            label=True,
+            title="SPIEC-EASI Network (POS_ALL)\nNode color: Betweenness class | Node size: Degree (Labeled)",
+        )
+    if "betweenness_mag_sub" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_MAG_POS_SUB.svg")
+        plot_betweenness(
+            G_sub, pos_sub, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=True,
+            label=False,
+            title="SPIEC-EASI Network (POS_SUB)\nNode color: Betweenness class (paired MAG ASVs only) | Node size: Degree",
+        )
+    if "betweenness_mag_sub_labeled" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_MAG_POS_SUB_LABELED.svg")
+        plot_betweenness(
+            G_sub, pos_sub, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=True,
+            label=True,
+            title="SPIEC-EASI Network (POS_SUB)\nNode color: Betweenness class (paired MAG ASVs only) | Node size: Degree (Labeled)",
+        )
+    if "betweenness_mag_all" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_MAG_POS_ALL.svg")
+        plot_betweenness(
+            G_all, pos_all, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=True,
+            label=False,
+            title="SPIEC-EASI Network (POS_ALL)\nNode color: Betweenness class (paired MAG ASVs only) | Node size: Degree",
+        )
+    if "betweenness_mag_all_labeled" in modes:
+        out = os.path.join(args.outdir, "network_betweenness_MAG_POS_ALL_LABELED.svg")
+        plot_betweenness(
+            G_all, pos_all, out,
+            degree_scale=args.degree_scale,
+            edge_width_scale=args.edge_width_scale,
+            betweenness_threshold=args.betweenness_threshold,
+            require_mag_pair=True,
+            label=True,
+            title="SPIEC-EASI Network (POS_ALL)\nNode color: Betweenness class (paired MAG ASVs only) | Node size: Degree (Labeled)",
         )
 
     # Group1 ISA
@@ -2723,6 +3028,7 @@ def main():
             )
 
     # Module overlays
+    module_filter_attr = "module_plot_keep" if args.module_isa_only else None
     if "module_sub" in modes:
         if modules_sub.empty:
             print("[WARN] module_sub requested, but no module assignments were loaded.")
@@ -2731,7 +3037,7 @@ def main():
             plot_modules(
                 G_sub, pos_sub, out,
                 color_attr="module_color_plot", label_attr="module_label_plot",
-                filter_attr="module_plot_keep",
+                filter_attr=module_filter_attr,
                 degree_scale=args.degree_scale, edge_width_scale=args.edge_width_scale,
                 label=False,
                 title="SPIEC-EASI Network (POS_SUB)\nNode color: ISA-associated modules | Node size: Degree",
@@ -2745,7 +3051,7 @@ def main():
             plot_modules(
                 G_sub, pos_sub, out,
                 color_attr="module_color_plot", label_attr="module_label_plot",
-                filter_attr="module_plot_keep",
+                filter_attr=module_filter_attr,
                 degree_scale=args.degree_scale, edge_width_scale=args.edge_width_scale,
                 label=True,
                 title="SPIEC-EASI Network (POS_SUB)\nNode color: ISA-associated modules | Node size: Degree (Labeled)",
@@ -2759,7 +3065,7 @@ def main():
             plot_modules(
                 G_all, pos_all, out,
                 color_attr="module_color_plot", label_attr="module_label_plot",
-                filter_attr="module_plot_keep",
+                filter_attr=module_filter_attr,
                 degree_scale=args.degree_scale, edge_width_scale=args.edge_width_scale,
                 label=False,
                 title="SPIEC-EASI Network (POS_ALL)\nNode color: ISA-associated modules | Node size: Degree",
@@ -2773,7 +3079,7 @@ def main():
             plot_modules(
                 G_all, pos_all, out,
                 color_attr="module_color_plot", label_attr="module_label_plot",
-                filter_attr="module_plot_keep",
+                filter_attr=module_filter_attr,
                 degree_scale=args.degree_scale, edge_width_scale=args.edge_width_scale,
                 label=True,
                 title="SPIEC-EASI Network (POS_ALL)\nNode color: ISA-associated modules | Node size: Degree (Labeled)",

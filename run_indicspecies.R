@@ -19,11 +19,9 @@ option_list <- list(
   make_option("--patient-col", type="character", default="Participant_ID",
               help="Column for patient IDs (for blocked permutations) [default: %default]"),
   make_option("--group-cols", type="character", default="status,type_group",
-              help="Comma-separated grouping columns to analyze [default: %default]"),
-  make_option("--block-col",  type="character", default="",
-              help="Optional metadata blocking column for restricted permutations (legacy override)"),
+              help="Comma-separated grouping analyses to run. Use '+' inside one entry to combine metadata columns into one grouping factor, e.g. 'status,type_group,Depth_bin+O2_bin' [default: %default]"),
   make_option("--blocked-cols", type="character", default="type_group",
-              help="Comma-separated grouping columns requiring blocked permutations [default: %default]"),
+              help="Comma-separated grouping analyses requiring blocked permutations. Entries must match --group-cols specs, including composite specs like 'Depth_bin+O2_bin' [default: %default]"),
   make_option("--status-extra-no-contralateral", type="logical", default=TRUE,
               help="For Lung Brush status analysis, add extra run excluding contralateral cancer samples [default: %default]"),
   make_option("--status-exclude-contralateral", type="logical", default=TRUE,
@@ -87,15 +85,17 @@ message("Reading long format data: ", opt$`data-long`)
 long_df <- read_tsv(opt$`data-long`, show_col_types = FALSE)
 
 # Extract metadata (unique sample-level records)
-group_cols <- strsplit(opt$`group-cols`, ",", fixed = TRUE)[[1]] %>% trimws()
-blocked_cols <- strsplit(opt$`blocked-cols`, ",", fixed = TRUE)[[1]] %>% trimws() %>% discard(~ .x == "")
-if ("status" %in% group_cols && !("type_group" %in% group_cols)) {
+group_specs <- parse_cli_csv(opt$`group-cols`)
+blocked_specs <- parse_cli_csv(opt$`blocked-cols`)
+group_cols <- expand_group_spec_cols(group_specs)
+
+if ("status" %in% group_specs && !("type_group" %in% group_cols)) {
   # Needed for status stratification by sample type.
   group_cols <- c(group_cols, "type_group")
 }
 
 required_cols <- c(opt$`sample-col`, group_cols)
-if ("status" %in% group_cols) {
+if ("status" %in% group_specs) {
   # Status ISA aggregates within patient before testing between-status differences.
   required_cols <- c(required_cols, opt$`patient-col`)
 }
@@ -106,7 +106,7 @@ if (!is.null(opt$`block-col`) && nzchar(opt$`block-col`)) {
 
 optional_cols <- c()
 derive_contralateral_from_sides <- FALSE
-if (isTRUE(opt$`status-extra-no-contralateral`) && ("status" %in% group_cols)) {
+if (isTRUE(opt$`status-extra-no-contralateral`) && ("status" %in% group_specs)) {
   if (opt$`contralateral-col` %in% names(long_df)) {
     optional_cols <- c(optional_cols, opt$`contralateral-col`)
   } else if (all(c(opt$`cancer-site-col`, opt$`lung-side-col`) %in% names(long_df))) {
@@ -124,7 +124,7 @@ if (isTRUE(opt$`status-extra-no-contralateral`) && ("status" %in% group_cols)) {
     )
   }
 }
-all_cols <- unique(c(required_cols, group_cols, optional_cols))
+all_cols <- unique(c(required_cols, optional_cols))
 
 # Check all required columns exist
 missing_cols <- setdiff(all_cols, names(long_df))
@@ -179,6 +179,67 @@ message("Metadata dimensions: ", paste(dim(meta), collapse = " x "))
 
 if (!(opt$transform %in% c("none", "rclr"))) {
   stop("--transform must be one of: none, rclr")
+}
+
+parse_cli_csv <- function(x) {
+  if (is.null(x) || !nzchar(x)) {
+    return(character(0))
+  }
+  strsplit(x, ",", fixed = TRUE)[[1]] |>
+    trimws() |>
+    discard(~ .x == "")
+}
+
+expand_group_spec_cols <- function(specs) {
+  specs |>
+    strsplit("\\+", perl = TRUE) |>
+    unlist() |>
+    trimws() |>
+    discard(~ .x == "") |>
+    unique()
+}
+
+make_grouping_factor <- function(meta_df, spec) {
+  cols <- strsplit(spec, "\\+", perl = TRUE)[[1]] |>
+    trimws() |>
+    discard(~ .x == "")
+
+  if (length(cols) == 0) {
+    stop("Empty grouping spec: ", spec)
+  }
+
+  missing_cols <- setdiff(cols, colnames(meta_df))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Grouping spec '", spec, "' refers to missing metadata column(s): ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  if (length(cols) == 1) {
+    return(as.factor(meta_df[[cols]]))
+  }
+
+  parts <- meta_df %>%
+    select(all_of(cols)) %>%
+    mutate(across(everything(), as.character))
+
+  ok <- complete.cases(parts)
+  combined <- rep(NA_character_, nrow(parts))
+
+  combined[ok] <- do.call(
+    interaction,
+    c(
+      as.data.frame(parts[ok, , drop = FALSE]),
+      list(sep = "__", drop = TRUE, lex.order = TRUE)
+    )
+  ) |> as.character()
+
+  factor(combined)
+}
+
+make_group_slug <- function(spec) {
+  gsub("[^A-Za-z0-9]+", "_", spec)
 }
 
 # ---------- helpers ----------
@@ -306,17 +367,23 @@ aggregate_to_patient_group <- function(X_samples_by_features, patient_ids, group
 }
 
 # ---------- main loop over grouping columns ----------
-group_cols <- strsplit(opt$`group-cols`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
-blocked_cols <- strsplit(opt$`blocked-cols`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
-status_contralateral_sites <- strsplit(opt$`status-contralateral-sites`, ",", fixed = TRUE)[[1]] |> trimws() |> discard(~ .x == "")
+group_specs <- parse_cli_csv(opt$`group-cols`)
+blocked_specs <- parse_cli_csv(opt$`blocked-cols`)
+status_contralateral_sites <- parse_cli_csv(opt$`status-contralateral-sites`)
 
-for (gcol in group_cols) {
-  if (!(gcol %in% colnames(meta))) {
-    warning("Skipping grouping column '", gcol, "' (not found in metadata).")
+for (gcol in group_specs) {
+  grouping <- make_grouping_factor(meta, gcol)
+  gcol_slug <- make_group_slug(gcol)
+
+  if (all(is.na(grouping))) {
+    warning("Skipping grouping spec '", gcol, "' (all values are NA after combining columns).")
     next
   }
-  grouping <- meta[[gcol]] |> as.factor()
 
+  if (grepl("\\+", gcol)) {
+    message("Grouping spec '", gcol, "' will be analyzed as a combined factor.")
+  }
+  
   # Drop NAs and small groups
   keep_idx <- !is.na(grouping)
   grouping <- droplevels(grouping[keep_idx])
@@ -538,7 +605,7 @@ for (gcol in group_cols) {
   }
 
   # For other grouping columns (non-type_group, non-status), use restricted permutations.
-  use_blocking <- gcol %in% blocked_cols
+  use_blocking <- gcol %in% blocked_specs
   patient_blocks <- NULL
   blocking_ids <- NULL
   if (!is.null(opt$`block-col`) && nzchar(opt$`block-col`)) {
@@ -618,14 +685,14 @@ for (gcol in group_cols) {
   fit1 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = FALSE, patient_blocks = patient_blocks)
   res1_sign <- as.data.frame(fit1$sign) %>% rownames_to_column("ASV")
   res1_full <- summarize_multipatt(fit1)
-  write_tables(res1_sign, res1_full, paste0(gcol, "_indicator_species"))
+  write_tables(res1_sign, res1_full, paste0(gcol_slug, "_indicator_species"))
 
   message("Running multipatt for '", gcol, "' (DULEG-restricted mode, duleg=TRUE) …")
   fit2 <- run_indics(X_for_isa, grouping_for_isa, perms = opt$perms, duleg = TRUE, patient_blocks = patient_blocks)
   res2_sign <- as.data.frame(fit2$sign) %>% rownames_to_column("ASV")
   res2_full <- summarize_multipatt(fit2)
-  write_tables(res2_sign, res2_full, paste0(gcol, "_indicator_species_DULEG"))
-
+  write_tables(res2_sign, res2_full, paste0(gcol_slug, "_indicator_species_DULEG"))
+  
   if (gcol == "type_group") {
     write_tables(res1_sign, res1_full, "Type_Group_indicator_species")
     write_tables(res2_sign, res2_full, "Type_Group_indicator_species_DULEG")

@@ -436,7 +436,8 @@ save_csv(edges_df, paste0(prefix, "_edge_list.csv"))
 # an explicit audit column.
 node_degree            <- igraph::degree(ig_pos_all)
 node_degree_threshold  <- igraph::degree(ig_main)
-node_betweenness       <- igraph::betweenness(ig_pos_all)
+node_betweenness_raw   <- igraph::betweenness(ig_pos_all, normalized = FALSE)
+node_betweenness_norm  <- igraph::betweenness(ig_pos_all, normalized = TRUE)
 node_closeness         <- igraph::closeness(ig_pos_all)
 node_eigen             <- igraph::eigen_centrality(ig_pos_all)$vector
 node_ids               <- paste0("n", seq_along(V(ig_pos_all)) - 1)
@@ -446,7 +447,9 @@ node_features <- data.frame(
   Taxon        = V(ig_pos_all)$name,
   Degree       = node_degree,
   Degree_thresholded = node_degree_threshold,
-  Betweenness  = node_betweenness,
+  Betweenness  = node_betweenness_norm,
+  Betweenness_raw = node_betweenness_raw,
+  Betweenness_norm = node_betweenness_norm,
   Closeness    = node_closeness,
   EigenCentral = node_eigen
 )
