@@ -1,9 +1,9 @@
 paths:
-  input_dir: /home/ryan/Projects/UBC/LMP/spark_set1_output/
-  output_dir: /home/ryan/Projects/UBC/LMP/spark_set1_output
-  manifest: /home/ryan/Projects/UBC/LMP/spark_set1_manifest.tsv
-  work_dir: /home/ryan/Projects/UBC/LMP/spark_set1_output/nf_work
-  conda_cache_dir: /home/ryan/Projects/UBC/LMP/spark_set1_output/conda_cache
+  input_dir: /home/ryan/Projects/UBC/LMP/spark_set1-2_output/
+  output_dir: /home/ryan/Projects/UBC/LMP/spark_set1-2_output
+  manifest: /home/ryan/Projects/UBC/LMP/spark_set1-2_manifest.tsv
+  work_dir: /home/ryan/Projects/UBC/LMP/spark_set1-2_output/nf_work
+  conda_cache_dir: /home/ryan/Projects/UBC/LMP/spark_set1-2_output/conda_cache
     # Optional: set to an NFS/CephFS path to override Nextflow's -w (e.g. /mnt/ceph/work)
 
 resources:
@@ -117,7 +117,7 @@ mito:
 
 filter_counts:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/spark_set1_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set1-2_metadata.tsv
   output: ASV_target.tsv
   group_col: Type_Group
   min_group_size: 3
@@ -138,7 +138,7 @@ general_stats:
 
 sankey:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/spark_set1_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set1-2_metadata.tsv
   sub_dir: .
   sample_col: Sample
   group1_col: Type_Group
@@ -152,7 +152,7 @@ sankey:
 
 metadata_plots:
   enabled: true
-  metadata: /home/ryan/Projects/UBC/LMP/spark_set1_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set1-2_metadata.tsv
   sub_dir: .
   sample_col: Sample
   type_col: Type_Group
@@ -363,10 +363,10 @@ indicspecies:
   aligned_min_stat: 0.0
   aligned_top_n: 25
   venn:
-  taxonomy: /home/ryan/Projects/UBC/LMP/spark_set1_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
+  taxonomy: /home/ryan/Projects/UBC/LMP/spark_set1-2_output/taxonomy/ASV_SILVA_tax.full-length.vsearch.tsv
 
 power_analysis:
-  enabled: true
+  enabled: false
   output_dir: power_analysis
   sample_col: Sample
   patient_col: Participant_ID
@@ -445,7 +445,7 @@ clustermaps:
   output_dir: clustermaps
   mito_output_dir: mito/clustermaps
   mito_input:
-  isa_file: /home/ryan/Projects/UBC/LMP/spark_set1_output/indicspecies/
+  isa_file: /home/ryan/Projects/UBC/LMP/spark_set1-2_output/indicspecies/
   run_mito: true
   sample_col: Sample
   sample_code_col: sample_code
@@ -512,7 +512,7 @@ spieceasi:
   focus_labels: {}
   network_modes:
     - all
-  metadata: /home/ryan/Projects/UBC/LMP/spark_set1_metadata.tsv
+  metadata: /home/ryan/Projects/UBC/LMP/spark_set1-2_metadata.tsv
   color_col: Color
   group1_order:
     - Oral Rinse

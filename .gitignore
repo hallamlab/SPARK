@@ -9,6 +9,7 @@
 # -----------------------------
 # Python cache / local tooling
 # -----------------------------
+.codex
 __pycache__/
 *.py[cod]
 *.pyo

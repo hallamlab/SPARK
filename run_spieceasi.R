@@ -128,6 +128,21 @@ safe_clr <- function(x, margin = 1) {
   SpiecEasi::clr(x, margin)
 }
 
+is_parallel_spieceasi_error <- function(err) {
+  msg_txt <- conditionMessage(err)
+  patterns <- c(
+    "jobs failed with",
+    "sparseiCov",
+    "creation of server socket failed",
+    "port .* cannot be opened",
+    "error reading from connection",
+    "serialize",
+    "unserialize",
+    "cluster"
+  )
+  any(vapply(patterns, function(p) grepl(p, msg_txt, ignore.case = TRUE, perl = TRUE), logical(1)))
+}
+
 get_precision_at_opt <- function(se) {
   if (!is.null(se$est$icov)) {
     idx <- tryCatch(se$select$stars$opt.index, error = function(e) NA_integer_)
@@ -267,13 +282,32 @@ if (identical(se_obj, FALSE)) {
   set.seed(opt$seed)
   msg("Running SpiecEasi (%s) ...", opt$method)
   pargs <- list(rep.num = opt$rep_num, seed = opt$seed, ncores = opt$ncores, thresh = opt$thresh)
-
-  se_obj <- SpiecEasi::spiec.easi(
-    count_data_filtered,
-    method = opt$method,
-    lambda.min.ratio = opt$lambda_min_ratio,
-    nlambda = opt$nlambda,
-    pulsar.params = pargs
+  se_obj <- tryCatch(
+    SpiecEasi::spiec.easi(
+      count_data_filtered,
+      method = opt$method,
+      lambda.min.ratio = opt$lambda_min_ratio,
+      nlambda = opt$nlambda,
+      pulsar.params = pargs
+    ),
+    error = function(err) {
+      if (opt$ncores > 1 && is_parallel_spieceasi_error(err)) {
+        msg("Parallel SpiecEasi/pulsar failed: %s", conditionMessage(err))
+        msg("Retrying SpiecEasi in serial mode with ncores=1 ...")
+        pargs_serial <- pargs
+        pargs_serial$ncores <- 1L
+        return(
+          SpiecEasi::spiec.easi(
+            count_data_filtered,
+            method = opt$method,
+            lambda.min.ratio = opt$lambda_min_ratio,
+            nlambda = opt$nlambda,
+            pulsar.params = pargs_serial
+          )
+        )
+      }
+      stop(err)
+    }
   )
   saveRDS(se_obj, cache_spiece)
   msg("Saved SpiecEasi object: %s", cache_spiece)
